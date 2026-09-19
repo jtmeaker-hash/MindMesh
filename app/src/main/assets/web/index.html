@@ -19,20 +19,48 @@
       body, html, #root {
         width: 100%;
         height: 100%;
+        margin: 0;
+        padding: 0;
         overflow: hidden;
         background-color: #080B12;
         color: #F1F5F9;
         font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
       }
+      #root {
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
       input, textarea, select, button {
         font-family: inherit;
         user-select: auto;
       }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
     </style>
-    <script type="module" crossorigin src="./assets/index-UgTAZFGh.js"></script>
+    <script>
+      window.addEventListener('error', function (e) {
+        console.error('MindMesh Global Window Error:', e.error || e.message);
+        var errBox = document.getElementById('mindmesh-crash-banner');
+        if (errBox) {
+          errBox.style.display = 'block';
+          errBox.innerText = 'Runtime Error: ' + (e.message || 'Script failed to execute.');
+        }
+      });
+    </script>
+    <script type="module" crossorigin src="./assets/index-Dk8KdYKv.js"></script>
     <link rel="stylesheet" crossorigin href="./assets/index-Bundp8DG.css">
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;width:100%;color:#94a3b8;padding:24px;text-align:center;">
+        <div style="width:36px;height:36px;border:3px solid rgba(99,102,241,0.25);border-top-color:#6366f1;border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:14px;"></div>
+        <div style="font-size:18px;font-weight:700;color:#f8fafc;letter-spacing:-0.02em;margin-bottom:4px;">MindMesh</div>
+        <div style="font-size:12px;color:#64748b;">Loading workspace...</div>
+        <div id="mindmesh-crash-banner" style="display:none;margin-top:16px;padding:10px 14px;border-radius:8px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;font-size:12px;max-width:320px;word-break:break-word;"></div>
+      </div>
+    </div>
   </body>
 </html>

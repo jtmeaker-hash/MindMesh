@@ -3,8 +3,13 @@ package com.example
 import android.annotation.SuppressLint
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -25,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.WebViewAssetLoader
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
@@ -59,6 +65,10 @@ fun MindMeshApp() {
     AndroidView(
       modifier = Modifier.fillMaxSize(),
       factory = { context ->
+        val assetLoader = WebViewAssetLoader.Builder()
+          .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
+          .build()
+
         WebView(context).apply {
           layoutParams = ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -72,6 +82,8 @@ fun MindMeshApp() {
             databaseEnabled = true
             allowFileAccess = true
             allowContentAccess = true
+            allowFileAccessFromFileURLs = true
+            allowUniversalAccessFromFileURLs = true
             useWideViewPort = true
             loadWithOverviewMode = true
             setSupportZoom(false)
@@ -79,13 +91,38 @@ fun MindMeshApp() {
           }
 
           webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-              return false
+            override fun shouldInterceptRequest(
+              view: WebView?,
+              request: WebResourceRequest?
+            ): WebResourceResponse? {
+              val uri = request?.url ?: return null
+              return assetLoader.shouldInterceptRequest(uri)
+            }
+
+            override fun onReceivedError(
+              view: WebView?,
+              request: WebResourceRequest?,
+              error: WebResourceError?
+            ) {
+              super.onReceivedError(view, request, error)
+              Log.e(
+                "MindMeshWebView",
+                "Load error on ${request?.url}: ${error?.description} (code: ${error?.errorCode})"
+              )
             }
           }
-          webChromeClient = WebChromeClient()
 
-          loadUrl("file:///android_asset/web/index.html")
+          webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+              Log.d(
+                "MindMeshWebConsole",
+                "[${consoleMessage?.messageLevel()}] ${consoleMessage?.message()} (${consoleMessage?.sourceId()}:${consoleMessage?.lineNumber()})"
+              )
+              return true
+            }
+          }
+
+          loadUrl("https://appassets.androidplatform.net/assets/web/index.html")
           webViewInstance = this
         }
       },
@@ -95,4 +132,5 @@ fun MindMeshApp() {
     )
   }
 }
+
 

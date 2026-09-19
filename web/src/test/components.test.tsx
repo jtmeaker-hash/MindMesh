@@ -1,8 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
+import App from '../App';
 import { QuickAddModal } from '../components/modals/QuickAddModal';
 import { Category } from '../types';
+
+describe('App Root Render', () => {
+  it('renders App without crashing', () => {
+    const { container } = render(<App />);
+    expect(container).toBeDefined();
+    expect(screen.getAllByText('MindMesh').length).toBeGreaterThanOrEqual(1);
+  });
+});
 
 describe('Modal & UI Components', () => {
   const dummyCategory: Category = {

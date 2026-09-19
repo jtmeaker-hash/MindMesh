@@ -426,8 +426,8 @@ function MindMeshFlow() {
   return (
     <div
       style={{
-        width: '100vw',
-        height: '100vh',
+        width: '100%',
+        height: '100%',
         backgroundColor: '#080B12',
         position: 'relative',
         display: 'flex',
@@ -744,7 +744,7 @@ function MindMeshFlow() {
       )}
 
       {/* MAIN SPIDERWEB CANVAS */}
-      <div style={{ flex: 1, width: '100%', height: '100%' }}>
+      <div style={{ position: 'relative', width: '100%', height: '100%', flex: '1 1 0%', minHeight: 0 }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
