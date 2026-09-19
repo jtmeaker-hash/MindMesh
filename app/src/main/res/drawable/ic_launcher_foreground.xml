@@ -1,0 +1,96 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Connecting mesh edges -->
+    <path
+        android:strokeColor="#4E6BF5"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.7"
+        android:pathData="M54,54 L54,30" />
+    <path
+        android:strokeColor="#06B6D4"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.7"
+        android:pathData="M54,54 L75,42" />
+    <path
+        android:strokeColor="#10B981"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.7"
+        android:pathData="M54,54 L75,66" />
+    <path
+        android:strokeColor="#F59E0B"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.7"
+        android:pathData="M54,54 L54,78" />
+    <path
+        android:strokeColor="#EC4899"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.7"
+        android:pathData="M54,54 L33,66" />
+    <path
+        android:strokeColor="#8B5CF6"
+        android:strokeWidth="2.5"
+        android:strokeAlpha="0.7"
+        android:pathData="M54,54 L33,42" />
+    
+    <!-- Outer sub-branches -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="1.5"
+        android:strokeAlpha="0.5"
+        android:pathData="M75,42 L88,34" />
+    <path
+        android:strokeColor="#34D399"
+        android:strokeWidth="1.5"
+        android:strokeAlpha="0.5"
+        android:pathData="M75,66 L88,74" />
+    <path
+        android:strokeColor="#A78BFA"
+        android:strokeWidth="1.5"
+        android:strokeAlpha="0.5"
+        android:pathData="M33,42 L20,34" />
+
+    <!-- Sub-nodes -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M88,34 m -3,0 a 3,3 0 1,0 6,0 a 3,3 0 1,0 -6,0" />
+    <path
+        android:fillColor="#34D399"
+        android:pathData="M88,74 m -3,0 a 3,3 0 1,0 6,0 a 3,3 0 1,0 -6,0" />
+    <path
+        android:fillColor="#A78BFA"
+        android:pathData="M20,34 m -3,0 a 3,3 0 1,0 6,0 a 3,3 0 1,0 -6,0" />
+
+    <!-- Category Nodes -->
+    <path
+        android:fillColor="#6366F1"
+        android:pathData="M54,30 m -5.5,0 a 5.5,5.5 0 1,0 11,0 a 5.5,5.5 0 1,0 -11,0" />
+    <path
+        android:fillColor="#06B6D4"
+        android:pathData="M75,42 m -5.5,0 a 5.5,5.5 0 1,0 11,0 a 5.5,5.5 0 1,0 -11,0" />
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M75,66 m -5.5,0 a 5.5,5.5 0 1,0 11,0 a 5.5,5.5 0 1,0 -11,0" />
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M54,78 m -5.5,0 a 5.5,5.5 0 1,0 11,0 a 5.5,5.5 0 1,0 -11,0" />
+    <path
+        android:fillColor="#EC4899"
+        android:pathData="M33,66 m -5.5,0 a 5.5,5.5 0 1,0 11,0 a 5.5,5.5 0 1,0 -11,0" />
+    <path
+        android:fillColor="#8B5CF6"
+        android:pathData="M33,42 m -5.5,0 a 5.5,5.5 0 1,0 11,0 a 5.5,5.5 0 1,0 -11,0" />
+
+    <!-- Center Root Node with glowing rings -->
+    <path
+        android:fillColor="#312E81"
+        android:pathData="M54,54 m -13,0 a 13,13 0 1,0 26,0 a 13,13 0 1,0 -26,0" />
+    <path
+        android:fillColor="#6366F1"
+        android:pathData="M54,54 m -9,0 a 9,9 0 1,0 18,0 a 9,9 0 1,0 -18,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,54 m -4,0 a 4,4 0 1,0 8,0 a 4,4 0 1,0 -8,0" />
+</vector>
