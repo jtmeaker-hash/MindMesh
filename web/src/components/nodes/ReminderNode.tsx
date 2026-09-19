@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Check, CheckCircle, ListChecks, Calendar, Clock, Repeat } from 'lucide-react';
+import { Check, ListChecks, Calendar, Repeat } from 'lucide-react';
 import { MeshNodeData } from '../../types';
 
 export const ReminderNode = memo(({ data }: NodeProps) => {

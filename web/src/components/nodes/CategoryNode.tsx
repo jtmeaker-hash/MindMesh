@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Folder, Car, Heart, ShoppingBag, Home, Briefcase, DollarSign, Star } from 'lucide-react';
+import { Folder, Car, Heart, ShoppingBag, Home, Briefcase, DollarSign } from 'lucide-react';
 import { MeshNodeData } from '../../types';
 
 function getCategoryIcon(name: string, size = 18) {

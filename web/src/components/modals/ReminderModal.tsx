@@ -4,14 +4,8 @@ import {
   Trash2,
   CheckCircle2,
   RotateCcw,
-  Calendar,
-  Clock,
   Plus,
-  AlertCircle,
-  Tag,
-  AlignLeft,
   Repeat,
-  History,
 } from 'lucide-react';
 import { Reminder, Category, Priority, Subtask, RecurrenceRule, RecurrenceFrequency, CustomRecurrenceUnit } from '../../types';
 import { formatRecurrenceLabel } from '../../services/recurrence';

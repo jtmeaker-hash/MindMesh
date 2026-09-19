@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, FolderPlus, CheckSquare, X } from 'lucide-react';
+import { FolderPlus, CheckSquare, X } from 'lucide-react';
 import { Category } from '../../types';
 
 interface QuickAddModalProps {

@@ -23,12 +23,9 @@ import {
   ArrowLeft,
   Settings,
   X,
-  Layers,
-  CheckCheck,
-  Info,
 } from 'lucide-react';
 
-import { Category, Reminder, ViewMode, MeshNodeData, NodePosition, NodePositionMap } from './types';
+import { Category, Reminder, ViewMode, MeshNodeData, NodePositionMap } from './types';
 import {
   loadCategories,
   saveCategories,

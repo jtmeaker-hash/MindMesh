@@ -1,0 +1,11 @@
+{
+  "name": "mindmesh",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "lint": "npm --prefix web run lint",
+    "type-check": "npm --prefix web run type-check",
+    "test": "npm --prefix web run test",
+    "build": "npm --prefix web run build"
+  }
+}

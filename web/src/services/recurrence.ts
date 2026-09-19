@@ -1,4 +1,4 @@
-import { Reminder, RecurrenceRule, RecurrenceFrequency, Subtask } from '../types';
+import { Reminder, RecurrenceRule } from '../types';
 import { logger } from './logger';
 
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];

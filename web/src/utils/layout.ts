@@ -1,4 +1,4 @@
-import { Node, Edge, MarkerType } from '@xyflow/react';
+import { Node, Edge } from '@xyflow/react';
 import { Category, Reminder, MeshNodeData, NodePositionMap } from '../types';
 
 export interface GraphElements {
