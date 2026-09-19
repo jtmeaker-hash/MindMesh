@@ -1,8 +1,10 @@
 import { Category, Reminder, NodePositionMap, NodePosition, MindMeshStorageData } from '../types';
+import { MoneyState } from '../types/finance';
 import { INITIAL_CATEGORIES, INITIAL_REMINDERS } from '../utils/sampleData';
+import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import { logger } from './logger';
 
-export const CURRENT_STORAGE_VERSION = 2;
+export const CURRENT_STORAGE_VERSION = 3;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
@@ -15,6 +17,7 @@ function getDefaultState(): MindMeshStorageData {
     reminders: INITIAL_REMINDERS,
     nodePositions: {},
     lastUpdated: new Date().toISOString(),
+    money: getDefaultMoneyState(),
   };
 }
 
@@ -31,7 +34,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       return null;
     }
 
-    logger.info('Storage', 'Migrating legacy v1 storage to v2 schema');
+    logger.info('Storage', 'Migrating legacy v1 storage to v3 schema');
 
     let categories: Category[] = INITIAL_CATEGORIES;
     let reminders: Reminder[] = INITIAL_REMINDERS;
@@ -64,6 +67,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       reminders,
       nodePositions,
       lastUpdated: new Date().toISOString(),
+      money: getDefaultMoneyState(),
     };
 
     saveAllData(migrated);
@@ -75,7 +79,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
 }
 
 /**
- * Loads entire persisted MindMesh state with safe fallbacks.
+ * Loads entire persisted MindMesh state with safe fallbacks and schema migration.
  */
 export function loadAllData(): MindMeshStorageData {
   try {
@@ -109,6 +113,26 @@ export function loadAllData(): MindMeshStorageData {
       ? parsed.nodePositions
       : {};
 
+    const defaultMoney = getDefaultMoneyState();
+    const money: MoneyState = parsed.money && typeof parsed.money === 'object'
+      ? {
+          incomeConfig: parsed.money.incomeConfig || null,
+          directDebits: Array.isArray(parsed.money.directDebits) ? parsed.money.directDebits : [],
+          billCategories: Array.isArray(parsed.money.billCategories) && parsed.money.billCategories.length > 0
+            ? parsed.money.billCategories
+            : defaultMoney.billCategories,
+          extraIncomeList: Array.isArray(parsed.money.extraIncomeList) ? parsed.money.extraIncomeList : [],
+          extraIncomeCategories: Array.isArray(parsed.money.extraIncomeCategories) && parsed.money.extraIncomeCategories.length > 0
+            ? parsed.money.extraIncomeCategories
+            : defaultMoney.extraIncomeCategories,
+          tipEntries: Array.isArray(parsed.money.tipEntries) ? parsed.money.tipEntries : [],
+          shifts: Array.isArray(parsed.money.shifts) ? parsed.money.shifts : [],
+          payCycleOverrides: parsed.money.payCycleOverrides && typeof parsed.money.payCycleOverrides === 'object'
+            ? parsed.money.payCycleOverrides
+            : {},
+        }
+      : defaultMoney;
+
     logger.debug('Storage', 'State hydrated successfully', {
       categoryCount: categories.length,
       reminderCount: reminders.length,
@@ -116,11 +140,12 @@ export function loadAllData(): MindMeshStorageData {
     });
 
     return {
-      version: parsed.version || CURRENT_STORAGE_VERSION,
+      version: CURRENT_STORAGE_VERSION,
       categories,
       reminders,
       nodePositions,
       lastUpdated: parsed.lastUpdated || new Date().toISOString(),
+      money,
     };
   } catch (e) {
     logger.error('Storage', 'Error reading storage, restoring safe default state', e);
@@ -142,6 +167,19 @@ export function saveAllData(data: MindMeshStorageData): void {
   } catch (e) {
     logger.error('Storage', 'Failed to save MindMesh storage data', e);
   }
+}
+
+/**
+ * Money-specific helper methods
+ */
+export function loadMoneyState(): MoneyState {
+  const data = loadAllData();
+  return data.money || getDefaultMoneyState();
+}
+
+export function saveMoneyState(money: MoneyState): void {
+  const current = loadAllData();
+  saveAllData({ ...current, money });
 }
 
 /**

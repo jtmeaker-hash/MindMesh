@@ -25,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 
-import { Category, Reminder, ViewMode, MeshNodeData, NodePositionMap } from './types';
+import { Category, Reminder, ViewMode, MeshNodeData, NodePositionMap, AppNavTab, MoneyState } from './types';
 import {
   loadCategories,
   saveCategories,
@@ -36,6 +36,8 @@ import {
   clearNodePositions,
   resetToSample,
   clearAllData,
+  loadMoneyState,
+  saveMoneyState,
 } from './utils/storage';
 import { generateActiveMesh, generateCompletedOverviewMesh, generateCompletedCategoryMesh } from './utils/layout';
 import { handleReminderCompletion } from './services/recurrence';
@@ -50,6 +52,10 @@ import { CategoryModal } from './components/modals/CategoryModal';
 import { CategoryActionsSheet } from './components/modals/CategoryActionsSheet';
 import { QuickAddModal } from './components/modals/QuickAddModal';
 
+import { AppNavigation } from './components/navigation/AppNavigation';
+import { MoneyModule } from './components/money/MoneyModule';
+import { DashboardModule } from './components/dashboard/DashboardModule';
+
 const nodeTypes = {
   rootNode: RootNode,
   categoryNode: CategoryNode,
@@ -62,8 +68,10 @@ function MindMeshFlow() {
   const [categories, setCategories] = useState<Category[]>(() => loadCategories());
   const [reminders, setReminders] = useState<Reminder[]>(() => loadReminders());
   const [nodePositions, setNodePositions] = useState<NodePositionMap>(() => loadNodePositions());
+  const [moneyState, setMoneyState] = useState<MoneyState>(() => loadMoneyState());
 
   // Navigation state
+  const [mainNavTab, setMainNavTab] = useState<AppNavTab>('reminders');
   const [viewMode, setViewMode] = useState<ViewMode>('active');
   const [focusedCategoryId, setFocusedCategoryId] = useState<string | null>(null);
   const [selectedCompletedCategory, setSelectedCompletedCategory] = useState<Category | null>(null);
@@ -104,6 +112,10 @@ function MindMeshFlow() {
   useEffect(() => {
     saveNodePositions(nodePositions);
   }, [nodePositions]);
+
+  useEffect(() => {
+    saveMoneyState(moneyState);
+  }, [moneyState]);
 
   // Handle node interaction
   const handleNodeClick = useCallback(
@@ -452,7 +464,7 @@ function MindMeshFlow() {
           pointerEvents: 'none',
         }}
       >
-        <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
           {selectedCompletedCategory ? (
             <button
               type="button"
@@ -507,12 +519,24 @@ function MindMeshFlow() {
               </p>
             </div>
           )}
+
+          {/* Primary App Navigation in Top Bar */}
+          <AppNavigation
+            currentTab={mainNavTab}
+            onSelectTab={(tab) => {
+              setMainNavTab(tab);
+              if (tab === 'reminders') {
+                setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
+              }
+            }}
+            activeRemindersCount={activeCount}
+          />
         </div>
 
         {/* Right Controls */}
         <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Auto-Arrange pill if manual positioning is active */}
-          {Object.keys(nodePositions).length > 0 && (
+          {/* Auto-Arrange pill if manual positioning is active and on reminders tab */}
+          {mainNavTab === 'reminders' && Object.keys(nodePositions).length > 0 && (
             <button
               type="button"
               onClick={handleResetLayout}
@@ -536,26 +560,28 @@ function MindMeshFlow() {
             </button>
           )}
 
-          {/* Fit view button */}
-          <button
-            type="button"
-            onClick={() => fitView({ padding: 0.18, duration: 400 })}
-            title="Fit Mesh to Screen"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 12,
-              backgroundColor: 'rgba(255,255,255,0.07)',
-              border: '1px solid rgba(255,255,255,0.12)',
-              color: '#94a3b8',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-            }}
-          >
-            <Maximize2 size={17} />
-          </button>
+          {/* Fit view button on reminders tab */}
+          {mainNavTab === 'reminders' && (
+            <button
+              type="button"
+              onClick={() => fitView({ padding: 0.18, duration: 400 })}
+              title="Fit Mesh to Screen"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 12,
+                backgroundColor: 'rgba(255,255,255,0.07)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                color: '#94a3b8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+              }}
+            >
+              <Maximize2 size={17} />
+            </button>
+          )}
 
           {/* Menu / Settings */}
           <div style={{ position: 'relative' }}>
@@ -669,229 +695,268 @@ function MindMeshFlow() {
         </div>
       </header>
 
-      {/* FOCUSED CATEGORY BANNER (If a branch is focused) */}
-      {viewMode === 'active' && focusedCategory && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 72,
-            left: 16,
-            right: 16,
-            zIndex: 40,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '8px 14px',
-            borderRadius: 12,
-            backgroundColor: 'rgba(15, 23, 42, 0.85)',
-            border: `1px solid ${focusedCategory.color}66`,
-            boxShadow: `0 4px 16px rgba(0,0,0,0.5), 0 0 10px ${focusedCategory.color}22`,
-            backdropFilter: 'blur(8px)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
+      {/* MAIN CONTENT AREA ACCORDING TO SELECTED TAB */}
+      {mainNavTab === 'reminders' && (
+        <>
+          {/* FOCUSED CATEGORY BANNER (If a branch is focused) */}
+          {viewMode === 'active' && focusedCategory && (
+            <div
               style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                backgroundColor: focusedCategory.color,
-                boxShadow: `0 0 8px ${focusedCategory.color}`,
+                position: 'absolute',
+                top: 72,
+                left: 16,
+                right: 16,
+                zIndex: 40,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 14px',
+                borderRadius: 12,
+                backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                border: `1px solid ${focusedCategory.color}66`,
+                boxShadow: `0 4px 16px rgba(0,0,0,0.5), 0 0 10px ${focusedCategory.color}22`,
+                backdropFilter: 'blur(8px)',
               }}
-            />
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc' }}>
-              Focused: {focusedCategory.name} Branch
-            </span>
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    backgroundColor: focusedCategory.color,
+                    boxShadow: `0 0 8px ${focusedCategory.color}`,
+                  }}
+                />
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#f8fafc' }}>
+                  Focused: {focusedCategory.name} Branch
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDefaultCategoryIdForNewReminder(focusedCategory.id);
+                    setActiveReminder(null);
+                    setReminderModalOpen(true);
+                  }}
+                  style={{
+                    background: `${focusedCategory.color}22`,
+                    border: `1px solid ${focusedCategory.color}`,
+                    color: '#ffffff',
+                    padding: '4px 8px',
+                    borderRadius: 8,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  + Task
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFocusedCategoryId(null)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#94a3b8',
+                    cursor: 'pointer',
+                    padding: 4,
+                  }}
+                  title="Unfocus"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* MAIN SPIDERWEB CANVAS */}
+          <div style={{ position: 'relative', width: '100%', height: '100%', flex: '1 1 0%', minHeight: 0 }}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onNodeDragStart={handleNodeDragStart}
+              onNodeDragStop={handleNodeDragStop}
+              nodesDraggable={true}
+              nodeTypes={nodeTypes}
+              minZoom={0.25}
+              maxZoom={2.2}
+              proOptions={{ hideAttribution: true }}
+              defaultEdgeOptions={{
+                type: 'default',
+                animated: false,
+              }}
+            >
+              {/* Subtle neural grid background */}
+              <Background
+                variant={BackgroundVariant.Dots}
+                gap={28}
+                size={1.5}
+                color="rgba(99, 102, 241, 0.15)"
+              />
+              <Controls
+                position="bottom-left"
+                showInteractive={false}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'row',
+                  backgroundColor: '#0F172A',
+                  border: '1px solid #334155',
+                  borderRadius: 10,
+                  overflow: 'hidden',
+                  boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+                  marginBottom: 75,
+                  marginLeft: 14,
+                }}
+              />
+            </ReactFlow>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <button
-              type="button"
-              onClick={() => {
-                setDefaultCategoryIdForNewReminder(focusedCategory.id);
-                setActiveReminder(null);
-                setReminderModalOpen(true);
-              }}
+          {/* BOTTOM NAVIGATION & FLOATING ACTION BUTTON */}
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              zIndex: 50,
+              padding: '12px 16px 20px 16px',
+              background: 'linear-gradient(0deg, rgba(8,11,18,0.96) 0%, rgba(8,11,18,0.7) 70%, transparent 100%)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 16,
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            {/* Navigation Switcher Capsule */}
+            <div
               style={{
-                background: `${focusedCategory.color}22`,
-                border: `1px solid ${focusedCategory.color}`,
-                color: '#ffffff',
-                padding: '4px 8px',
-                borderRadius: 8,
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              + Task
-            </button>
-            <button
-              type="button"
-              onClick={() => setFocusedCategoryId(null)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#94a3b8',
-                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                backgroundColor: '#0F172A',
+                border: '1px solid #334155',
+                borderRadius: 30,
                 padding: 4,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
               }}
-              title="Unfocus"
             >
-              <X size={16} />
+              {/* ACTIVE TAB */}
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('active');
+                  setSelectedCompletedCategory(null);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 20px',
+                  borderRadius: 24,
+                  border: 'none',
+                  backgroundColor: viewMode === 'active' ? '#6366F1' : 'transparent',
+                  color: viewMode === 'active' ? '#ffffff' : '#94A3B8',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                <Sparkles size={16} />
+                <span>Active ({activeCount})</span>
+              </button>
+
+              {/* COMPLETED TAB */}
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('completed');
+                  setFocusedCategoryId(null);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 20px',
+                  borderRadius: 24,
+                  border: 'none',
+                  backgroundColor: viewMode === 'completed' ? '#0284C7' : 'transparent',
+                  color: viewMode === 'completed' ? '#ffffff' : '#94A3B8',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                <CheckCircle2 size={16} />
+                <span>Completed ({completedCount})</span>
+              </button>
+            </div>
+
+            {/* FLOATING ACTION BUTTON (+) */}
+            <button
+              type="button"
+              onClick={() => setQuickAddOpen(true)}
+              title="Quick Add Task or Category"
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: '50%',
+                backgroundColor: '#6366F1',
+                border: '2px solid rgba(255,255,255,0.2)',
+                color: '#ffffff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                boxShadow: '0 0 20px rgba(99, 102, 241, 0.5), 0 4px 12px rgba(0,0,0,0.5)',
+                transition: 'transform 0.15s ease',
+              }}
+            >
+              <Plus size={26} strokeWidth={2.5} />
             </button>
           </div>
+        </>
+      )}
+
+      {/* MONEY SECTION */}
+      {mainNavTab === 'money' && (
+        <div style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+          <MoneyModule
+            moneyState={moneyState}
+            onUpdateMoneyState={setMoneyState}
+            reminders={reminders}
+            categories={categories}
+            onUpdateReminders={setReminders}
+            onUpdateCategories={setCategories}
+          />
         </div>
       )}
 
-      {/* MAIN SPIDERWEB CANVAS */}
-      <div style={{ position: 'relative', width: '100%', height: '100%', flex: '1 1 0%', minHeight: 0 }}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onNodeDragStart={handleNodeDragStart}
-          onNodeDragStop={handleNodeDragStop}
-          nodesDraggable={true}
-          nodeTypes={nodeTypes}
-          minZoom={0.25}
-          maxZoom={2.2}
-          proOptions={{ hideAttribution: true }}
-          defaultEdgeOptions={{
-            type: 'default',
-            animated: false,
-          }}
-        >
-          {/* Subtle neural grid background */}
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={28}
-            size={1.5}
-            color="rgba(99, 102, 241, 0.15)"
-          />
-          <Controls
-            position="bottom-left"
-            showInteractive={false}
-            style={{
-              display: 'flex',
-              flexDirection: 'row',
-              backgroundColor: '#0F172A',
-              border: '1px solid #334155',
-              borderRadius: 10,
-              overflow: 'hidden',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
-              marginBottom: 75,
-              marginLeft: 14,
+      {/* DASHBOARD SECTION */}
+      {mainNavTab === 'dashboard' && (
+        <div style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+          <DashboardModule
+            reminders={reminders}
+            categories={categories}
+            moneyState={moneyState}
+            onNavigateToMoney={() => setMainNavTab('money')}
+            onNavigateToReminders={() => setMainNavTab('reminders')}
+            onOpenReminderModal={(remId) => {
+              const r = reminders.find((rem) => rem.id === remId);
+              if (r) {
+                setActiveReminder(r);
+                setReminderModalOpen(true);
+              }
             }}
           />
-        </ReactFlow>
-      </div>
-
-      {/* BOTTOM NAVIGATION & FLOATING ACTION BUTTON */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          zIndex: 50,
-          padding: '12px 16px 20px 16px',
-          background: 'linear-gradient(0deg, rgba(8,11,18,0.96) 0%, rgba(8,11,18,0.7) 70%, transparent 100%)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 16,
-          backdropFilter: 'blur(8px)',
-        }}
-      >
-        {/* Navigation Switcher Capsule */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            backgroundColor: '#0F172A',
-            border: '1px solid #334155',
-            borderRadius: 30,
-            padding: 4,
-            boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-          }}
-        >
-          {/* ACTIVE TAB */}
-          <button
-            type="button"
-            onClick={() => {
-              setViewMode('active');
-              setSelectedCompletedCategory(null);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '8px 20px',
-              borderRadius: 24,
-              border: 'none',
-              backgroundColor: viewMode === 'active' ? '#6366F1' : 'transparent',
-              color: viewMode === 'active' ? '#ffffff' : '#94A3B8',
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-            }}
-          >
-            <Sparkles size={16} />
-            <span>Active ({activeCount})</span>
-          </button>
-
-          {/* COMPLETED TAB */}
-          <button
-            type="button"
-            onClick={() => {
-              setViewMode('completed');
-              setFocusedCategoryId(null);
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '8px 20px',
-              borderRadius: 24,
-              border: 'none',
-              backgroundColor: viewMode === 'completed' ? '#0284C7' : 'transparent',
-              color: viewMode === 'completed' ? '#ffffff' : '#94A3B8',
-              fontSize: 13,
-              fontWeight: 700,
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-            }}
-          >
-            <CheckCircle2 size={16} />
-            <span>Completed ({completedCount})</span>
-          </button>
         </div>
-
-        {/* FLOATING ACTION BUTTON (+) */}
-        <button
-          type="button"
-          onClick={() => setQuickAddOpen(true)}
-          title="Quick Add Task or Category"
-          style={{
-            width: 52,
-            height: 52,
-            borderRadius: '50%',
-            backgroundColor: '#6366F1',
-            border: '2px solid rgba(255,255,255,0.2)',
-            color: '#ffffff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            boxShadow: '0 0 20px rgba(99, 102, 241, 0.5), 0 4px 12px rgba(0,0,0,0.5)',
-            transition: 'transform 0.15s ease',
-          }}
-        >
-          <Plus size={26} strokeWidth={2.5} />
-        </button>
-      </div>
+      )}
 
       {/* MODALS */}
       <ReminderModal

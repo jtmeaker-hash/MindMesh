@@ -139,6 +139,7 @@ export function generateActiveMesh(
             categoryId: category.id,
             subtaskCount: reminder.subtasks.length,
             completedSubtaskCount: completedSubtasks,
+            isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId),
             manuallyPositioned: Boolean(manualRem?.manuallyPositioned),
             onNodeClick: callbacks?.onNodeClick,
             onReminderCompleteToggle: callbacks?.onReminderCompleteToggle,
