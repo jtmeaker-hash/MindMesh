@@ -96,6 +96,9 @@ fun MindMeshApp() {
               request: WebResourceRequest?
             ): WebResourceResponse? {
               val uri = request?.url ?: return null
+              if (uri.path?.endsWith("favicon.ico") == true) {
+                return WebResourceResponse("image/x-icon", "UTF-8", java.io.ByteArrayInputStream(ByteArray(0)))
+              }
               return assetLoader.shouldInterceptRequest(uri)
             }
 
@@ -105,10 +108,13 @@ fun MindMeshApp() {
               error: WebResourceError?
             ) {
               super.onReceivedError(view, request, error)
-              Log.e(
-                "MindMeshWebView",
-                "Load error on ${request?.url}: ${error?.description} (code: ${error?.errorCode})"
-              )
+              val path = request?.url?.path.orEmpty()
+              if (!path.endsWith("favicon.ico")) {
+                Log.e(
+                  "MindMeshWebView",
+                  "Load error on ${request?.url}: ${error?.description} (code: ${error?.errorCode})"
+                )
+              }
             }
           }
 
