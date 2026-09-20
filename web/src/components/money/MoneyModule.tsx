@@ -10,7 +10,7 @@ import {
   DirectDebitCategory,
   ExtraIncomeCategory,
 } from '../../types/finance';
-import { Reminder } from '../../types';
+import { Reminder, Category } from '../../types';
 import {
   formatCurrency,
   formatDateAU,
@@ -18,7 +18,8 @@ import {
   getDirectDebitsOverview,
   isBillOverdueOrDueSoon,
   computeShiftStats,
-  computeTipStats,
+  calculateTipSummaries,
+  getUpcomingMoneyTimeline,
 } from '../../utils/finance';
 import { EmptyState } from '../common/EmptyState';
 import { DirectDebitModal } from './DirectDebitModal';
@@ -29,30 +30,29 @@ import { TipEntryModal } from './TipEntryModal';
 import {
   Wallet,
   Calendar,
-  DollarSign,
-  TrendingUp,
   CreditCard,
   Plus,
   Coins,
   Sparkles,
   Clock,
-  ArrowRight,
-  AlertTriangle,
   CheckCircle2,
   Settings,
   ChevronRight,
   Briefcase,
-  HelpCircle,
-  Tag,
   Edit2,
   PauseCircle,
   PlayCircle,
+  X,
+  RotateCcw,
 } from 'lucide-react';
 
 interface MoneyModuleProps {
   moneyState: MoneyState;
   reminders: Reminder[];
+  categories?: Category[];
   onUpdateMoneyState: (updater: (prev: MoneyState) => MoneyState) => void;
+  onUpdateReminders?: (updater: (prev: Reminder[]) => Reminder[]) => void;
+  onUpdateCategories?: (updater: (prev: Category[]) => Category[]) => void;
   onOpenReminderModal?: (reminderId?: string) => void;
 }
 
@@ -71,6 +71,10 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
   const [editingExtra, setEditingExtra] = useState<ExtraIncome | null | 'new'>(null);
   const [editingTip, setEditingTip] = useState<TipEntry | null | 'new'>(null);
 
+  // Pay cycle override modal state
+  const [showOverrideModal, setShowOverrideModal] = useState(false);
+  const [overrideInput, setOverrideInput] = useState('');
+
   // New Category input states in Settings
   const [newBillCatName, setNewBillCatName] = useState('');
   const [newBillCatColor, setNewBillCatColor] = useState('#6366f1');
@@ -81,7 +85,11 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
   const payCycleSummary = getCurrentPayCycleSummary(moneyState);
   const debitsOverview = getDirectDebitsOverview(moneyState.directDebits);
   const shiftStats = computeShiftStats(moneyState.shifts);
-  const tipStats = computeTipStats(moneyState.tipEntries);
+  const tipSummaries = calculateTipSummaries(moneyState.tipEntries);
+  const timelineItems = getUpcomingMoneyTimeline(moneyState);
+
+  const nextPayKey = moneyState.incomeConfig?.nextPayDate || '';
+  const hasActiveOverride = Boolean(nextPayKey && moneyState.payCycleOverrides[nextPayKey] !== undefined);
 
   const subTabs: { id: MoneySubTab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
@@ -89,7 +97,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
     { id: 'income', label: 'Income & Pay' },
     { id: 'extra', label: 'Extra Income' },
     { id: 'tips', label: 'Tips' },
-    { id: 'categories', label: 'Categories & Settings' },
+    { id: 'categories', label: 'Settings' },
   ];
 
   // Bill handlers
@@ -127,6 +135,21 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
     }));
   };
 
+  // Pay Cycle override handler
+  const handleSaveOverride = (amount: number | null) => {
+    if (!nextPayKey) return;
+    onUpdateMoneyState((prev) => {
+      const overrides = { ...prev.payCycleOverrides };
+      if (amount === null || isNaN(amount)) {
+        delete overrides[nextPayKey];
+      } else {
+        overrides[nextPayKey] = amount;
+      }
+      return { ...prev, payCycleOverrides: overrides };
+    });
+    setShowOverrideModal(false);
+  };
+
   // Shift handlers
   const handleSaveShift = (shift: Shift) => {
     onUpdateMoneyState((prev) => {
@@ -138,14 +161,14 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
     });
   };
 
-  const handleDeleteShift = (shiftId: string) => {
+  const handleDeleteShift = (id: string) => {
     onUpdateMoneyState((prev) => ({
       ...prev,
-      shifts: prev.shifts.filter((s) => s.id !== shiftId),
+      shifts: prev.shifts.filter((s) => s.id !== id),
     }));
   };
 
-  // Extra Income handlers
+  // Extra income handlers
   const handleSaveExtra = (entry: ExtraIncome) => {
     onUpdateMoneyState((prev) => {
       const exists = prev.extraIncomeList.some((e) => e.id === entry.id);
@@ -231,7 +254,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
           position: 'sticky',
           top: 0,
           zIndex: 20,
-          background: 'rgba(15, 23, 42, 0.85)',
+          background: 'rgba(15, 23, 42, 0.88)',
           backdropFilter: 'blur(16px)',
           WebkitBackdropFilter: 'blur(16px)',
           borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
@@ -264,13 +287,15 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
               Money Management
             </h1>
             <span style={{ fontSize: 11, color: '#94a3b8' }}>
-              Bills, Income, Pay Cycles & Casual Shifts
+              Bills, Income, Pay Cycles, Casual Shifts & Tips
             </span>
           </div>
         </div>
 
         {/* Sub-tabs pills */}
         <div
+          role="tablist"
+          aria-label="Money Subtabs"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -288,6 +313,8 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
               <button
                 key={tab.id}
                 type="button"
+                role="tab"
+                aria-selected={isActive}
                 onClick={() => setActiveSubTab(tab.id)}
                 style={{
                   display: 'flex',
@@ -325,160 +352,296 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
         {/* ===================== OVERVIEW SUB-TAB ===================== */}
         {activeSubTab === 'overview' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-            {/* Pay Cycle Big Hero Card */}
-            <div
-              style={{
-                borderRadius: 24,
-                background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                padding: '24px 28px',
-                boxShadow: '0 20px 40px -15px rgba(0, 0, 0, 0.5)',
-                position: 'relative',
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  position: 'absolute',
-                  top: -40,
-                  right: -40,
-                  width: 180,
-                  height: 180,
-                  borderRadius: '50%',
-                  background: 'radial-gradient(circle, rgba(16, 185, 129, 0.15) 0%, rgba(16, 185, 129, 0) 70%)',
-                  pointerEvents: 'none',
-                }}
+            {!moneyState.incomeConfig ? (
+              <EmptyState
+                icon={Briefcase}
+                title="No pay configured"
+                description="Set up your income to calculate money remaining after bills."
+                actionLabel="Configure Income"
+                onAction={() => setIsIncomeConfigOpen(true)}
               />
-
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
-                <div>
-                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#10b981' }}>
-                    Current Pay Cycle
-                  </span>
-                  <h2 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 0 0', color: '#f8fafc' }}>
-                    {formatDateAU(payCycleSummary.cycleStartDate)} — {formatDateAU(payCycleSummary.cycleEndDate)}
-                  </h2>
-                  <span style={{ fontSize: 12, color: '#94a3b8' }}>
-                    {payCycleSummary.daysRemainingInCycle} days remaining until next pay date ({formatDateAU(payCycleSummary.nextPayDate)})
-                  </span>
-                </div>
-
-                <div style={{ display: 'flex', gap: 10 }}>
-                  <button
-                    type="button"
-                    onClick={() => setIsIncomeConfigOpen(true)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '8px 16px',
-                      borderRadius: 12,
-                      border: '1px solid rgba(255, 255, 255, 0.12)',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      color: '#f8fafc',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <Settings size={15} />
-                    <span>Configure Pay</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditingDebit('new')}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '8px 16px',
-                      borderRadius: 12,
-                      border: 'none',
-                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                      color: '#ffffff',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)',
-                    }}
-                  >
-                    <Plus size={16} />
-                    <span>Add Bill</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* 4-Stat Metric Strip */}
+            ) : (
+              /* Pay Cycle Banner Header */
               <div
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                  gap: 16,
-                  paddingTop: 16,
-                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: 24,
+                  background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  padding: '24px 28px',
+                  boxShadow: '0 20px 40px -15px rgba(0, 0, 0, 0.5)',
+                  position: 'relative',
+                  overflow: 'hidden',
                 }}
               >
-                <div>
-                  <span style={{ fontSize: 12, color: '#94a3b8', display: 'block', marginBottom: 4 }}>
-                    Expected Pay
-                  </span>
-                  <div style={{ fontSize: 24, fontWeight: 800, color: '#10b981' }}>
-                    {formatCurrency(payCycleSummary.expectedPayThisCycle)}
-                  </div>
-                  {payCycleSummary.shiftsTotalEarnings > 0 && (
-                    <span style={{ fontSize: 11, color: '#6ee7b7' }}>
-                      Incl. {formatCurrency(payCycleSummary.shiftsTotalEarnings)} shift pay
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#10b981' }}>
+                        Current Pay Cycle
+                      </span>
+                      {hasActiveOverride && (
+                        <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', padding: '2px 8px', borderRadius: 999 }}>
+                          Cycle Override Active
+                        </span>
+                      )}
+                    </div>
+                    <h2 style={{ fontSize: 22, fontWeight: 800, margin: '4px 0 0 0', color: '#f8fafc' }}>
+                      {formatDateAU(payCycleSummary.cycleStartDate)} — {formatDateAU(payCycleSummary.cycleEndDate)}
+                    </h2>
+                    <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                      {payCycleSummary.daysRemainingInCycle} days remaining until next pay date ({formatDateAU(payCycleSummary.nextPayDate)})
                     </span>
-                  )}
+                  </div>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOverrideInput(String(payCycleSummary.expectedPayThisCycle));
+                        setShowOverrideModal(true);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '8px 14px',
+                        borderRadius: 12,
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        color: hasActiveOverride ? '#fbbf24' : '#f8fafc',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <RotateCcw size={14} />
+                      <span>{hasActiveOverride ? 'Adjust Override' : 'Override Cycle Pay'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsIncomeConfigOpen(true)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '8px 14px',
+                        borderRadius: 12,
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        color: '#f8fafc',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Settings size={14} />
+                      <span>Configure Pay</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEditingDebit('new')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '8px 16px',
+                        borderRadius: 12,
+                        border: 'none',
+                        background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                        color: '#ffffff',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)',
+                      }}
+                    >
+                      <Plus size={16} />
+                      <span>Add Bill</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div>
-                  <span style={{ fontSize: 12, color: '#94a3b8', display: 'block', marginBottom: 4 }}>
-                    Bills Due This Cycle
-                  </span>
-                  <div style={{ fontSize: 24, fontWeight: 800, color: '#f87171' }}>
-                    {formatCurrency(payCycleSummary.billsTotalThisCycle)}
+                {/* The 6 Required Cards on Overview */}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    gap: 14,
+                    paddingTop: 16,
+                    borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  }}
+                >
+                  {/* 1. Next Pay */}
+                  <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Next Pay</span>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#10b981' }}>
+                      {formatCurrency(payCycleSummary.expectedPayThisCycle)}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                      Due {formatDateAU(payCycleSummary.nextPayDate)}
+                    </span>
                   </div>
-                  <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                    {payCycleSummary.billsDueInCycle.length} direct debits scheduled
-                  </span>
-                </div>
 
-                <div>
-                  <span style={{ fontSize: 12, color: '#94a3b8', display: 'block', marginBottom: 4 }}>
-                    Estimated Remaining
-                  </span>
-                  <div
-                    style={{
-                      fontSize: 24,
-                      fontWeight: 800,
-                      color: payCycleSummary.estimatedRemainingSafe >= 0 ? '#38bdf8' : '#ef4444',
-                    }}
-                  >
-                    {formatCurrency(payCycleSummary.estimatedRemainingSafe)}
+                  {/* 2. Days Until Pay */}
+                  <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Days Until Pay</span>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#38bdf8' }}>
+                      {payCycleSummary.daysRemainingInCycle}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                      days to next pay
+                    </span>
                   </div>
-                  <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                    After bills in this cycle
-                  </span>
-                </div>
 
-                <div>
-                  <span style={{ fontSize: 12, color: '#94a3b8', display: 'block', marginBottom: 4 }}>
-                    Extra & Tips (Cycle)
-                  </span>
-                  <div style={{ fontSize: 24, fontWeight: 800, color: '#fbbf24' }}>
-                    {formatCurrency(payCycleSummary.extraIncomeTotalThisCycle + payCycleSummary.tipsTotalThisCycle)}
+                  {/* 3. Bills Before Next Pay */}
+                  <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Bills Before Pay</span>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#f87171' }}>
+                      {formatCurrency(payCycleSummary.billsTotalThisCycle)}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                      {payCycleSummary.billsDueInCycle.length} recurring bills due
+                    </span>
                   </div>
-                  <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                    {formatCurrency(payCycleSummary.tipsTotalThisCycle)} tips + {formatCurrency(payCycleSummary.extraIncomeTotalThisCycle)} extra
-                  </span>
+
+                  {/* 4. Money Remaining After Bills */}
+                  <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Remaining After Bills</span>
+                    <div
+                      style={{
+                        fontSize: 22,
+                        fontWeight: 800,
+                        color: payCycleSummary.estimatedRemainingSafe >= 0 ? '#38bdf8' : '#ef4444',
+                      }}
+                    >
+                      {payCycleSummary.estimatedRemainingSafe >= 0 ? '+' : ''}
+                      {formatCurrency(payCycleSummary.estimatedRemainingSafe)}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                      {payCycleSummary.estimatedRemainingSafe >= 0 ? 'Safe remainder' : 'Projected deficit'}
+                    </span>
+                  </div>
+
+                  {/* 5. Extra Income This Pay Cycle */}
+                  <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Extra Income (Cycle)</span>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#34d399' }}>
+                      +{formatCurrency(payCycleSummary.extraIncomeTotalThisCycle)}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                      Included in cycle
+                    </span>
+                  </div>
+
+                  {/* 6. Tips This Week */}
+                  <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                    <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Tips This Week</span>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#fbbf24' }}>
+                      +{formatCurrency(tipSummaries.weekTotal)}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                      Mon – Sun tips
+                    </span>
+                  </div>
                 </div>
               </div>
+            )}
+
+            {/* Upcoming Money Timeline (with explicit +/- and [Income]/[Expense] badges) */}
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: 20,
+                padding: '22px 24px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Calendar size={18} color="#38bdf8" />
+                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Upcoming Money Timeline</h3>
+                </div>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>Cash flow in the next 14 days</span>
+              </div>
+
+              {timelineItems.length === 0 ? (
+                <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>
+                  No upcoming bills or scheduled income found in the next 14 days.
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {timelineItems.map((item) => {
+                    const isIncome = item.type === 'income';
+                    return (
+                      <div
+                        key={item.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '12px 16px',
+                          borderRadius: 14,
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          border: isIncome ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(239, 68, 68, 0.2)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                          <span
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 700,
+                              color: '#cbd5e1',
+                              minWidth: 85,
+                            }}
+                          >
+                            {item.dayLabel}
+                          </span>
+                          <div>
+                            <span style={{ fontSize: 14, fontWeight: 600, color: '#f8fafc', display: 'block' }}>
+                              {item.title}
+                            </span>
+                            <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                              {formatDateAU(item.date)} • {item.categoryName}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 700,
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              background: isIncome ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                              color: isIncome ? '#34d399' : '#f87171',
+                              border: isIncome ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+                            }}
+                          >
+                            [{item.badge}]
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 16,
+                              fontWeight: 800,
+                              color: isIncome ? '#34d399' : '#fca5a5',
+                            }}
+                          >
+                            {item.formattedAmount}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
-            {/* Two-Column Grid: Upcoming Bills & Shift/Extra Quick Summary */}
+            {/* Two-Column Grid: Upcoming Bills & Quick Actions */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 24 }}>
-              {/* Upcoming Bills in Cycle */}
+              {/* Bills Due in Current Cycle */}
               <div
                 style={{
                   background: 'rgba(15, 23, 42, 0.6)',
@@ -538,7 +701,6 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                             background: 'rgba(255, 255, 255, 0.03)',
                             border: '1px solid rgba(255, 255, 255, 0.06)',
                             cursor: 'pointer',
-                            transition: 'transform 0.15s ease, background-color 0.15s ease',
                           }}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -562,7 +724,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
 
                           <div style={{ textAlign: 'right' }}>
                             <span style={{ fontSize: 15, fontWeight: 700, color: '#fca5a5', display: 'block' }}>
-                              {formatCurrency(bill.amount)}
+                              -{formatCurrency(bill.amount)}
                             </span>
                             {dueStatus.isDueSoon && (
                               <span style={{ fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase' }}>
@@ -577,9 +739,8 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                 )}
               </div>
 
-              {/* Quick Actions & Recent Extras */}
+              {/* Fast Action Buttons & Burn Rate */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {/* Fast Action Buttons */}
                 <div
                   style={{
                     display: 'grid',
@@ -733,9 +894,9 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
             {moneyState.directDebits.length === 0 ? (
               <EmptyState
                 icon={CreditCard}
-                title="No Direct Debits Added"
-                description="Keep track of Netflix, phone plans, car insurance, rent, and other repeating bills so they never surprise you."
-                actionLabel="Add First Direct Debit"
+                title="No bills yet."
+                description="Add your recurring expenses to see how much of your next pay is already committed."
+                actionLabel="Add Direct Debit"
                 onAction={() => setEditingDebit('new')}
               />
             ) : (
@@ -840,8 +1001,18 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                       </div>
 
                       {bill.linkedReminderId && (
-                        <div style={{ fontSize: 11, color: '#818cf8', background: 'rgba(99, 102, 241, 0.1)', padding: '4px 8px', borderRadius: 6 }}>
-                          Linked to MindMesh Task
+                        <div
+                          onClick={() => onOpenReminderModal?.(bill.linkedReminderId)}
+                          style={{
+                            fontSize: 11,
+                            color: '#818cf8',
+                            background: 'rgba(99, 102, 241, 0.1)',
+                            padding: '4px 8px',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Linked to MindMesh Task ↗
                         </div>
                       )}
                     </div>
@@ -855,57 +1026,99 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
         {/* ===================== INCOME & SHIFTS SUB-TAB ===================== */}
         {activeSubTab === 'income' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-            {/* Income Configuration Banner */}
-            <div
-              style={{
-                background: 'rgba(15, 23, 42, 0.7)',
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                borderRadius: 20,
-                padding: '22px 24px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-                gap: 16,
-              }}
-            >
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <Briefcase size={18} color="#10b981" />
-                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
-                    {moneyState.incomeConfig?.title || 'Primary Employment'}
-                  </h3>
-                  <span style={{ fontSize: 11, background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '2px 8px', borderRadius: 999, fontWeight: 600 }}>
-                    {moneyState.incomeConfig?.employmentType?.replace('_', ' ') || 'casual / hourly'}
-                  </span>
-                </div>
-                <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>
-                  Baseline: {formatCurrency(moneyState.incomeConfig?.averagePay || 1150)} per {moneyState.incomeConfig?.frequency || 'fortnight'}
-                  {moneyState.incomeConfig?.nextPayDate && ` • Next Pay: ${formatDateAU(moneyState.incomeConfig.nextPayDate)}`}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setIsIncomeConfigOpen(true)}
+            {!moneyState.incomeConfig ? (
+              <EmptyState
+                icon={Briefcase}
+                title="No pay configured."
+                description="Set up your income to calculate money remaining after bills."
+                actionLabel="Configure Income"
+                onAction={() => setIsIncomeConfigOpen(true)}
+              />
+            ) : (
+              /* Income Configuration Banner */
+              <div
                 style={{
+                  background: 'rgba(15, 23, 42, 0.7)',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: 20,
+                  padding: '22px 24px',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 6,
-                  padding: '8px 16px',
-                  borderRadius: 12,
-                  border: '1px solid rgba(255, 255, 255, 0.12)',
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  color: '#f8fafc',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: 'pointer',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: 16,
                 }}
               >
-                <Settings size={15} />
-                <span>Adjust Income Settings</span>
-              </button>
-            </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <Briefcase size={18} color="#10b981" />
+                    <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>
+                      {moneyState.incomeConfig.title}
+                    </h3>
+                    <span style={{ fontSize: 11, background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '2px 8px', borderRadius: 999, fontWeight: 600 }}>
+                      {moneyState.incomeConfig.employmentType.replace('_', ' ')}
+                    </span>
+                    {hasActiveOverride && (
+                      <span style={{ fontSize: 11, background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', padding: '2px 8px', borderRadius: 999, fontWeight: 600 }}>
+                        Cycle Override: {formatCurrency(payCycleSummary.expectedPayThisCycle)}
+                      </span>
+                    )}
+                  </div>
+                  <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>
+                    Average Pay: {formatCurrency(moneyState.incomeConfig.averagePay)} per {moneyState.incomeConfig.frequency}
+                    {moneyState.incomeConfig.nextPayDate && ` • Next Pay Date: ${formatDateAU(moneyState.incomeConfig.nextPayDate)} (${payCycleSummary.daysRemainingInCycle} days)`}
+                    {moneyState.incomeConfig.employerName && ` • Employer: ${moneyState.incomeConfig.employerName}`}
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOverrideInput(String(payCycleSummary.expectedPayThisCycle));
+                      setShowOverrideModal(true);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '8px 14px',
+                      borderRadius: 12,
+                      border: '1px solid rgba(255, 255, 255, 0.12)',
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      color: hasActiveOverride ? '#fbbf24' : '#f8fafc',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <RotateCcw size={14} />
+                    <span>{hasActiveOverride ? 'Adjust Override' : 'Override Cycle Pay'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsIncomeConfigOpen(true)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '8px 16px',
+                      borderRadius: 12,
+                      border: '1px solid rgba(255, 255, 255, 0.12)',
+                      background: 'rgba(255, 255, 255, 0.05)',
+                      color: '#f8fafc',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Settings size={15} />
+                    <span>Edit Income Settings</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Casual Shifts Section */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -913,7 +1126,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                 <div>
                   <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Casual Shift Log</h3>
                   <span style={{ fontSize: 12, color: '#94a3b8' }}>
-                    Calculate hours and gross earnings with penalty rate breakdown
+                    Calculate hours and estimated gross earnings with penalty rate breakdown
                   </span>
                 </div>
 
@@ -981,7 +1194,6 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         cursor: 'pointer',
-                        transition: 'transform 0.15s ease',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -1064,8 +1276,8 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
             {moneyState.extraIncomeList.length === 0 ? (
               <EmptyState
                 icon={Sparkles}
-                title="No Extra Income Recorded"
-                description="Sold something on Facebook Marketplace? Picked up a cash job? Track every bonus dollar here."
+                title="No extra income yet."
+                description="Sold something on Marketplace? Picked up a cash job? Track every bonus dollar here."
                 actionLabel="Record Income"
                 onAction={() => setEditingExtra('new')}
               />
@@ -1111,12 +1323,12 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                           {item.title}
                         </h4>
                         <div style={{ fontSize: 18, fontWeight: 800, color: '#34d399' }}>
-                          {formatCurrency(item.amount)}
+                          +{formatCurrency(item.amount)}
                         </div>
                       </div>
 
                       <div style={{ fontSize: 11, color: '#94a3b8', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 8 }}>
-                        {formatDateAU(item.date)} {item.notes && `• ${item.notes}`}
+                        {formatDateAU(item.date)} {item.includeInCurrentPayCycle ? '• In Pay Cycle' : ''} {item.notes && `• ${item.notes}`}
                       </div>
                     </div>
                   );
@@ -1160,27 +1372,46 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
               </button>
             </div>
 
-            {/* Tip Stats */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            {/* Tip Stats (Today, This Week, This Month, This Year, Average per shift, Highest tip day) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
               <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Total Tips Logged</span>
-                <span style={{ fontSize: 20, fontWeight: 800, color: '#fbbf24' }}>{formatCurrency(tipStats.totalTips)}</span>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Tips Today</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#fbbf24' }}>{formatCurrency(tipSummaries.todayTotal)}</span>
+              </div>
+              <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Tips This Week</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#38bdf8' }}>{formatCurrency(tipSummaries.weekTotal)}</span>
+              </div>
+              <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Tips This Month</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#34d399' }}>{formatCurrency(tipSummaries.monthTotal)}</span>
+              </div>
+              <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Tips This Year</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#a855f7' }}>{formatCurrency(tipSummaries.yearTotal)}</span>
               </div>
               <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
                 <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Average Per Shift</span>
-                <span style={{ fontSize: 20, fontWeight: 800, color: '#38bdf8' }}>{formatCurrency(tipStats.averagePerEntry)}</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#60a5fa' }}>{formatCurrency(tipSummaries.averagePerEntry)}</span>
               </div>
               <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Highest Single Tip</span>
-                <span style={{ fontSize: 20, fontWeight: 800, color: '#10b981' }}>{formatCurrency(tipStats.highestTip)}</span>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Highest Tip Day</span>
+                <span style={{ fontSize: 18, fontWeight: 800, color: '#10b981' }}>
+                  {tipSummaries.highestTipDay.date ? formatCurrency(tipSummaries.highestTipDay.amount) : '$0.00'}
+                </span>
+                {tipSummaries.highestTipDay.date && (
+                  <span style={{ fontSize: 10, color: '#94a3b8' }}>
+                    {formatDateAU(tipSummaries.highestTipDay.date)}
+                  </span>
+                )}
               </div>
             </div>
 
             {moneyState.tipEntries.length === 0 ? (
               <EmptyState
                 icon={Coins}
-                title="No Tips Logged"
-                description="Use the fast-log feature after your shift to keep a precise total of your cash and card tips."
+                title="No tips yet."
+                description="Add your first tip to start tracking totals."
                 actionLabel="Log First Tip"
                 onAction={() => setEditingTip('new')}
               />
@@ -1221,13 +1452,13 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                           {formatDateAU(tip.date)} • {tip.shiftType} shift
                         </span>
                         <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                          {tip.locationOrRole || 'General hospitality'} {tip.notes && `• ${tip.notes}`}
+                          {tip.venue || tip.locationOrRole || 'General venue'} {tip.categoryId ? `• ${tip.categoryId}` : ''} {tip.notes && `• ${tip.notes}`}
                         </span>
                       </div>
                     </div>
 
                     <div style={{ fontSize: 18, fontWeight: 800, color: '#fbbf24' }}>
-                      {formatCurrency(tip.amount)}
+                      +{formatCurrency(tip.amount)}
                     </div>
                   </div>
                 ))}
@@ -1236,13 +1467,13 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
           </div>
         )}
 
-        {/* ===================== CATEGORIES & SETTINGS SUB-TAB ===================== */}
+        {/* ===================== SETTINGS SUB-TAB ===================== */}
         {activeSubTab === 'categories' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             <div>
               <h2 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 4px 0' }}>Financial Categories & Rules</h2>
               <span style={{ fontSize: 12, color: '#94a3b8' }}>
-                Organize your bills and income streams with custom color tags
+                Organize your bills and extra income streams with custom color tags
               </span>
             </div>
 
@@ -1399,6 +1630,142 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
         )}
       </div>
 
+      {/* Pay Cycle Override Modal */}
+      {showOverrideModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 110,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px',
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(10px)',
+          }}
+          onClick={() => setShowOverrideModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              backgroundColor: '#0f172a',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              borderRadius: 20,
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h3 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Override Cycle Expected Pay</h3>
+              <button
+                type="button"
+                onClick={() => setShowOverrideModal(false)}
+                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: 12, color: '#94a3b8', margin: 0, lineHeight: 1.5 }}>
+              Override your expected income for the pay cycle ending {formatDateAU(nextPayKey)} without altering your normal baseline average pay ({formatCurrency(moneyState.incomeConfig?.averagePay || 0)}).
+            </p>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#cbd5e1', marginBottom: 6 }}>
+                Cycle Expected Pay ($ AUD)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder={String(moneyState.incomeConfig?.averagePay || 1150)}
+                value={overrideInput}
+                onChange={(e) => setOverrideInput(e.target.value)}
+                autoFocus
+                style={{
+                  width: '100%',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 10,
+                  padding: '10px 12px',
+                  color: '#10b981',
+                  fontSize: 16,
+                  fontWeight: 700,
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+              {hasActiveOverride ? (
+                <button
+                  type="button"
+                  onClick={() => handleSaveOverride(null)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: 'none',
+                    background: 'rgba(239, 68, 68, 0.15)',
+                    color: '#f87171',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reset to Normal Pay
+                </button>
+              ) : <div />}
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowOverrideModal(false)}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    background: 'transparent',
+                    color: '#94a3b8',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parsed = parseFloat(overrideInput);
+                    if (!isNaN(parsed) && parsed >= 0) {
+                      handleSaveOverride(parsed);
+                    }
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    borderRadius: 10,
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                    color: '#fff',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Apply Override
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modals */}
       {editingDebit !== null && (
         <DirectDebitModal
@@ -1437,6 +1804,8 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
           isOpen={true}
           onClose={() => setEditingExtra(null)}
           categories={moneyState.extraIncomeCategories}
+          reminders={reminders}
+          incomeConfig={moneyState.incomeConfig}
           extraIncome={editingExtra === 'new' ? null : editingExtra}
           onSave={handleSaveExtra}
           onDelete={handleDeleteExtra}
@@ -1448,6 +1817,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
           isOpen={true}
           onClose={() => setEditingTip(null)}
           tip={editingTip === 'new' ? null : editingTip}
+          shifts={moneyState.shifts}
           onSave={handleSaveTip}
           onDelete={handleDeleteTip}
         />

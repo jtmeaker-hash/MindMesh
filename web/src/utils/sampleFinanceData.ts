@@ -1,11 +1,6 @@
 import {
   DirectDebitCategory,
-  DirectDebit,
-  IncomeConfig,
   ExtraIncomeCategory,
-  ExtraIncome,
-  TipEntry,
-  Shift,
   MoneyState,
 } from '../types/finance';
 

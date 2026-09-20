@@ -305,7 +305,7 @@ export function calculateShiftDurationHours(startTime: string, endTime: string, 
   const [startH, startM] = startTime.split(':').map(Number);
   const [endH, endM] = endTime.split(':').map(Number);
 
-  let startTotalM = (startH || 0) * 60 + (startM || 0);
+  const startTotalM = (startH || 0) * 60 + (startM || 0);
   let endTotalM = (endH || 0) * 60 + (endM || 0);
 
   // If ending on or before start, assumes it passed midnight
@@ -467,18 +467,21 @@ export function getDirectDebitsOverview(directDebits: DirectDebit[]) {
       case 'annually':
         totalMonthlyCost = addDecimals(totalMonthlyCost, amt / 12);
         break;
-      case 'every_x_days':
+      case 'every_x_days': {
         const days = debit.recurrenceConfig?.customDays || debit.recurrenceConfig?.interval || 1;
         totalMonthlyCost = addDecimals(totalMonthlyCost, (amt * 365) / days / 12);
         break;
-      case 'every_x_weeks':
+      }
+      case 'every_x_weeks': {
         const weeks = debit.recurrenceConfig?.interval || 1;
         totalMonthlyCost = addDecimals(totalMonthlyCost, (amt * 52) / weeks / 12);
         break;
-      case 'every_x_months':
+      }
+      case 'every_x_months': {
         const months = debit.recurrenceConfig?.interval || 1;
         totalMonthlyCost = addDecimals(totalMonthlyCost, amt / months);
         break;
+      }
       default:
         totalMonthlyCost = addDecimals(totalMonthlyCost, amt);
     }
@@ -581,6 +584,10 @@ export function getCurrentPayCycleSummary(moneyState: import('../types/finance')
 
   return {
     ...summary,
+    cycleStartDate: prevPayDate,
+    cycleEndDate: nextPayDate,
+    daysRemainingInCycle: summary.daysRemaining,
+    daysUntilNextPay: summary.daysRemaining,
     expectedPayThisCycle,
     billsTotalThisCycle,
     extraIncomeTotalThisCycle,
@@ -591,5 +598,142 @@ export function getCurrentPayCycleSummary(moneyState: import('../types/finance')
     billsDueInCycle,
     estimatedRemainingSafe,
   };
+}
+
+export interface MoneyTimelineItem {
+  id: string;
+  date: string;
+  dayLabel: string;
+  title: string;
+  amount: number;
+  type: 'income' | 'expense';
+  categoryName?: string;
+  categoryColor?: string;
+  formattedAmount: string;
+  badge: string;
+  source: 'bill' | 'shift' | 'pay' | 'extra';
+  notes?: string;
+}
+
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+export function formatTimelineDayLabel(dateStr: string, referenceDateStr: string = toDateString(new Date())): string {
+  const diff = daysBetween(referenceDateStr, dateStr);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+
+  const d = parseLocalDate(dateStr);
+  const weekday = WEEKDAY_NAMES[d.getDay()];
+  if (diff > 1 && diff <= 6) {
+    return weekday;
+  }
+  return `${weekday}, ${formatDateAU(dateStr)}`;
+}
+
+export function getUpcomingMoneyTimeline(
+  moneyState: import('../types/finance').MoneyState,
+  referenceDateStr: string = toDateString(new Date()),
+  daysAhead = 14
+): MoneyTimelineItem[] {
+  const items: MoneyTimelineItem[] = [];
+  const refDate = parseLocalDate(referenceDateStr);
+  const endDate = new Date(refDate);
+  endDate.setDate(endDate.getDate() + daysAhead);
+  const endDateStr = toDateString(endDate);
+
+  const billCatMap = new Map<string, string>(moneyState.billCategories.map((c) => [c.id, c.name]));
+  const billColorMap = new Map<string, string>(moneyState.billCategories.map((c) => [c.id, c.color]));
+
+  // 1. Bills due in [referenceDateStr, endDateStr]
+  for (const bill of moneyState.directDebits) {
+    if (!bill.active) continue;
+    const occurrences = getBillOccurrencesInDateRange(bill, referenceDateStr, endDateStr);
+    for (const occ of occurrences) {
+      items.push({
+        id: `timeline-bill-${bill.id}-${occ.date}`,
+        date: occ.date,
+        dayLabel: formatTimelineDayLabel(occ.date, referenceDateStr),
+        title: bill.title,
+        amount: occ.amount,
+        type: 'expense',
+        categoryName: billCatMap.get(bill.categoryId) || 'Bill',
+        categoryColor: billColorMap.get(bill.categoryId) || '#ef4444',
+        formattedAmount: `-${formatCurrency(occ.amount)}`,
+        badge: 'Expense',
+        source: 'bill',
+        notes: bill.notes,
+      });
+    }
+  }
+
+  // 2. Upcoming Shifts in [referenceDateStr, endDateStr]
+  for (const shift of moneyState.shifts || []) {
+    if (shift.date >= referenceDateStr && shift.date <= endDateStr) {
+      const amt = shift.actualPay !== undefined && shift.actualPay !== null ? shift.actualPay : shift.estimatedPay;
+      items.push({
+        id: `timeline-shift-${shift.id}`,
+        date: shift.date,
+        dayLabel: formatTimelineDayLabel(shift.date, referenceDateStr),
+        title: `Estimated shift (${shift.paidHours}h @ ${formatCurrency(shift.hourlyRate)}/hr)`,
+        amount: amt,
+        type: 'income',
+        categoryName: 'Shift Pay',
+        categoryColor: '#3b82f6',
+        formattedAmount: `+${formatCurrency(amt)}`,
+        badge: 'Income',
+        source: 'shift',
+        notes: shift.notes,
+      });
+    }
+  }
+
+  // 3. Expected Pay if configured and within [referenceDateStr, endDateStr]
+  if (moneyState.incomeConfig) {
+    const nextPay = moneyState.incomeConfig.nextPayDate;
+    if (nextPay >= referenceDateStr && nextPay <= endDateStr) {
+      const override = moneyState.payCycleOverrides[nextPay];
+      const payAmt = override !== undefined ? override : moneyState.incomeConfig.averagePay;
+      items.push({
+        id: `timeline-pay-${nextPay}`,
+        date: nextPay,
+        dayLabel: formatTimelineDayLabel(nextPay, referenceDateStr),
+        title: `${moneyState.incomeConfig.title || 'Pay'}${moneyState.incomeConfig.employerName ? ` (${moneyState.incomeConfig.employerName})` : ''}`,
+        amount: payAmt,
+        type: 'income',
+        categoryName: 'Salary/Pay',
+        categoryColor: '#10b981',
+        formattedAmount: `+${formatCurrency(payAmt)}`,
+        badge: 'Income',
+        source: 'pay',
+      });
+    }
+  }
+
+  // 4. Extra Income scheduled in [referenceDateStr, endDateStr]
+  const extraCatMap = new Map<string, string>(moneyState.extraIncomeCategories.map((c) => [c.id, c.name]));
+  const extraColorMap = new Map<string, string>(moneyState.extraIncomeCategories.map((c) => [c.id, c.color]));
+  for (const extra of moneyState.extraIncomeList || []) {
+    if (extra.date >= referenceDateStr && extra.date <= endDateStr) {
+      items.push({
+        id: `timeline-extra-${extra.id}`,
+        date: extra.date,
+        dayLabel: formatTimelineDayLabel(extra.date, referenceDateStr),
+        title: extra.title,
+        amount: extra.amount,
+        type: 'income',
+        categoryName: extraCatMap.get(extra.categoryId) || 'Extra Income',
+        categoryColor: extraColorMap.get(extra.categoryId) || '#10b981',
+        formattedAmount: `+${formatCurrency(extra.amount)}`,
+        badge: 'Income',
+        source: 'extra',
+        notes: extra.notes,
+      });
+    }
+  }
+
+  // Sort chronologically by date
+  items.sort((a, b) => a.date.localeCompare(b.date));
+  return items;
 }
 

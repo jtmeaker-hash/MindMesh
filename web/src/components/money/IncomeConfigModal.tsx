@@ -1,11 +1,8 @@
 import React, { useState } from 'react';
 import {
   X,
-  DollarSign,
   Briefcase,
   Calendar,
-  Clock,
-  HelpCircle,
 } from 'lucide-react';
 import {
   IncomeConfig,
@@ -558,6 +555,28 @@ export const IncomeConfigModal: React.FC<IncomeConfigModalProps> = ({
 
                 <div>
                   <label style={{ display: 'block', fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
+                    Night Rate ($/hr)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={nightRate}
+                    onChange={(e) => setNightRate(e.target.value)}
+                    style={{
+                      width: '100%',
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 8,
+                      padding: '8px 10px',
+                      color: '#fff',
+                      fontSize: 13,
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
                     Overtime ($/hr)
                   </label>
                   <input
@@ -579,6 +598,29 @@ export const IncomeConfigModal: React.FC<IncomeConfigModalProps> = ({
                 </div>
               </div>
             )}
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+              Notes (Optional)
+            </label>
+            <input
+              type="text"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. Fortnightly payroll, paid alternate Thursdays"
+              style={{
+                width: '100%',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 10,
+                padding: '9px 12px',
+                color: '#fff',
+                fontSize: 13,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
           </div>
 
           <p style={{ fontSize: 11, color: '#64748b', margin: 0, lineHeight: 1.4 }}>

@@ -3,19 +3,21 @@ import {
   X,
   Trash2,
   Calendar,
-  DollarSign,
-  Briefcase,
   Coins,
+  Clock,
 } from 'lucide-react';
 import {
   TipEntry,
   TipShiftType,
+  Shift,
 } from '../../types/finance';
+import { formatDateAU } from '../../utils/finance';
 
 interface TipEntryModalProps {
   isOpen: boolean;
   onClose: () => void;
   tip?: TipEntry | null;
+  shifts?: Shift[];
   onSave: (tip: TipEntry) => void;
   onDelete?: (id: string) => void;
 }
@@ -32,13 +34,16 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
   isOpen,
   onClose,
   tip,
+  shifts = [],
   onSave,
   onDelete,
 }) => {
   const [date, setDate] = useState(tip?.date || new Date().toISOString().split('T')[0]);
   const [amount, setAmount] = useState(tip ? String(tip.amount) : '');
   const [shiftType, setShiftType] = useState<TipShiftType>(tip?.shiftType || 'evening');
-  const [locationOrRole, setLocationOrRole] = useState(tip?.locationOrRole || '');
+  const [shiftId, setShiftId] = useState(tip?.shiftId || '');
+  const [venue, setVenue] = useState(tip?.venue || tip?.locationOrRole || '');
+  const [categoryId, setCategoryId] = useState(tip?.categoryId || 'cash');
   const [notes, setNotes] = useState(tip?.notes || '');
   const [error, setError] = useState('');
 
@@ -69,7 +74,10 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
       date,
       amount: Math.round(parsedAmount * 100) / 100,
       shiftType,
-      locationOrRole: locationOrRole.trim() || undefined,
+      shiftId: shiftId.trim() || undefined,
+      venue: venue.trim() || undefined,
+      locationOrRole: venue.trim() || undefined,
+      categoryId: categoryId.trim() || undefined,
       notes: notes.trim() || undefined,
       createdAt: tip?.createdAt || new Date().toISOString(),
     };
@@ -136,7 +144,7 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
               <Coins size={18} />
             </div>
             <h2 style={{ fontSize: 17, fontWeight: 700, color: '#f8fafc', margin: 0 }}>
-              {tip ? 'Edit Tip Entry' : 'Quick Tip Log'}
+              {tip ? 'Edit Tip Entry' : 'Log Tip'}
             </h2>
           </div>
           <button
@@ -158,37 +166,42 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
           </button>
         </div>
 
-        {/* Quick Amount Pills */}
+        {/* Quick Amount Selector Bar */}
         <div
           style={{
-            padding: '12px 22px',
-            background: 'rgba(255, 255, 255, 0.02)',
+            padding: '14px 22px',
+            background: 'rgba(245, 158, 11, 0.08)',
             borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'space-between',
             gap: 8,
           }}
         >
-          <span style={{ fontSize: 12, color: '#94a3b8', marginRight: 4 }}>Quick Add:</span>
-          {[5, 10, 20, 50].map((val) => (
-            <button
-              key={val}
-              type="button"
-              onClick={() => handleQuickAddAmount(val)}
-              style={{
-                background: 'rgba(245, 158, 11, 0.15)',
-                border: '1px solid rgba(245, 158, 11, 0.3)',
-                color: '#fbbf24',
-                fontWeight: 600,
-                fontSize: 12,
-                padding: '4px 10px',
-                borderRadius: 8,
-                cursor: 'pointer',
-              }}
-            >
-              +${val}
-            </button>
-          ))}
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#fbbf24' }}>
+            Fast Add:
+          </span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {[5, 10, 20, 50].map((val) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => handleQuickAddAmount(val)}
+                style={{
+                  padding: '5px 10px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                  background: 'rgba(245, 158, 11, 0.15)',
+                  color: '#fef08a',
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                +${val}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Form Body */}
@@ -228,6 +241,7 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0.01"
+                required
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 placeholder="0.00"
@@ -249,10 +263,11 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
                 <Calendar size={13} />
-                <span>Date</span>
+                <span>Date *</span>
               </label>
               <input
                 type="date"
+                required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 style={{
@@ -269,7 +284,38 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
             </div>
           </div>
 
-          {/* Shift Type & Role */}
+          {/* Link to Shift if shifts exist */}
+          {shifts.length > 0 && (
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+                <Clock size={13} />
+                <span>Link to Shift (Optional)</span>
+              </label>
+              <select
+                value={shiftId}
+                onChange={(e) => setShiftId(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: '#1e293b',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 10,
+                  padding: '9px 12px',
+                  color: '#fff',
+                  fontSize: 13,
+                  boxSizing: 'border-box',
+                }}
+              >
+                <option value="">None (Unlinked)</option>
+                {shifts.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {formatDateAU(s.date)}: {s.startTime}–{s.endTime} ({s.rateType})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Shift Type & Venue */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
@@ -303,9 +349,9 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
               </label>
               <input
                 type="text"
-                value={locationOrRole}
-                onChange={(e) => setLocationOrRole(e.target.value)}
-                placeholder="e.g. Bar, Bistro, Floor"
+                value={venue}
+                onChange={(e) => setVenue(e.target.value)}
+                placeholder="e.g. Bar, Bistro, Crown"
                 style={{
                   width: '100%',
                   background: 'rgba(255, 255, 255, 0.05)',
@@ -318,6 +364,33 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
                 }}
               />
             </div>
+          </div>
+
+          {/* Category */}
+          <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+              Tip Category (Optional)
+            </label>
+            <select
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+              style={{
+                width: '100%',
+                background: '#1e293b',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 10,
+                padding: '9px 12px',
+                color: '#fff',
+                fontSize: 13,
+                boxSizing: 'border-box',
+              }}
+            >
+              <option value="cash">Cash Tip</option>
+              <option value="card">Card / EFTPOS Tip</option>
+              <option value="pooled">Pooled / Shared Tip</option>
+              <option value="direct">Direct Customer Tip</option>
+              <option value="other">Other</option>
+            </select>
           </div>
 
           {/* Notes */}
@@ -358,7 +431,7 @@ export const TipEntryModal: React.FC<TipEntryModalProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (confirm('Delete tip entry?')) {
+                  if (confirm('Delete this tip entry?')) {
                     onDelete(tip.id);
                     onClose();
                   }

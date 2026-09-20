@@ -1,5 +1,3 @@
-import { Priority, RecurrenceRule, Subtask } from './index';
-
 export * from './index';
 
 // ==================== MONEY & FINANCE MODELS ====================

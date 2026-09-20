@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import {
   X,
-  Plus,
   Trash2,
   Calendar,
   Clock,
-  Briefcase,
-  DollarSign,
   Calculator,
 } from 'lucide-react';
 import {
@@ -15,7 +12,6 @@ import {
   IncomeConfig,
 } from '../../types/finance';
 import {
-  calculateShiftDurationHours,
   calculateShiftEstimate,
   resolveHourlyRate,
   formatCurrency,

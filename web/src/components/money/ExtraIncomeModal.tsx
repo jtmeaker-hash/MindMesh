@@ -3,20 +3,26 @@ import {
   X,
   Trash2,
   Calendar,
-  DollarSign,
   Tag,
   FileText,
   Sparkles,
+  Link as LinkIcon,
+  Calculator,
 } from 'lucide-react';
 import {
   ExtraIncome,
   ExtraIncomeCategory,
+  IncomeConfig,
 } from '../../types/finance';
+import { Reminder } from '../../types';
+import { formatCurrency, calculateShiftDurationHours } from '../../utils/finance';
 
 interface ExtraIncomeModalProps {
   isOpen: boolean;
   onClose: () => void;
   categories: ExtraIncomeCategory[];
+  reminders?: Reminder[];
+  incomeConfig?: IncomeConfig | null;
   extraIncome?: ExtraIncome | null;
   onSave: (entry: ExtraIncome) => void;
   onDelete?: (id: string) => void;
@@ -26,6 +32,8 @@ export const ExtraIncomeModal: React.FC<ExtraIncomeModalProps> = ({
   isOpen,
   onClose,
   categories,
+  reminders = [],
+  incomeConfig,
   extraIncome,
   onSave,
   onDelete,
@@ -39,10 +47,34 @@ export const ExtraIncomeModal: React.FC<ExtraIncomeModalProps> = ({
     extraIncome?.date || new Date().toISOString().split('T')[0]
   );
   const [received, setReceived] = useState(extraIncome ? extraIncome.received : true);
+  const [includeInCurrentPayCycle, setIncludeInCurrentPayCycle] = useState(
+    extraIncome?.includeInCurrentPayCycle ?? true
+  );
+  const [linkedReminderId, setLinkedReminderId] = useState(
+    extraIncome?.linkedReminderId || ''
+  );
   const [notes, setNotes] = useState(extraIncome?.notes || '');
+  const [showShiftCalcHelper, setShowShiftCalcHelper] = useState(false);
+  const [shiftHours, setShiftHours] = useState('6');
+  const [shiftRate, setShiftRate] = useState(
+    incomeConfig?.hourlyRates?.baseRate ? String(incomeConfig.hourlyRates.baseRate) : '32'
+  );
   const [error, setError] = useState('');
 
   if (!isOpen) return null;
+
+  const handleApplyShiftCalc = () => {
+    const hours = parseFloat(shiftHours) || 0;
+    const rate = parseFloat(shiftRate) || 0;
+    if (hours > 0 && rate > 0) {
+      const computed = Math.round(hours * rate * 100) / 100;
+      setAmount(String(computed));
+      setShowShiftCalcHelper(false);
+      if (!title) {
+        setTitle(`Extra shift (${hours}h @ $${rate}/hr)`);
+      }
+    }
+  };
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,6 +104,8 @@ export const ExtraIncomeModal: React.FC<ExtraIncomeModalProps> = ({
       categoryId,
       date,
       received,
+      includeInCurrentPayCycle,
+      linkedReminderId: linkedReminderId.trim() || undefined,
       notes: notes.trim() || undefined,
       createdAt: extraIncome?.createdAt || new Date().toISOString(),
     };
@@ -187,62 +221,160 @@ export const ExtraIncomeModal: React.FC<ExtraIncomeModalProps> = ({
             </div>
           )}
 
-          {/* Title & Amount */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 12 }}>
-            <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
-                Source / Description *
-              </label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. Sold couch, freelance logo, refund"
-                style={{
-                  width: '100%',
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderRadius: 10,
-                  padding: '9px 12px',
-                  color: '#fff',
-                  fontSize: 14,
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
+          {/* Title */}
+          <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+              Title / Description *
+            </label>
+            <input
+              type="text"
+              required
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. Lawn mowing, Sold old iPhone, Freelance design"
+              style={{
+                width: '100%',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 10,
+                padding: '10px 12px',
+                color: '#fff',
+                fontSize: 14,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+          {/* Amount & Shift Calculator trigger */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8' }}>
                 Amount ($ AUD) *
               </label>
-              <input
-                type="number"
-                step="0.01"
-                min="0.01"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                placeholder="0.00"
+              <button
+                type="button"
+                onClick={() => setShowShiftCalcHelper(!showShiftCalcHelper)}
                 style={{
-                  width: '100%',
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderRadius: 10,
-                  padding: '9px 12px',
-                  color: '#34d399',
-                  fontWeight: 700,
-                  fontSize: 14,
-                  boxSizing: 'border-box',
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#38bdf8',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
                 }}
-              />
+              >
+                <Calculator size={13} />
+                <span>{showShiftCalcHelper ? 'Hide Calculator' : 'Calculate from shift'}</span>
+              </button>
             </div>
+            <input
+              type="number"
+              step="0.01"
+              required
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              placeholder="0.00"
+              style={{
+                width: '100%',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 10,
+                padding: '10px 12px',
+                color: '#34d399',
+                fontSize: 16,
+                fontWeight: 700,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+
+            {/* Inline Shift Calc helper */}
+            {showShiftCalcHelper && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: 12,
+                  borderRadius: 12,
+                  background: 'rgba(59, 130, 246, 0.1)',
+                  border: '1px solid rgba(59, 130, 246, 0.25)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#93c5fd' }}>
+                  Shift Earnings Estimator
+                </span>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div>
+                    <label style={{ fontSize: 10, color: '#94a3b8', display: 'block', marginBottom: 2 }}>Hours</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={shiftHours}
+                      onChange={(e) => setShiftHours(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '6px 8px',
+                        borderRadius: 6,
+                        background: '#1e293b',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        color: '#fff',
+                        fontSize: 12,
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 10, color: '#94a3b8', display: 'block', marginBottom: 2 }}>Rate ($/hr)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={shiftRate}
+                      onChange={(e) => setShiftRate(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '6px 8px',
+                        borderRadius: 6,
+                        background: '#1e293b',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        color: '#fff',
+                        fontSize: 12,
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleApplyShiftCalc}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    background: '#2563eb',
+                    border: 'none',
+                    color: '#fff',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Set Amount ({formatCurrency((parseFloat(shiftHours) || 0) * (parseFloat(shiftRate) || 0))})
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Category & Status */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
                 <Tag size={13} />
-                <span>Category</span>
+                <span>Category *</span>
               </label>
               <select
                 value={categoryId}
@@ -308,10 +440,66 @@ export const ExtraIncomeModal: React.FC<ExtraIncomeModalProps> = ({
                 padding: '9px 12px',
                 color: '#fff',
                 fontSize: 13,
+                outline: 'none',
                 boxSizing: 'border-box',
               }}
             />
           </div>
+
+          {/* Include in Pay Cycle Checkbox */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 12px',
+              borderRadius: 10,
+              background: 'rgba(255, 255, 255, 0.03)',
+              border: '1px solid rgba(255, 255, 255, 0.06)',
+            }}
+          >
+            <input
+              type="checkbox"
+              id="include-cycle"
+              checked={includeInCurrentPayCycle}
+              onChange={(e) => setIncludeInCurrentPayCycle(e.target.checked)}
+              style={{ width: 16, height: 16, accentColor: '#10b981', cursor: 'pointer' }}
+            />
+            <label htmlFor="include-cycle" style={{ fontSize: 13, color: '#cbd5e1', cursor: 'pointer' }}>
+              Include in current pay cycle safe spend calculations
+            </label>
+          </div>
+
+          {/* Optional Linked Reminder */}
+          {reminders.length > 0 && (
+            <div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+                <LinkIcon size={13} />
+                <span>Link to MindMesh Reminder (Optional)</span>
+              </label>
+              <select
+                value={linkedReminderId}
+                onChange={(e) => setLinkedReminderId(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: '#1e293b',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 10,
+                  padding: '9px 12px',
+                  color: '#fff',
+                  fontSize: 13,
+                  boxSizing: 'border-box',
+                }}
+              >
+                <option value="">None (Unlinked)</option>
+                {reminders.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Notes */}
           <div>

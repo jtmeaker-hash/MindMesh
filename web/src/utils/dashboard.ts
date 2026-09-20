@@ -1,6 +1,6 @@
 import { Reminder, Category, DashboardTimeFilter } from '../types';
 import { MoneyState } from '../types/finance';
-import { parseLocalDate, toDateString, addDecimals } from './finance';
+import { parseLocalDate, toDateString, addDecimals, calculatePayCycleSummary } from './finance';
 
 export interface CategoryCompletionStat {
   categoryId: string;
@@ -15,14 +15,19 @@ export interface DashboardMetrics {
   completionRate: number; // 0 to 100
   totalActive: number;
   totalCompleted: number;
+  totalTasks: number;
+  completedTasks: number;
+  activeTasks: number;
   activeCategoriesCount: number;
   dueTodayCount: number;
   dueThisWeekCount: number;
   recurringCount: number;
   completedRecurringCount: number;
   overdueCount: number;
+  overdueTasks: number;
   oldestOverdueDays: number;
   oldestOverdueReminder: Reminder | null;
+  overdueRemindersList: Reminder[];
   overdueCategoryNames: string[];
   tasksCompletedToday: number;
   tasksCompletedThisWeek: number;
@@ -243,7 +248,14 @@ export function computeDashboardMetrics(
   }
 
   // Financial Metrics
-  const hasFinancialConfig = Boolean(moneyState?.incomeConfig || (moneyState?.directDebits && moneyState.directDebits.length > 0));
+  const hasFinancialConfig = Boolean(
+    moneyState && (
+      Boolean(moneyState.incomeConfig) ||
+      (Array.isArray(moneyState.directDebits) && moneyState.directDebits.length > 0) ||
+      (Array.isArray(moneyState.extraIncomeList) && moneyState.extraIncomeList.length > 0) ||
+      (Array.isArray(moneyState.tipEntries) && moneyState.tipEntries.length > 0)
+    )
+  );
   let upcomingBillsCount = 0;
   let billsBeforePayCount = 0;
   let billsBeforePayTotal = 0;
@@ -252,7 +264,7 @@ export function computeDashboardMetrics(
   let extraIncomeThisMonth = 0;
   let tipsThisMonth = 0;
 
-  if (moneyState) {
+  if (moneyState && hasFinancialConfig) {
     const currentMonthPrefix = referenceDateStr.substring(0, 7);
 
     // Active bills
@@ -261,6 +273,23 @@ export function computeDashboardMetrics(
     // Monthly totals
     if (moneyState.incomeConfig) {
       incomeThisMonth = moneyState.incomeConfig.averagePay;
+      const cycleOverride = moneyState.payCycleOverrides?.[moneyState.incomeConfig.nextPayDate];
+      const payCycleSummary = calculatePayCycleSummary(
+        moneyState.incomeConfig,
+        moneyState.directDebits,
+        moneyState.extraIncomeList,
+        cycleOverride,
+        referenceDateStr
+      );
+      billsBeforePayCount = payCycleSummary.billsDue.length;
+      billsBeforePayTotal = payCycleSummary.billsTotal;
+      remainingAfterBills = payCycleSummary.remainingAfterBills;
+    } else {
+      billsBeforePayCount = moneyState.directDebits.filter((b) => b.active).length;
+      billsBeforePayTotal = moneyState.directDebits
+        .filter((b) => b.active)
+        .reduce((sum, b) => addDecimals(sum, b.amount), 0);
+      remainingAfterBills = -billsBeforePayTotal;
     }
 
     extraIncomeThisMonth = moneyState.extraIncomeList
@@ -276,14 +305,19 @@ export function computeDashboardMetrics(
     completionRate,
     totalActive,
     totalCompleted,
+    totalTasks: totalScoped,
+    completedTasks: totalCompleted,
+    activeTasks: totalActive,
     activeCategoriesCount,
     dueTodayCount,
     dueThisWeekCount,
     recurringCount,
     completedRecurringCount,
     overdueCount,
+    overdueTasks: overdueCount,
     oldestOverdueDays,
     oldestOverdueReminder,
+    overdueRemindersList: overdueList,
     overdueCategoryNames,
     tasksCompletedToday,
     tasksCompletedThisWeek,
