@@ -15,7 +15,7 @@ import {
   IncomeConfig,
 } from '../../types/finance';
 import { Reminder } from '../../types';
-import { formatCurrency, calculateShiftDurationHours } from '../../utils/finance';
+import { formatCurrency } from '../../utils/finance';
 
 interface ExtraIncomeModalProps {
   isOpen: boolean;

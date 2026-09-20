@@ -530,6 +530,7 @@ function MindMeshFlow() {
               }
             }}
             activeRemindersCount={activeCount}
+            upcomingBillsCount={moneyState.directDebits.filter((b) => b.active).length}
           />
         </div>
 
@@ -934,6 +935,13 @@ function MindMeshFlow() {
             categories={categories}
             onUpdateReminders={setReminders}
             onUpdateCategories={setCategories}
+            onOpenReminderModal={(remId) => {
+              const r = reminders.find((rem) => rem.id === remId);
+              if (r) {
+                setActiveReminder(r);
+                setReminderModalOpen(true);
+              }
+            }}
           />
         </div>
       )}
@@ -969,6 +977,8 @@ function MindMeshFlow() {
         reminder={activeReminder}
         categories={categories}
         defaultCategoryId={defaultCategoryIdForNewReminder}
+        directDebits={moneyState.directDebits}
+        extraIncomes={moneyState.extraIncomeList}
         onSave={handleSaveReminder}
         onDelete={handleDeleteReminder}
         onToggleComplete={handleReminderCompleteToggle}
