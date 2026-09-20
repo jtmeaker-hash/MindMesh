@@ -25,7 +25,7 @@ import {
   X,
 } from 'lucide-react';
 
-import { Category, Reminder, ViewMode, MeshNodeData, NodePositionMap, AppNavTab, MoneyState } from './types';
+import { Category, Reminder, ViewMode, MeshNodeData, NodePositionMap, AppNavTab, MoneyState, Contact } from './types';
 import {
   loadCategories,
   saveCategories,
@@ -38,6 +38,13 @@ import {
   clearAllData,
   loadMoneyState,
   saveMoneyState,
+  loadContacts,
+  saveContacts,
+  loadContactCategories,
+  saveContactCategories,
+  loadContactRelationships,
+  saveContactRelationships,
+  loadAllData,
 } from './utils/storage';
 import { generateActiveMesh, generateCompletedOverviewMesh, generateCompletedCategoryMesh } from './utils/layout';
 import { handleReminderCompletion } from './services/recurrence';
@@ -51,10 +58,12 @@ import { ReminderModal } from './components/modals/ReminderModal';
 import { CategoryModal } from './components/modals/CategoryModal';
 import { CategoryActionsSheet } from './components/modals/CategoryActionsSheet';
 import { QuickAddModal } from './components/modals/QuickAddModal';
+import { SettingsBackupModal } from './components/modals/SettingsBackupModal';
 
 import { AppNavigation } from './components/navigation/AppNavigation';
 import { MoneyModule } from './components/money/MoneyModule';
 import { DashboardModule } from './components/dashboard/DashboardModule';
+import { ContactsModule } from './components/contacts/ContactsModule';
 
 const nodeTypes = {
   rootNode: RootNode,
@@ -69,6 +78,9 @@ function MindMeshFlow() {
   const [reminders, setReminders] = useState<Reminder[]>(() => loadReminders());
   const [nodePositions, setNodePositions] = useState<NodePositionMap>(() => loadNodePositions());
   const [moneyState, setMoneyState] = useState<MoneyState>(() => loadMoneyState());
+  const [contacts, setContacts] = useState<Contact[]>(() => loadContacts());
+  const [contactCategories, setContactCategories] = useState<string[]>(() => loadContactCategories());
+  const [contactRelationships, setContactRelationships] = useState<string[]>(() => loadContactRelationships());
 
   // Navigation state
   const [mainNavTab, setMainNavTab] = useState<AppNavTab>('reminders');
@@ -87,6 +99,7 @@ function MindMeshFlow() {
   const [categoryActionsCategory, setCategoryActionsCategory] = useState<Category | null>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
 
   // React Flow graph state
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<MeshNodeData>>([]);
@@ -116,6 +129,18 @@ function MindMeshFlow() {
   useEffect(() => {
     saveMoneyState(moneyState);
   }, [moneyState]);
+
+  useEffect(() => {
+    saveContacts(contacts);
+  }, [contacts]);
+
+  useEffect(() => {
+    saveContactCategories(contactCategories);
+  }, [contactCategories]);
+
+  useEffect(() => {
+    saveContactRelationships(contactRelationships);
+  }, [contactRelationships]);
 
   // Handle node interaction
   const handleNodeClick = useCallback(
@@ -266,7 +291,8 @@ function MindMeshFlow() {
           onSubtaskToggle: handleSubtaskToggle,
           onReminderCompleteToggle: handleReminderCompleteToggle,
         },
-        nodePositions
+        nodePositions,
+        contacts
       );
     } else {
       // Completed mode
@@ -277,7 +303,8 @@ function MindMeshFlow() {
           {
             onNodeClick: handleNodeClick,
           },
-          nodePositions
+          nodePositions,
+          contacts
         );
       } else {
         graph = generateCompletedOverviewMesh(
@@ -320,6 +347,7 @@ function MindMeshFlow() {
     viewMode,
     focusedCategoryId,
     selectedCompletedCategory,
+    contacts,
     handleNodeClick,
     handleSubtaskToggle,
     handleReminderCompleteToggle,
@@ -428,6 +456,22 @@ function MindMeshFlow() {
   };
 
 
+  // Reload full data after restore or complete reset
+  const handleReloadAllPersistedState = useCallback(() => {
+    const full = loadAllData();
+    setCategories(full.categories || []);
+    setReminders(full.reminders || []);
+    setNodePositions(full.nodePositions || {});
+    setMoneyState(full.money || loadMoneyState());
+    setContacts(full.contacts || []);
+    setContactCategories(full.contactCategories || loadContactCategories());
+    setContactRelationships(full.contactRelationships || loadContactRelationships());
+    setFocusedCategoryId(null);
+    setSelectedCompletedCategory(null);
+    setMenuOpen(false);
+    setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 80);
+  }, [fitView]);
+
   const focusedCategory = useMemo(() => {
     return categories.find((c) => c.id === focusedCategoryId) || null;
   }, [categories, focusedCategoryId]);
@@ -531,6 +575,7 @@ function MindMeshFlow() {
             }}
             activeRemindersCount={activeCount}
             upcomingBillsCount={moneyState.directDebits.filter((b) => b.active).length}
+            contactsCount={contacts.length}
           />
         </div>
 
@@ -648,8 +693,31 @@ function MindMeshFlow() {
                   <span>Auto-Arrange Mesh</span>
                 </button>
                 <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
-                  DATA ACTIONS
+                  DATA & BACKUP
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setBackupModalOpen(true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    color: '#a5b4fc',
+                    fontSize: 13,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  <span>Backup & Restore Data</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleResetSample}
@@ -925,6 +993,45 @@ function MindMeshFlow() {
         </>
       )}
 
+      {/* CONTACTS SECTION */}
+      {mainNavTab === 'contacts' && (
+        <div style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+          <ContactsModule
+            contacts={contacts}
+            onUpdateContacts={(updater) => {
+              setContacts((prev) => {
+                const nextContacts = typeof updater === 'function' ? updater(prev) : updater;
+                // Gracefully remove broken contact references from reminders if a contact was deleted
+                const nextIds = new Set(nextContacts.map((c) => c.id));
+                setReminders((prevReminders) =>
+                  prevReminders.map((r) => {
+                    if (r.linkedContactId && !nextIds.has(r.linkedContactId)) {
+                      const copy = { ...r };
+                      delete copy.linkedContactId;
+                      return copy;
+                    }
+                    return r;
+                  })
+                );
+                return nextContacts;
+              });
+            }}
+            contactCategories={contactCategories}
+            onUpdateContactCategories={setContactCategories}
+            contactRelationships={contactRelationships}
+            onUpdateContactRelationships={setContactRelationships}
+            reminders={reminders}
+            onOpenReminderModal={(remId) => {
+              const r = reminders.find((rem) => rem.id === remId);
+              if (r) {
+                setActiveReminder(r);
+                setReminderModalOpen(true);
+              }
+            }}
+          />
+        </div>
+      )}
+
       {/* MONEY SECTION */}
       {mainNavTab === 'money' && (
         <div style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
@@ -979,6 +1086,7 @@ function MindMeshFlow() {
         defaultCategoryId={defaultCategoryIdForNewReminder}
         directDebits={moneyState.directDebits}
         extraIncomes={moneyState.extraIncomeList}
+        contacts={contacts}
         onSave={handleSaveReminder}
         onDelete={handleDeleteReminder}
         onToggleComplete={handleReminderCompleteToggle}
@@ -1025,6 +1133,13 @@ function MindMeshFlow() {
           setActiveCategory(null);
           setCategoryModalOpen(true);
         }}
+      />
+
+      <SettingsBackupModal
+        isOpen={backupModalOpen}
+        onClose={() => setBackupModalOpen(false)}
+        onRestoreComplete={handleReloadAllPersistedState}
+        onResetComplete={handleReloadAllPersistedState}
       />
     </div>
   );

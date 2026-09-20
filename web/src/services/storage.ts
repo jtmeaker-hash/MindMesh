@@ -1,16 +1,18 @@
 import { Category, Reminder, NodePositionMap, NodePosition, MindMeshStorageData } from '../types';
 import { MoneyState } from '../types/finance';
+import { Contact } from '../types/contact';
 import { INITIAL_CATEGORIES, INITIAL_REMINDERS } from '../utils/sampleData';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
+import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONSHIPS } from '../utils/sampleContactData';
 import { logger } from './logger';
 
-export const CURRENT_STORAGE_VERSION = 3;
+export const CURRENT_STORAGE_VERSION = 4;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
 const NODE_POSITIONS_KEY = 'mindmesh_positions_v1';
 
-function getDefaultState(): MindMeshStorageData {
+export function getDefaultState(): MindMeshStorageData {
   return {
     version: CURRENT_STORAGE_VERSION,
     categories: INITIAL_CATEGORIES,
@@ -18,6 +20,14 @@ function getDefaultState(): MindMeshStorageData {
     nodePositions: {},
     lastUpdated: new Date().toISOString(),
     money: getDefaultMoneyState(),
+    contacts: INITIAL_CONTACTS,
+    contactCategories: INITIAL_CONTACT_CATEGORIES,
+    contactRelationships: INITIAL_CONTACT_RELATIONSHIPS,
+    preferences: {
+      theme: 'dark',
+      defaultReminderPriority: 'medium',
+      enableSound: false,
+    },
   };
 }
 
@@ -34,7 +44,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       return null;
     }
 
-    logger.info('Storage', 'Migrating legacy v1 storage to v3 schema');
+    logger.info('Storage', 'Migrating legacy v1 storage to v4 schema');
 
     let categories: Category[] = INITIAL_CATEGORIES;
     let reminders: Reminder[] = INITIAL_REMINDERS;
@@ -68,6 +78,12 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       nodePositions,
       lastUpdated: new Date().toISOString(),
       money: getDefaultMoneyState(),
+      contacts: INITIAL_CONTACTS,
+      contactCategories: INITIAL_CONTACT_CATEGORIES,
+      contactRelationships: INITIAL_CONTACT_RELATIONSHIPS,
+      preferences: {
+        theme: 'dark',
+      },
     };
 
     saveAllData(migrated);
@@ -133,10 +149,27 @@ export function loadAllData(): MindMeshStorageData {
         }
       : defaultMoney;
 
+    const contacts: Contact[] = Array.isArray(parsed.contacts)
+      ? parsed.contacts
+      : INITIAL_CONTACTS;
+
+    const contactCategories: string[] = Array.isArray(parsed.contactCategories) && parsed.contactCategories.length > 0
+      ? parsed.contactCategories
+      : INITIAL_CONTACT_CATEGORIES;
+
+    const contactRelationships: string[] = Array.isArray(parsed.contactRelationships) && parsed.contactRelationships.length > 0
+      ? parsed.contactRelationships
+      : INITIAL_CONTACT_RELATIONSHIPS;
+
+    const preferences: Record<string, unknown> = parsed.preferences && typeof parsed.preferences === 'object'
+      ? parsed.preferences
+      : { theme: 'dark' };
+
     logger.debug('Storage', 'State hydrated successfully', {
       categoryCount: categories.length,
       reminderCount: reminders.length,
       positionCount: Object.keys(nodePositions).length,
+      contactCount: contacts.length,
     });
 
     return {
@@ -146,6 +179,10 @@ export function loadAllData(): MindMeshStorageData {
       nodePositions,
       lastUpdated: parsed.lastUpdated || new Date().toISOString(),
       money,
+      contacts,
+      contactCategories,
+      contactRelationships,
+      preferences,
     };
   } catch (e) {
     logger.error('Storage', 'Error reading storage, restoring safe default state', e);
@@ -167,6 +204,52 @@ export function saveAllData(data: MindMeshStorageData): void {
   } catch (e) {
     logger.error('Storage', 'Failed to save MindMesh storage data', e);
   }
+}
+
+/**
+ * Contact-specific helper methods
+ */
+export function loadContacts(): Contact[] {
+  const data = loadAllData();
+  return data.contacts || INITIAL_CONTACTS;
+}
+
+export function saveContacts(contacts: Contact[]): void {
+  const current = loadAllData();
+  saveAllData({ ...current, contacts });
+}
+
+export function loadContactCategories(): string[] {
+  const data = loadAllData();
+  return data.contactCategories || INITIAL_CONTACT_CATEGORIES;
+}
+
+export function saveContactCategories(contactCategories: string[]): void {
+  const current = loadAllData();
+  saveAllData({ ...current, contactCategories });
+}
+
+export function loadContactRelationships(): string[] {
+  const data = loadAllData();
+  return data.contactRelationships || INITIAL_CONTACT_RELATIONSHIPS;
+}
+
+export function saveContactRelationships(contactRelationships: string[]): void {
+  const current = loadAllData();
+  saveAllData({ ...current, contactRelationships });
+}
+
+/**
+ * Preferences helper methods
+ */
+export function loadPreferences(): Record<string, unknown> {
+  const data = loadAllData();
+  return data.preferences || { theme: 'dark' };
+}
+
+export function savePreferences(preferences: Record<string, unknown>): void {
+  const current = loadAllData();
+  saveAllData({ ...current, preferences });
 }
 
 /**
@@ -254,13 +337,22 @@ export function resetToSample(): MindMeshStorageData {
 }
 
 /**
+ * Completely resets MindMesh (deletes all user data and resets to bare default state)
+ */
+export function resetMindMeshEntirely(): MindMeshStorageData {
+  const freshState = getDefaultState();
+  saveAllData(freshState);
+  logger.info('Storage', 'MindMesh reset entirely to clean default state');
+  return freshState;
+}
+
+/**
  * Clears all reminders and manual positions, keeping categories
  */
 export function clearAllData(): MindMeshStorageData {
   const current = loadAllData();
   const resetState: MindMeshStorageData = {
-    version: CURRENT_STORAGE_VERSION,
-    categories: current.categories,
+    ...current,
     reminders: [],
     nodePositions: {},
     lastUpdated: new Date().toISOString(),
@@ -293,6 +385,11 @@ export function importStorageJson(json: string): boolean {
       reminders: parsed.reminders,
       nodePositions: parsed.nodePositions && typeof parsed.nodePositions === 'object' ? parsed.nodePositions : {},
       lastUpdated: new Date().toISOString(),
+      money: parsed.money || getDefaultMoneyState(),
+      contacts: Array.isArray(parsed.contacts) ? parsed.contacts : INITIAL_CONTACTS,
+      contactCategories: Array.isArray(parsed.contactCategories) ? parsed.contactCategories : INITIAL_CONTACT_CATEGORIES,
+      contactRelationships: Array.isArray(parsed.contactRelationships) ? parsed.contactRelationships : INITIAL_CONTACT_RELATIONSHIPS,
+      preferences: parsed.preferences || {},
     };
     saveAllData(state);
     return true;

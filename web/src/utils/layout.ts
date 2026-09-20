@@ -1,5 +1,6 @@
 import { Node, Edge } from '@xyflow/react';
 import { Category, Reminder, MeshNodeData, NodePositionMap } from '../types';
+import { Contact } from '../types/contact';
 
 export interface GraphElements {
   nodes: Node<MeshNodeData>[];
@@ -15,7 +16,8 @@ export function generateActiveMesh(
     onSubtaskToggle?: (subtaskId: string, reminderId: string) => void;
     onReminderCompleteToggle?: (reminderId: string) => void;
   },
-  manualPositions?: NodePositionMap
+  manualPositions?: NodePositionMap,
+  contacts?: Contact[]
 ): GraphElements {
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
@@ -119,6 +121,7 @@ export function generateActiveMesh(
         const effectiveRemAngle = Math.atan2(remY - catY, remX - catX);
 
         const completedSubtasks = reminder.subtasks.filter((s) => s.completed).length;
+        const linkedContact = contacts?.find((c) => c.id === reminder.linkedContactId);
 
         // Reminder Node
         const reminderNode: Node<MeshNodeData> = {
@@ -140,6 +143,8 @@ export function generateActiveMesh(
             subtaskCount: reminder.subtasks.length,
             completedSubtaskCount: completedSubtasks,
             isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId),
+            linkedContactId: reminder.linkedContactId,
+            linkedContactName: linkedContact ? (linkedContact.displayName || linkedContact.fullName) : undefined,
             manuallyPositioned: Boolean(manualRem?.manuallyPositioned),
             onNodeClick: callbacks?.onNodeClick,
             onReminderCompleteToggle: callbacks?.onReminderCompleteToggle,
@@ -311,7 +316,8 @@ export function generateCompletedCategoryMesh(
   callbacks?: {
     onNodeClick?: (nodeId: string, type: string) => void;
   },
-  manualPositions?: NodePositionMap
+  manualPositions?: NodePositionMap,
+  contacts?: Contact[]
 ): GraphElements {
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
@@ -359,6 +365,7 @@ export function generateCompletedCategoryMesh(
     const remX = manualRem?.manuallyPositioned ? manualRem.x : autoRemX;
     const remY = manualRem?.manuallyPositioned ? manualRem.y : autoRemY;
     const effectiveRemAngle = Math.atan2(remY - catY, remX - catX);
+    const linkedContact = contacts?.find((c) => c.id === reminder.linkedContactId);
 
     const reminderNode: Node<MeshNodeData> = {
       id: reminder.id,
@@ -378,6 +385,9 @@ export function generateCompletedCategoryMesh(
         categoryId: category.id,
         subtaskCount: reminder.subtasks.length,
         completedSubtaskCount: reminder.subtasks.filter((s) => s.completed).length,
+        isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId),
+        linkedContactId: reminder.linkedContactId,
+        linkedContactName: linkedContact ? (linkedContact.displayName || linkedContact.fullName) : undefined,
         isCompletedView: true,
         manuallyPositioned: Boolean(manualRem?.manuallyPositioned),
         onNodeClick: callbacks?.onNodeClick,

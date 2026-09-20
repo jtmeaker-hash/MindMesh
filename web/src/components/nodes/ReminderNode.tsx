@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Check, ListChecks, Calendar, Repeat, DollarSign } from 'lucide-react';
+import { Check, ListChecks, Calendar, Repeat, DollarSign, User } from 'lucide-react';
 import { MeshNodeData } from '../../types';
 
 export const ReminderNode = memo(({ data }: NodeProps) => {
@@ -105,6 +105,23 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
               }}
             >
               <DollarSign size={10} strokeWidth={3} />
+            </span>
+          )}
+
+          {nodeData.linkedContactName && (
+            <span
+              title={`Linked contact: ${nodeData.linkedContactName}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                color: '#818cf8',
+                backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                padding: '1px 3px',
+                borderRadius: 4,
+                marginLeft: 2,
+              }}
+            >
+              <User size={10} strokeWidth={2.5} />
             </span>
           )}
         </div>

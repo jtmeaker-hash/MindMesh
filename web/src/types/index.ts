@@ -39,6 +39,7 @@ export interface Reminder {
   subtasks: Subtask[];
   linkedBillId?: string;
   linkedExtraIncomeId?: string;
+  linkedContactId?: string;
 }
 
 export interface Category {
@@ -66,9 +67,15 @@ export interface MindMeshStorageData {
   nodePositions: NodePositionMap;
   lastUpdated: string;
   money?: import('./finance').MoneyState;
+  contacts?: import('./contact').Contact[];
+  contactCategories?: string[];
+  contactRelationships?: string[];
+  preferences?: Record<string, unknown>;
 }
 
 export * from './finance';
+export * from './contact';
+export * from './backup';
 
 export type ViewMode = 'active' | 'completed';
 
@@ -95,6 +102,8 @@ export interface MeshNodeData extends Record<string, unknown> {
   manuallyPositioned?: boolean;
   isFinancialLinked?: boolean;
   linkedBillTitle?: string;
+  linkedContactId?: string;
+  linkedContactName?: string;
   onNodeClick?: (nodeId: string, type: string) => void;
   onSubtaskToggle?: (subtaskId: string, reminderId: string) => void;
   onReminderCompleteToggle?: (reminderId: string) => void;

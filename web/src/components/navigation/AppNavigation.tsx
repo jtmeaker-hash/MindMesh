@@ -1,12 +1,13 @@
 import React from 'react';
 import { AppNavTab } from '../../types/finance';
-import { Network, Wallet, LayoutDashboard } from 'lucide-react';
+import { Network, Users, Wallet, LayoutDashboard } from 'lucide-react';
 
 interface AppNavigationProps {
   currentTab: AppNavTab;
   onSelectTab: (tab: AppNavTab) => void;
   activeRemindersCount?: number;
   upcomingBillsCount?: number;
+  contactsCount?: number;
 }
 
 export const AppNavigation: React.FC<AppNavigationProps> = ({
@@ -14,6 +15,7 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
   onSelectTab,
   activeRemindersCount = 0,
   upcomingBillsCount = 0,
+  contactsCount = 0,
 }) => {
   return (
     <nav
@@ -68,6 +70,48 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
             }}
           >
             {activeRemindersCount}
+          </span>
+        )}
+      </button>
+
+      {/* Contacts */}
+      <button
+        type="button"
+        onClick={() => onSelectTab('contacts')}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 14px',
+          borderRadius: 999,
+          border: 'none',
+          background: currentTab === 'contacts'
+            ? 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)'
+            : 'transparent',
+          color: currentTab === 'contacts' ? '#ffffff' : '#94a3b8',
+          fontWeight: currentTab === 'contacts' ? 600 : 500,
+          fontSize: 13,
+          cursor: 'pointer',
+          transition: 'all 0.18s cubic-bezier(0.4, 0, 0.2, 1)',
+          boxShadow: currentTab === 'contacts' ? '0 2px 10px rgba(99, 102, 241, 0.4)' : 'none',
+          minHeight: 34,
+        }}
+      >
+        <Users size={15} />
+        <span>Contacts</span>
+        {contactsCount > 0 && (
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              background: currentTab === 'contacts' ? 'rgba(255,255,255,0.25)' : 'rgba(99, 102, 241, 0.3)',
+              color: currentTab === 'contacts' ? '#ffffff' : '#a5b4fc',
+              padding: '1px 6px',
+              borderRadius: 999,
+              marginLeft: 1,
+            }}
+          >
+            {contactsCount}
           </span>
         )}
       </button>

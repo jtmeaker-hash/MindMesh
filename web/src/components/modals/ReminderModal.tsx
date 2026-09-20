@@ -6,8 +6,10 @@ import {
   RotateCcw,
   Plus,
   Repeat,
+  User,
 } from 'lucide-react';
 import { Reminder, Category, Priority, Subtask, RecurrenceRule, RecurrenceFrequency, CustomRecurrenceUnit, DirectDebit, ExtraIncome } from '../../types';
+import { Contact } from '../../types/contact';
 import { formatRecurrenceLabel } from '../../services/recurrence';
 
 const WEEKDAYS = [
@@ -28,6 +30,7 @@ interface ReminderModalProps {
   defaultCategoryId?: string;
   directDebits?: DirectDebit[];
   extraIncomes?: ExtraIncome[];
+  contacts?: Contact[];
   onSave: (reminder: Reminder) => void;
   onDelete?: (reminderId: string) => void;
   onToggleComplete?: (reminderId: string) => void;
@@ -41,6 +44,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   defaultCategoryId,
   directDebits = [],
   extraIncomes = [],
+  contacts = [],
   onSave,
   onDelete,
   onToggleComplete,
@@ -55,6 +59,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [linkedBillId, setLinkedBillId] = useState('');
   const [linkedExtraIncomeId, setLinkedExtraIncomeId] = useState('');
+  const [linkedContactId, setLinkedContactId] = useState('');
 
   // Recurrence state
   const [recurrenceFreq, setRecurrenceFreq] = useState<RecurrenceFrequency>('none');
@@ -76,6 +81,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setSubtasks(reminder.subtasks ? [...reminder.subtasks] : []);
       setLinkedBillId(reminder.linkedBillId || '');
       setLinkedExtraIncomeId(reminder.linkedExtraIncomeId || '');
+      setLinkedContactId(reminder.linkedContactId || '');
 
       // Load recurrence
       if (reminder.recurrence) {
@@ -107,6 +113,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setDueTime('');
       setPriority('medium');
       setSubtasks([]);
+      setLinkedBillId('');
+      setLinkedExtraIncomeId('');
+      setLinkedContactId('');
       setRecurrenceFreq('none');
       setRecurrenceInterval(1);
       setRecurrenceUnit('week');
@@ -191,6 +200,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       occurrenceCount: reminder?.occurrenceCount,
       linkedBillId: linkedBillId || undefined,
       linkedExtraIncomeId: linkedExtraIncomeId || undefined,
+      linkedContactId: linkedContactId || undefined,
       subtasks: subtasks.map((s) => ({
         ...s,
         reminderId: reminder?.id || s.reminderId,
@@ -768,6 +778,54 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
               }}
             />
           </div>
+
+          {/* Optional Linked Contact */}
+          {contacts.length > 0 && (
+            <div
+              style={{
+                padding: 12,
+                borderRadius: 12,
+                backgroundColor: 'rgba(30, 41, 59, 0.4)',
+                border: '1px solid rgba(255, 255, 255, 0.06)',
+              }}
+            >
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: '#94a3b8',
+                  marginBottom: 6,
+                }}
+              >
+                <User size={12} color="#818cf8" />
+                <span>LINKED CONTACT (OPTIONAL)</span>
+              </label>
+              <select
+                value={linkedContactId}
+                onChange={(e) => setLinkedContactId(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  backgroundColor: '#1E293B',
+                  border: '1px solid #334155',
+                  color: '#F8FAFC',
+                  fontSize: 12,
+                  outline: 'none',
+                }}
+              >
+                <option value="">None (No contact linked)</option>
+                {contacts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.displayName || c.fullName} ({c.relationship})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Financial Links (Direct Debit / Extra Income) */}
           {(directDebits.length > 0 || extraIncomes.length > 0) && (
