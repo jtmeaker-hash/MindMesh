@@ -7,7 +7,7 @@ import {
   Plus,
   Repeat,
 } from 'lucide-react';
-import { Reminder, Category, Priority, Subtask, RecurrenceRule, RecurrenceFrequency, CustomRecurrenceUnit } from '../../types';
+import { Reminder, Category, Priority, Subtask, RecurrenceRule, RecurrenceFrequency, CustomRecurrenceUnit, DirectDebit, ExtraIncome } from '../../types';
 import { formatRecurrenceLabel } from '../../services/recurrence';
 
 const WEEKDAYS = [
@@ -26,6 +26,8 @@ interface ReminderModalProps {
   reminder?: Reminder | null;
   categories: Category[];
   defaultCategoryId?: string;
+  directDebits?: DirectDebit[];
+  extraIncomes?: ExtraIncome[];
   onSave: (reminder: Reminder) => void;
   onDelete?: (reminderId: string) => void;
   onToggleComplete?: (reminderId: string) => void;
@@ -37,6 +39,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   reminder,
   categories,
   defaultCategoryId,
+  directDebits = [],
+  extraIncomes = [],
   onSave,
   onDelete,
   onToggleComplete,
@@ -49,6 +53,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [priority, setPriority] = useState<Priority>('medium');
   const [subtasks, setSubtasks] = useState<Subtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
+  const [linkedBillId, setLinkedBillId] = useState('');
+  const [linkedExtraIncomeId, setLinkedExtraIncomeId] = useState('');
 
   // Recurrence state
   const [recurrenceFreq, setRecurrenceFreq] = useState<RecurrenceFrequency>('none');
@@ -68,6 +74,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setDueTime(reminder.dueTime || '');
       setPriority(reminder.priority);
       setSubtasks(reminder.subtasks ? [...reminder.subtasks] : []);
+      setLinkedBillId(reminder.linkedBillId || '');
+      setLinkedExtraIncomeId(reminder.linkedExtraIncomeId || '');
 
       // Load recurrence
       if (reminder.recurrence) {
@@ -181,6 +189,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       recurrence: recurrenceRule,
       recurringSeriesId: reminder?.recurringSeriesId,
       occurrenceCount: reminder?.occurrenceCount,
+      linkedBillId: linkedBillId || undefined,
+      linkedExtraIncomeId: linkedExtraIncomeId || undefined,
       subtasks: subtasks.map((s) => ({
         ...s,
         reminderId: reminder?.id || s.reminderId,
@@ -758,6 +768,79 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
               }}
             />
           </div>
+
+          {/* Financial Links (Direct Debit / Extra Income) */}
+          {(directDebits.length > 0 || extraIncomes.length > 0) && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: directDebits.length > 0 && extraIncomes.length > 0 ? '1fr 1fr' : '1fr',
+                gap: 12,
+                padding: 12,
+                borderRadius: 12,
+                backgroundColor: 'rgba(30, 41, 59, 0.4)',
+                border: '1px solid rgba(255, 255, 255, 0.06)',
+              }}
+            >
+              {directDebits.length > 0 && (
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 5 }}>
+                    Link Direct Debit Bill
+                  </label>
+                  <select
+                    value={linkedBillId}
+                    onChange={(e) => setLinkedBillId(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      backgroundColor: '#1E293B',
+                      border: '1px solid #334155',
+                      color: '#F8FAFC',
+                      fontSize: 12,
+                      outline: 'none',
+                    }}
+                  >
+                    <option value="">None (Unlinked)</option>
+                    {directDebits.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.title} (${b.amount})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {extraIncomes.length > 0 && (
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 5 }}>
+                    Link Extra Income Entry
+                  </label>
+                  <select
+                    value={linkedExtraIncomeId}
+                    onChange={(e) => setLinkedExtraIncomeId(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      backgroundColor: '#1E293B',
+                      border: '1px solid #334155',
+                      color: '#F8FAFC',
+                      fontSize: 12,
+                      outline: 'none',
+                    }}
+                  >
+                    <option value="">None (Unlinked)</option>
+                    {extraIncomes.map((ex) => (
+                      <option key={ex.id} value={ex.id}>
+                        {ex.title} (${ex.amount})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Subtasks (Mesh branches) */}
           <div>
