@@ -44,7 +44,17 @@ export const ContactModal: React.FC<ContactModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Latest option lists, read only when (re)initialising the form. Keeping these
+  // in refs means adding a custom relationship/category mid-form does not re-run
+  // the reset effect and wipe what the user has already typed.
+  const relationshipsRef = useRef(relationships);
+  relationshipsRef.current = relationships;
+  const categoriesRef = useRef(categories);
+  categoriesRef.current = categories;
+
   useEffect(() => {
+    if (!isOpen) return;
+
     if (contact) {
       setFullName(contact.fullName || '');
       setDisplayName(contact.displayName || '');
@@ -64,15 +74,16 @@ export const ContactModal: React.FC<ContactModalProps> = ({
       setSecondaryPhoneNumber('');
       setEmail('');
       setAddress('');
-      setRelationship(relationships[0] || 'Friend');
-      setCategory(categories[0] || 'Personal');
+      setRelationship(relationshipsRef.current[0] || 'Friend');
+      setCategory(categoriesRef.current[0] || 'Personal');
       setBirthday('');
       setNotes('');
       setPhoto(undefined);
     }
     setShowNewRel(false);
     setShowNewCat(false);
-  }, [contact, isOpen, relationships, categories]);
+    // Only reset when the modal opens or the edited contact changes.
+  }, [contact, isOpen]);
 
   if (!isOpen) return null;
 
