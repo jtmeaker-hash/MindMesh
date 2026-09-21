@@ -219,6 +219,24 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
         {nodeData.label}
       </div>
 
+      {/* Compact graph summary; full descriptions remain in the detail editor. */}
+      {nodeData.summary && (
+        <div
+          style={{
+            fontSize: 10,
+            color: muted,
+            lineHeight: 1.25,
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }}
+          title={nodeData.summary}
+        >
+          {nodeData.summary}
+        </div>
+      )}
+
       {/* Footer Info: Subtasks badge or Due Date */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
         {hasSubtasks ? (

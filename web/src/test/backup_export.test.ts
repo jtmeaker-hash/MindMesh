@@ -33,6 +33,8 @@ const seedReminder = (overrides: Partial<Reminder> = {}): Reminder => ({
   id: 'rem-export-1',
   categoryId: 'cat-export',
   title: 'Pay the electricity bill',
+  description: 'Find the current bill and pay it before the due date.',
+  summary: 'Find bill and pay before due date',
   priority: 'high',
   completed: false,
   subtasks: [
@@ -128,6 +130,8 @@ describe('Backup export: JSON generation', () => {
     const data = backup.data;
     expect(data.reminders).toHaveLength(2);
     expect(data.reminders[0].subtasks).toHaveLength(2);
+    expect(data.reminders[0].description).toContain('current bill');
+    expect(data.reminders[0].summary).toBe('Find bill and pay before due date');
     expect(data.categories.length).toBeGreaterThan(0);
     expect(data.contacts[0].photo).toBeDefined();
     expect(data.contactCategories).toContain('Clinic');
@@ -399,6 +403,8 @@ describe('Backup round trip: export then restore', () => {
 
     expect(state.reminders.map((r) => r.id).sort()).toEqual(['rem-export-1', 'rem-export-2']);
     expect(state.reminders[0].subtasks).toHaveLength(2);
+    expect(state.reminders[0].description).toContain('current bill');
+    expect(state.reminders[0].summary).toBe('Find bill and pay before due date');
     expect(state.reminders[0].notifications?.advanceMinutes).toEqual([1440, 60]);
     expect(contacts.map((c) => c.id)).toEqual(['contact-export-1']);
     expect(contacts[0].photo).toBe('data:image/jpeg;base64,AAAA');

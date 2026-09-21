@@ -26,6 +26,10 @@ export interface Reminder {
   id: string;
   categoryId: string;
   title: string;
+  /** Longer context shown in reminder details and used by optional AI enhancement. */
+  description?: string;
+  /** Compact text intended for graph nodes and other dense surfaces. */
+  summary?: string;
   notes?: string;
   dueDate?: string;
   dueTime?: string;
@@ -92,6 +96,9 @@ export type ViewMode = 'active' | 'completed';
 export interface MeshNodeData extends Record<string, unknown> {
   id: string;
   label: string;
+  /** Compact reminder summary, never the full description. */
+  summary?: string;
+  description?: string;
   type: 'root' | 'category' | 'reminder' | 'subtask';
   color?: string;
   count?: number;

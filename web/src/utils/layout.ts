@@ -212,6 +212,8 @@ export function generateActiveMesh(
           data: {
             id: reminder.id,
             label: reminder.title,
+            summary: reminder.summary?.trim() || undefined,
+            description: reminder.description?.trim() || undefined,
             type: 'reminder',
             color: remTheme.accent,
             accentColor: remTheme.accent,

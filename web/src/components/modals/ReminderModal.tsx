@@ -11,6 +11,7 @@ import {
   BellOff,
   BellRing,
   AlertTriangle,
+  Sparkles,
 } from 'lucide-react';
 import { Reminder, Category, Priority, Subtask, RecurrenceRule, RecurrenceFrequency, CustomRecurrenceUnit, DirectDebit, ExtraIncome } from '../../types';
 import { Contact } from '../../types/contact';
@@ -26,6 +27,7 @@ import {
   ReminderNotificationSettings,
 } from '../../types/notifications';
 import { getReminderNotificationStatus } from '../../services/notifications';
+import { enhanceReminderText, reminderAiRequest, ReminderAiError, ReminderAiOperation } from '../../services/reminderAi';
 
 const WEEKDAYS = [
   { label: 'S', day: 0, title: 'Sunday' },
@@ -70,7 +72,13 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   onToggleComplete,
 }) => {
   const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [summary, setSummary] = useState('');
   const [notes, setNotes] = useState('');
+  const [aiBusy, setAiBusy] = useState<ReminderAiOperation | null>(null);
+  const [aiDraft, setAiDraft] = useState<{ operation: ReminderAiOperation; text: string } | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const aiAbortRef = useRef<AbortController | null>(null);
   const [categoryId, setCategoryId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [dueTime, setDueTime] = useState('');
@@ -115,6 +123,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   useEffect(() => {
     if (reminder) {
       setTitle(reminder.title);
+      setDescription(reminder.description || '');
+      setSummary(reminder.summary || '');
       setNotes(reminder.notes || '');
       setCategoryId(reminder.categoryId);
       setDueDate(reminder.dueDate || '');
@@ -165,6 +175,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       }
     } else {
       setTitle('');
+      setDescription('');
+      setSummary('');
       setNotes('');
       setCategoryId(defaultCategoryIdRef.current || (categoriesRef.current[0]?.id ?? ''));
       setDueDate('');
@@ -187,6 +199,10 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     }
     setCustomAdvance('');
     setNewSubtaskTitle('');
+    setAiDraft(null);
+    setAiError(null);
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
     // Deliberately keyed on the reminder and visibility only. Option lists and
     // app defaults are read through refs so that adding a category (or changing
     // notification defaults) can never reset a half-filled form.
@@ -255,6 +271,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       id: reminder?.id || `rem-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       categoryId,
       title: title.trim(),
+      description: description.trim() || undefined,
+      summary: summary.trim() || undefined,
       notes: notes.trim() || undefined,
       dueDate: dueDate || undefined,
       dueTime: dueTime || undefined,
@@ -280,6 +298,52 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   };
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
+
+  const runAi = async (operation: ReminderAiOperation) => {
+    if (!title.trim()) {
+      setAiError('Add a title before using AI assistance.');
+      return;
+    }
+    aiAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+    setAiBusy(operation);
+    setAiError(null);
+    setAiDraft(null);
+    try {
+      const text = await enhanceReminderText(
+        reminderAiRequest(
+          {
+            title: title.trim(),
+            description: description.trim() || undefined,
+            summary: summary.trim() || undefined,
+            subtasks,
+            category: selectedCategory?.name,
+          },
+          operation
+        ),
+        controller.signal
+      );
+      if (!controller.signal.aborted) setAiDraft({ operation, text });
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setAiError(error instanceof ReminderAiError ? error.message : 'AI enhancement failed. Continue manually.');
+      }
+    } finally {
+      if (aiAbortRef.current === controller) {
+        aiAbortRef.current = null;
+        setAiBusy(null);
+      }
+    }
+  };
+
+  const applyAiDraft = () => {
+    if (!aiDraft) return;
+    if (aiDraft.operation === 'generate-summary') setSummary(aiDraft.text);
+    else setDescription(aiDraft.text);
+    setAiDraft(null);
+    setAiError(null);
+  };
 
   const buildNotificationSettings = (): ReminderNotificationSettings => ({
     enabled: notificationsEnabled,
@@ -520,6 +584,53 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 outline: 'none',
               }}
             />
+          </div>
+
+          {/* Description and graph summary */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+                DESCRIPTION
+              </label>
+              <textarea
+                rows={4}
+                placeholder="Explain what needs to happen..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155', color: '#F8FAFC', fontSize: 13, outline: 'none', resize: 'vertical' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+                GRAPH SUMMARY <span style={{ color: '#64748b', fontWeight: 400 }}>(optional)</span>
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Short phrase shown on the MindMesh graph..."
+                value={summary}
+                onChange={(e) => setSummary(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155', color: '#F8FAFC', fontSize: 13, outline: 'none', resize: 'vertical' }}
+              />
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <button type="button" onClick={() => void runAi('enhance-description')} disabled={Boolean(aiBusy)} style={{ padding: '7px 10px', borderRadius: 9, border: '1px solid rgba(129,140,248,0.4)', background: 'rgba(99,102,241,0.14)', color: '#c7d2fe', fontSize: 11, fontWeight: 700, cursor: aiBusy ? 'wait' : 'pointer', opacity: aiBusy ? 0.65 : 1 }}>
+                <Sparkles size={12} style={{ verticalAlign: 'middle', marginRight: 5 }} />{aiBusy === 'enhance-description' ? 'Enhancing…' : 'Enhance Description'}
+              </button>
+              <button type="button" onClick={() => void runAi('generate-summary')} disabled={Boolean(aiBusy)} style={{ padding: '7px 10px', borderRadius: 9, border: '1px solid rgba(129,140,248,0.4)', background: 'rgba(99,102,241,0.14)', color: '#c7d2fe', fontSize: 11, fontWeight: 700, cursor: aiBusy ? 'wait' : 'pointer', opacity: aiBusy ? 0.65 : 1 }}>
+                <Sparkles size={12} style={{ verticalAlign: 'middle', marginRight: 5 }} />{aiBusy === 'generate-summary' ? 'Generating…' : summary ? 'Regenerate Summary' : 'Generate Summary'}
+              </button>
+            </div>
+            {aiError && <div role="alert" style={{ fontSize: 11, color: '#fbbf24' }}>{aiError}</div>}
+            {aiDraft && (
+              <div style={{ padding: 10, borderRadius: 10, background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(129,140,248,0.35)' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#a5b4fc', marginBottom: 5 }}>AI DRAFT — REVIEW BEFORE APPLYING</div>
+                <div style={{ fontSize: 13, lineHeight: 1.45, color: '#e2e8f0', whiteSpace: 'pre-wrap' }}>{aiDraft.text}</div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
+                  <button type="button" onClick={applyAiDraft} style={{ padding: '6px 10px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Apply Draft</button>
+                  <button type="button" onClick={() => setAiDraft(null)} style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #475569', background: 'transparent', color: '#cbd5e1', fontSize: 11, cursor: 'pointer' }}>Discard</button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Category Chips */}

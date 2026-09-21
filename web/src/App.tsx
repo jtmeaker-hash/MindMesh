@@ -82,6 +82,7 @@ import {
 } from './utils/storage';
 import { generateActiveMesh, generateCompletedOverviewMesh, generateCompletedCategoryMesh } from './utils/layout';
 import { handleReminderCompletion } from './services/recurrence';
+import { upsertReminder } from './services/reminders';
 
 import { RootNode } from './components/nodes/RootNode';
 import { CategoryNode } from './components/nodes/CategoryNode';
@@ -645,11 +646,9 @@ function MindMeshFlow() {
   // CRUD for Reminders
   const handleSaveReminder = (rem: Reminder) => {
     setReminders((prev) => {
-      const idx = prev.findIndex((r) => r.id === rem.id);
-      if (idx >= 0) {
-        const previous = prev[idx];
-        const next = [...prev];
-        next[idx] = rem;
+      const previous = prev.find((r) => r.id === rem.id);
+      if (previous) {
+        const next = upsertReminder(prev, rem);
         if (previous.completed !== rem.completed) {
           logger.info('Reminders', 'Reminder completion state changed by edit', {
             reminderId: rem.id,
