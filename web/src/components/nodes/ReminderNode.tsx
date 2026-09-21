@@ -2,11 +2,21 @@ import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
 import { Check, ListChecks, Calendar, Repeat, DollarSign, User } from 'lucide-react';
 import { MeshNodeData } from '../../types';
+import { withAlpha } from '../../services/appearance';
 
 export const ReminderNode = memo(({ data }: NodeProps) => {
   const nodeData = data as unknown as MeshNodeData;
-  const color = nodeData.color || '#3b82f6';
+  const color = nodeData.accentColor || nodeData.color || '#3b82f6';
   const isCompleted = nodeData.completed || nodeData.isCompletedView;
+  const surface = nodeData.surfaceColor || '#141d2f';
+  const surfaceAlt = nodeData.surfaceAltColor || '#131b2c';
+  const text = nodeData.textColor || '#f8fafc';
+  const muted = nodeData.mutedTextColor || '#94a3b8';
+  const hover = nodeData.hoverColor || color;
+
+  const hoverVars = {
+    '--mm-hover': hover,
+  } as React.CSSProperties;
 
   const priorityColor =
     nodeData.priority === 'high'
@@ -25,20 +35,20 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
         maxWidth: 165,
         padding: '8px 10px',
         borderRadius: 14,
-        background: isCompleted ? '#131b2c' : '#141d2f',
-        border: `1.5px solid ${isCompleted ? '#334155' : `${color}88`}`,
+        background: isCompleted ? surfaceAlt : surface,
+        border: `1.5px solid ${isCompleted ? nodeData.borderColor || '#334155' : nodeData.borderColor || withAlpha(color, 0.6)}`,
         boxShadow: isCompleted
           ? '0 2px 8px rgba(0,0,0,0.5)'
-          : `0 4px 14px rgba(0,0,0,0.6), 0 0 10px ${color}22`,
+          : `0 4px 14px rgba(0,0,0,0.6), 0 0 10px ${nodeData.glowColor || withAlpha(color, 0.15)}`,
         display: 'flex',
         flexDirection: 'column',
         gap: 5,
         cursor: 'pointer',
         position: 'relative',
         userSelect: 'none',
-        transition: 'transform 0.15s ease, border-color 0.15s ease',
+        ...hoverVars,
       }}
-      className="reminder-node-card"
+      className="mm-node reminder-node-card"
     >
       <Handle
         type="target"
@@ -70,7 +80,7 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
                 fontWeight: 600,
                 textTransform: 'uppercase',
                 letterSpacing: '0.04em',
-                color: '#94a3b8',
+                color: muted,
               }}
             >
               {nodeData.priority}
@@ -161,7 +171,7 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
         style={{
           fontSize: 12,
           fontWeight: 600,
-          color: isCompleted ? '#94a3b8' : '#f8fafc',
+          color: isCompleted ? muted : text,
           textDecoration: isCompleted ? 'line-through' : 'none',
           lineHeight: 1.25,
           wordBreak: 'break-word',
@@ -206,7 +216,7 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
               alignItems: 'center',
               gap: 3,
               fontSize: 9,
-              color: '#94a3b8',
+              color: muted,
             }}
           >
             <Calendar size={10} />

@@ -22,10 +22,22 @@ import {
   Maximize2,
   ArrowLeft,
   Settings,
+  Palette,
   X,
 } from 'lucide-react';
 
-import { Category, Reminder, ViewMode, MeshNodeData, NodePositionMap, AppNavTab, MoneyState, Contact } from './types';
+import {
+  Category,
+  Reminder,
+  ViewMode,
+  MeshNodeData,
+  NodePositionMap,
+  AppNavTab,
+  MoneyState,
+  Contact,
+  AppearanceSettings,
+} from './types';
+import { getChromeTheme } from './services/appearance';
 import {
   loadCategories,
   saveCategories,
@@ -44,6 +56,8 @@ import {
   saveContactCategories,
   loadContactRelationships,
   saveContactRelationships,
+  loadAppearance,
+  saveAppearance,
   loadAllData,
 } from './utils/storage';
 import { generateActiveMesh, generateCompletedOverviewMesh, generateCompletedCategoryMesh } from './utils/layout';
@@ -59,6 +73,8 @@ import { CategoryModal } from './components/modals/CategoryModal';
 import { CategoryActionsSheet } from './components/modals/CategoryActionsSheet';
 import { QuickAddModal } from './components/modals/QuickAddModal';
 import { SettingsBackupModal } from './components/modals/SettingsBackupModal';
+import { AppearanceModal } from './components/modals/AppearanceModal';
+import { AppBackground } from './components/background/AppBackground';
 
 import { AppNavigation } from './components/navigation/AppNavigation';
 import { MoneyModule } from './components/money/MoneyModule';
@@ -81,6 +97,7 @@ function MindMeshFlow() {
   const [contacts, setContacts] = useState<Contact[]>(() => loadContacts());
   const [contactCategories, setContactCategories] = useState<string[]>(() => loadContactCategories());
   const [contactRelationships, setContactRelationships] = useState<string[]>(() => loadContactRelationships());
+  const [appearance, setAppearance] = useState<AppearanceSettings>(() => loadAppearance());
 
   // Navigation state
   const [mainNavTab, setMainNavTab] = useState<AppNavTab>('reminders');
@@ -100,6 +117,7 @@ function MindMeshFlow() {
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [backupModalOpen, setBackupModalOpen] = useState(false);
+  const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
 
   // React Flow graph state
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<MeshNodeData>>([]);
@@ -141,6 +159,12 @@ function MindMeshFlow() {
   useEffect(() => {
     saveContactRelationships(contactRelationships);
   }, [contactRelationships]);
+
+  useEffect(() => {
+    saveAppearance(appearance);
+  }, [appearance]);
+
+  const chrome = useMemo(() => getChromeTheme(appearance), [appearance]);
 
   // Handle node interaction
   const handleNodeClick = useCallback(
@@ -292,7 +316,8 @@ function MindMeshFlow() {
           onReminderCompleteToggle: handleReminderCompleteToggle,
         },
         nodePositions,
-        contacts
+        contacts,
+        appearance
       );
     } else {
       // Completed mode
@@ -304,7 +329,8 @@ function MindMeshFlow() {
             onNodeClick: handleNodeClick,
           },
           nodePositions,
-          contacts
+          contacts,
+          appearance
         );
       } else {
         graph = generateCompletedOverviewMesh(
@@ -313,7 +339,8 @@ function MindMeshFlow() {
           {
             onNodeClick: handleNodeClick,
           },
-          nodePositions
+          nodePositions,
+          appearance
         );
       }
     }
@@ -348,6 +375,7 @@ function MindMeshFlow() {
     focusedCategoryId,
     selectedCompletedCategory,
     contacts,
+    appearance,
     handleNodeClick,
     handleSubtaskToggle,
     handleReminderCompleteToggle,
@@ -466,6 +494,7 @@ function MindMeshFlow() {
     setContacts(full.contacts || []);
     setContactCategories(full.contactCategories || loadContactCategories());
     setContactRelationships(full.contactRelationships || loadContactRelationships());
+    setAppearance(full.appearance || loadAppearance());
     setFocusedCategoryId(null);
     setSelectedCompletedCategory(null);
     setMenuOpen(false);
@@ -491,6 +520,9 @@ function MindMeshFlow() {
         overflow: 'hidden',
       }}
     >
+      {/* APPEARANCE BACKGROUND STACK (base / photo / void / matrix rain) */}
+      <AppBackground appearance={appearance} />
+
       {/* TOP HEADER */}
       <header
         style={{
@@ -503,7 +535,7 @@ function MindMeshFlow() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          background: 'linear-gradient(180deg, rgba(8,11,18,0.92) 0%, rgba(8,11,18,0.4) 75%, transparent 100%)',
+          background: chrome.headerGradient,
           backdropFilter: 'blur(10px)',
           pointerEvents: 'none',
         }}
@@ -537,7 +569,7 @@ function MindMeshFlow() {
                     fontSize: 20,
                     fontWeight: 800,
                     letterSpacing: '-0.03em',
-                    background: 'linear-gradient(135deg, #ffffff 40%, #818cf8 100%)',
+                    background: chrome.titleGradient,
                     WebkitBackgroundClip: 'text',
                     WebkitTextFillColor: 'transparent',
                   }}
@@ -558,7 +590,7 @@ function MindMeshFlow() {
                   {viewMode === 'active' ? `${activeCount} Active` : `${completedCount} Done`}
                 </span>
               </div>
-              <p style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>
+              <p style={{ fontSize: 11, color: chrome.mutedText, marginTop: 1 }}>
                 See what’s on your mind.
               </p>
             </div>
@@ -672,6 +704,30 @@ function MindMeshFlow() {
                 <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
                   LAYOUT & PREFERENCES
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setAppearanceModalOpen(true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    color: '#a5b4fc',
+                    fontSize: 13,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Palette size={15} color="#818cf8" />
+                  <span>Appearance & Theme</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleResetLayout}
@@ -860,13 +916,15 @@ function MindMeshFlow() {
                 animated: false,
               }}
             >
-              {/* Subtle neural grid background */}
-              <Background
-                variant={BackgroundVariant.Dots}
-                gap={28}
-                size={1.5}
-                color="rgba(99, 102, 241, 0.15)"
-              />
+              {/* Subtle neural grid background (appearance-controlled) */}
+              {appearance.showGrid && (
+                <Background
+                  variant={BackgroundVariant.Dots}
+                  gap={28}
+                  size={1.5}
+                  color={appearance.gridColor}
+                />
+              )}
               <Controls
                 position="bottom-left"
                 showInteractive={false}
@@ -894,7 +952,7 @@ function MindMeshFlow() {
               right: 0,
               zIndex: 50,
               padding: '12px 16px 20px 16px',
-              background: 'linear-gradient(0deg, rgba(8,11,18,0.96) 0%, rgba(8,11,18,0.7) 70%, transparent 100%)',
+              background: chrome.bottomGradient,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -1140,6 +1198,13 @@ function MindMeshFlow() {
         onClose={() => setBackupModalOpen(false)}
         onRestoreComplete={handleReloadAllPersistedState}
         onResetComplete={handleReloadAllPersistedState}
+      />
+
+      <AppearanceModal
+        isOpen={appearanceModalOpen}
+        onClose={() => setAppearanceModalOpen(false)}
+        appearance={appearance}
+        onChange={setAppearance}
       />
     </div>
   );

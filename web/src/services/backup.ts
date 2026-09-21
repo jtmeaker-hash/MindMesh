@@ -11,6 +11,7 @@ import {
   resetMindMeshEntirely,
   CURRENT_STORAGE_VERSION,
 } from './storage';
+import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONSHIPS } from '../utils/sampleContactData';
 import { INITIAL_CATEGORIES } from '../utils/sampleData';
@@ -33,6 +34,7 @@ export function createBackup(): MindMeshBackupFile {
     contacts: state.contacts || INITIAL_CONTACTS,
     contactCategories: state.contactCategories || INITIAL_CONTACT_CATEGORIES,
     contactRelationships: state.contactRelationships || INITIAL_CONTACT_RELATIONSHIPS,
+    appearance: normalizeAppearance(state.appearance),
     preferences: state.preferences || { theme: 'dark' },
     statistics: {
       totalCompletedCount: (state.reminders || []).filter((r) => r.completed).length,
@@ -228,6 +230,24 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     if (money.incomeConfig) hasMoneyConfig = true;
   }
 
+  // Appearance / visual customisation (sanitised, never fatal)
+  let hasAppearance = false;
+  let appearanceTheme: string | undefined;
+  if (data.appearance !== undefined) {
+    if (data.appearance && typeof data.appearance === 'object' && !Array.isArray(data.appearance)) {
+      const normalized = normalizeAppearance(data.appearance);
+      hasAppearance = true;
+      appearanceTheme = normalized.themeId;
+      if (!(
+        typeof (data.appearance as Record<string, unknown>).themeId === 'string'
+      )) {
+        warnings.push('Appearance settings were missing a theme id; defaults will be applied.');
+      }
+    } else {
+      warnings.push('Appearance settings in this backup were unreadable and will fall back to defaults.');
+    }
+  }
+
   const completedReminders = (data.reminders as Reminder[]).filter((r) => r.completed).length;
 
   const summary: RestoreSummary = {
@@ -244,6 +264,8 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     tipsCount,
     shiftsCount,
     hasMoneyConfig,
+    hasAppearance,
+    appearanceTheme,
     warnings,
   };
 
@@ -342,6 +364,11 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     ? rawData.preferences
     : { theme: 'dark' };
 
+  // Appearance: older backups have none, so fall back to app defaults
+  const appearance = rawData.appearance
+    ? normalizeAppearance(rawData.appearance)
+    : getDefaultAppearance();
+
   return {
     version: targetSchema,
     categories,
@@ -351,6 +378,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     contacts,
     contactCategories,
     contactRelationships,
+    appearance,
     preferences,
     lastUpdated: new Date().toISOString(),
   };

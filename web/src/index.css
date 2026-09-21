@@ -11,10 +11,10 @@
 
 @keyframes pulseGlow {
   0%, 100% {
-    box-shadow: 0 0 28px rgba(99, 102, 241, 0.4), inset 0 0 16px rgba(99, 102, 241, 0.25);
+    box-shadow: 0 0 28px var(--mm-glow, rgba(99, 102, 241, 0.4)), inset 0 0 16px var(--mm-glow, rgba(99, 102, 241, 0.25));
   }
   50% {
-    box-shadow: 0 0 36px rgba(99, 102, 241, 0.6), inset 0 0 20px rgba(99, 102, 241, 0.35);
+    box-shadow: 0 0 36px var(--mm-glow-strong, rgba(99, 102, 241, 0.6)), inset 0 0 20px var(--mm-glow-strong, rgba(99, 102, 241, 0.35));
   }
 }
 
@@ -22,8 +22,49 @@
   animation: pulseGlow 4s ease-in-out infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .root-node-glow {
+    animation: none;
+  }
+
+  .void-background__drift {
+    animation: none !important;
+  }
+}
+
+/* Appearance: hover feedback for every graph node */
+.mm-node {
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, filter 0.15s ease;
+}
+
+.mm-node:hover {
+  border-color: var(--mm-hover, rgba(255, 255, 255, 0.55)) !important;
+  filter: brightness(1.06);
+}
+
 .reminder-node-card:active {
   transform: scale(0.97);
+}
+
+/* Void background atmosphere (original artwork, CSS only) */
+@keyframes voidDrift {
+  0% {
+    transform: translate3d(-4%, -2%, 0) scale(1.1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: translate3d(3%, 2%, 0) scale(1.2);
+    opacity: 0.78;
+  }
+  100% {
+    transform: translate3d(-4%, -2%, 0) scale(1.1);
+    opacity: 0.5;
+  }
+}
+
+.void-background__drift {
+  animation: voidDrift 32s ease-in-out infinite;
+  will-change: transform, opacity;
 }
 
 /* React Flow customizations */

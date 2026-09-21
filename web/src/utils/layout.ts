@@ -1,10 +1,34 @@
 import { Node, Edge } from '@xyflow/react';
 import { Category, Reminder, MeshNodeData, NodePositionMap } from '../types';
 import { Contact } from '../types/contact';
+import { AppearanceSettings } from '../types/appearance';
+import { accentForNodeType, getDefaultAppearance, resolveNodeTheme, withAlpha } from '../services/appearance';
 
 export interface GraphElements {
   nodes: Node<MeshNodeData>[];
   edges: Edge[];
+}
+
+/**
+ * Resolves the accent colour + readable surface palette for a single node.
+ */
+function nodeTheme(
+  appearance: AppearanceSettings,
+  accent: string,
+  options: { completed?: boolean; isFocused?: boolean } = {},
+) {
+  const resolvedAccent = options.isFocused
+    ? appearance.nodeColors.selected
+    : options.completed && appearance.nodeColorMode === 'custom'
+    ? appearance.nodeColors.completed
+    : accent;
+
+  const theme = resolveNodeTheme(appearance, resolvedAccent);
+  return {
+    ...theme,
+    glow: withAlpha(resolvedAccent, 0.35),
+    hover: appearance.nodeColors.hover,
+  };
 }
 
 export function generateActiveMesh(
@@ -17,10 +41,15 @@ export function generateActiveMesh(
     onReminderCompleteToggle?: (reminderId: string) => void;
   },
   manualPositions?: NodePositionMap,
-  contacts?: Contact[]
+  contacts?: Contact[],
+  appearance?: AppearanceSettings
 ): GraphElements {
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
+
+  const theme = appearance || getDefaultAppearance();
+  const customNodeColors = theme.nodeColorMode === 'custom';
+  const customLines = theme.connectionColorMode === 'custom';
 
   const activeReminders = reminders.filter((r) => !r.completed);
 
@@ -28,6 +57,9 @@ export function generateActiveMesh(
   const manualRoot = manualPositions?.['root'];
   const rootX = manualRoot?.manuallyPositioned ? manualRoot.x : 0;
   const rootY = manualRoot?.manuallyPositioned ? manualRoot.y : 0;
+
+  const rootAccent = accentForNodeType(theme, 'root');
+  const rootTheme = nodeTheme(theme, rootAccent);
 
   const rootNode: Node<MeshNodeData> = {
     id: 'root',
@@ -37,6 +69,15 @@ export function generateActiveMesh(
       id: 'root',
       label: 'MindMesh',
       type: 'root',
+      color: rootTheme.accent,
+      accentColor: rootTheme.accent,
+      surfaceColor: rootTheme.surface,
+      surfaceAltColor: rootTheme.surfaceAlt,
+      textColor: rootTheme.text,
+      mutedTextColor: rootTheme.mutedText,
+      borderColor: rootTheme.border,
+      glowColor: rootTheme.glow,
+      hoverColor: rootTheme.hover,
       count: activeReminders.length,
       manuallyPositioned: Boolean(manualRoot?.manuallyPositioned),
       onNodeClick: callbacks?.onNodeClick,
@@ -65,6 +106,10 @@ export function generateActiveMesh(
 
     const isFocused = focusedCategoryId === category.id;
     const catReminders = activeReminders.filter((r) => r.categoryId === category.id);
+    const categoryAccent = customNodeColors ? accentForNodeType(theme, 'category') : category.color;
+    const catTheme = nodeTheme(theme, categoryAccent, { isFocused });
+
+    const branchStroke = customLines ? theme.connectionColors.branch : category.color;
 
     // Category Node
     const categoryNode: Node<MeshNodeData> = {
@@ -75,7 +120,15 @@ export function generateActiveMesh(
         id: category.id,
         label: category.name,
         type: 'category',
-        color: category.color,
+        color: catTheme.accent,
+        accentColor: catTheme.accent,
+        surfaceColor: catTheme.surface,
+        surfaceAltColor: catTheme.surfaceAlt,
+        textColor: catTheme.text,
+        mutedTextColor: catTheme.mutedText,
+        borderColor: catTheme.border,
+        glowColor: catTheme.glow,
+        hoverColor: catTheme.hover,
         count: catReminders.length,
         isFocused,
         manuallyPositioned: Boolean(manualCat?.manuallyPositioned),
@@ -91,10 +144,10 @@ export function generateActiveMesh(
       target: category.id,
       animated: isFocused,
       style: {
-        stroke: category.color,
+        stroke: branchStroke,
         strokeWidth: isFocused ? 3.5 : 2.2,
         strokeOpacity: isFocused ? 0.95 : 0.6,
-        filter: isFocused ? `drop-shadow(0 0 6px ${category.color})` : undefined,
+        filter: isFocused ? `drop-shadow(0 0 6px ${branchStroke})` : undefined,
       },
     });
 
@@ -122,6 +175,8 @@ export function generateActiveMesh(
 
         const completedSubtasks = reminder.subtasks.filter((s) => s.completed).length;
         const linkedContact = contacts?.find((c) => c.id === reminder.linkedContactId);
+        const reminderAccent = customNodeColors ? accentForNodeType(theme, 'reminder') : category.color;
+        const remTheme = nodeTheme(theme, reminderAccent, { completed: reminder.completed });
 
         // Reminder Node
         const reminderNode: Node<MeshNodeData> = {
@@ -132,7 +187,15 @@ export function generateActiveMesh(
             id: reminder.id,
             label: reminder.title,
             type: 'reminder',
-            color: category.color,
+            color: remTheme.accent,
+            accentColor: remTheme.accent,
+            surfaceColor: remTheme.surface,
+            surfaceAltColor: remTheme.surfaceAlt,
+            textColor: remTheme.text,
+            mutedTextColor: remTheme.mutedText,
+            borderColor: remTheme.border,
+            glowColor: remTheme.glow,
+            hoverColor: remTheme.hover,
             priority: reminder.priority,
             completed: reminder.completed,
             dueDate: reminder.dueDate,
@@ -158,7 +221,7 @@ export function generateActiveMesh(
           source: category.id,
           target: reminder.id,
           style: {
-            stroke: category.color,
+            stroke: customLines ? theme.connectionColors.reminder : category.color,
             strokeWidth: isFocused ? 2.5 : 1.8,
             strokeOpacity: isFocused ? 0.85 : 0.5,
           },
@@ -182,6 +245,9 @@ export function generateActiveMesh(
             const subX = manualSub?.manuallyPositioned ? manualSub.x : autoSubX;
             const subY = manualSub?.manuallyPositioned ? manualSub.y : autoSubY;
 
+            const subtaskAccent = customNodeColors ? accentForNodeType(theme, 'subtask') : category.color;
+            const subTheme = nodeTheme(theme, subtaskAccent, { completed: subtask.completed });
+
             const subNode: Node<MeshNodeData> = {
               id: subtask.id,
               type: 'subtaskNode',
@@ -190,7 +256,15 @@ export function generateActiveMesh(
                 id: subtask.id,
                 label: subtask.title,
                 type: 'subtask',
-                color: category.color,
+                color: subTheme.accent,
+                accentColor: subTheme.accent,
+                surfaceColor: subTheme.surface,
+                surfaceAltColor: subTheme.surfaceAlt,
+                textColor: subTheme.text,
+                mutedTextColor: subTheme.mutedText,
+                borderColor: subTheme.border,
+                glowColor: subTheme.glow,
+                hoverColor: subTheme.hover,
                 completed: subtask.completed,
                 reminderId: reminder.id,
                 manuallyPositioned: Boolean(manualSub?.manuallyPositioned),
@@ -206,7 +280,13 @@ export function generateActiveMesh(
               source: reminder.id,
               target: subtask.id,
               style: {
-                stroke: subtask.completed ? '#475569' : category.color,
+                stroke: subtask.completed
+                  ? customLines
+                    ? theme.connectionColors.completed
+                    : '#475569'
+                  : customLines
+                  ? theme.connectionColors.subtask
+                  : category.color,
                 strokeWidth: 1.4,
                 strokeOpacity: subtask.completed ? 0.35 : 0.55,
                 strokeDasharray: subtask.completed ? '4 4' : undefined,
@@ -229,10 +309,15 @@ export function generateCompletedOverviewMesh(
   callbacks?: {
     onNodeClick?: (nodeId: string, type: string) => void;
   },
-  manualPositions?: NodePositionMap
+  manualPositions?: NodePositionMap,
+  appearance?: AppearanceSettings
 ): GraphElements {
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
+
+  const theme = appearance || getDefaultAppearance();
+  const customNodeColors = theme.nodeColorMode === 'custom';
+  const customLines = theme.connectionColorMode === 'custom';
 
   const completedReminders = reminders.filter((r) => r.completed);
 
@@ -240,6 +325,9 @@ export function generateCompletedOverviewMesh(
   const manualRoot = manualPositions?.['completed-root'];
   const rootX = manualRoot?.manuallyPositioned ? manualRoot.x : 0;
   const rootY = manualRoot?.manuallyPositioned ? manualRoot.y : 0;
+
+  const rootAccent = accentForNodeType(theme, 'root', { completed: true });
+  const rootTheme = nodeTheme(theme, rootAccent, { completed: true });
 
   const rootNode: Node<MeshNodeData> = {
     id: 'completed-root',
@@ -249,6 +337,15 @@ export function generateCompletedOverviewMesh(
       id: 'completed-root',
       label: 'Completed',
       type: 'root',
+      color: rootTheme.accent,
+      accentColor: rootTheme.accent,
+      surfaceColor: rootTheme.surface,
+      surfaceAltColor: rootTheme.surfaceAlt,
+      textColor: rootTheme.text,
+      mutedTextColor: rootTheme.mutedText,
+      borderColor: rootTheme.border,
+      glowColor: rootTheme.glow,
+      hoverColor: rootTheme.hover,
       count: completedReminders.length,
       isCompletedView: true,
       manuallyPositioned: Boolean(manualRoot?.manuallyPositioned),
@@ -274,6 +371,8 @@ export function generateCompletedOverviewMesh(
     const catY = manualCat?.manuallyPositioned ? manualCat.y : autoCatY;
 
     const catCompletedCount = completedReminders.filter((r) => r.categoryId === category.id).length;
+    const categoryAccent = customNodeColors ? accentForNodeType(theme, 'category', { completed: true }) : category.color;
+    const catTheme = nodeTheme(theme, categoryAccent, { completed: true });
 
     const catNode: Node<MeshNodeData> = {
       id: category.id,
@@ -283,7 +382,15 @@ export function generateCompletedOverviewMesh(
         id: category.id,
         label: category.name,
         type: 'category',
-        color: category.color,
+        color: catTheme.accent,
+        accentColor: catTheme.accent,
+        surfaceColor: catTheme.surface,
+        surfaceAltColor: catTheme.surfaceAlt,
+        textColor: catTheme.text,
+        mutedTextColor: catTheme.mutedText,
+        borderColor: catTheme.border,
+        glowColor: catTheme.glow,
+        hoverColor: catTheme.hover,
         completedCount: catCompletedCount,
         isCompletedView: true,
         manuallyPositioned: Boolean(manualCat?.manuallyPositioned),
@@ -297,7 +404,7 @@ export function generateCompletedOverviewMesh(
       source: 'completed-root',
       target: category.id,
       style: {
-        stroke: category.color,
+        stroke: customLines ? theme.connectionColors.branch : category.color,
         strokeWidth: 2,
         strokeOpacity: catCompletedCount > 0 ? 0.7 : 0.3,
       },
@@ -317,10 +424,15 @@ export function generateCompletedCategoryMesh(
     onNodeClick?: (nodeId: string, type: string) => void;
   },
   manualPositions?: NodePositionMap,
-  contacts?: Contact[]
+  contacts?: Contact[],
+  appearance?: AppearanceSettings
 ): GraphElements {
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
+
+  const theme = appearance || getDefaultAppearance();
+  const customNodeColors = theme.nodeColorMode === 'custom';
+  const customLines = theme.connectionColorMode === 'custom';
 
   const completedCatReminders = reminders.filter(
     (r) => r.completed && r.categoryId === category.id
@@ -331,6 +443,11 @@ export function generateCompletedCategoryMesh(
   const catX = manualCat?.manuallyPositioned ? manualCat.x : 0;
   const catY = manualCat?.manuallyPositioned ? manualCat.y : 0;
 
+  const centerAccent = customNodeColors
+    ? accentForNodeType(theme, 'category', { completed: true })
+    : category.color;
+  const centerTheme = nodeTheme(theme, centerAccent, { completed: true, isFocused: true });
+
   const centerCategoryNode: Node<MeshNodeData> = {
     id: category.id,
     type: 'categoryNode',
@@ -339,7 +456,15 @@ export function generateCompletedCategoryMesh(
       id: category.id,
       label: category.name,
       type: 'category',
-      color: category.color,
+      color: centerTheme.accent,
+      accentColor: centerTheme.accent,
+      surfaceColor: centerTheme.surface,
+      surfaceAltColor: centerTheme.surfaceAlt,
+      textColor: centerTheme.text,
+      mutedTextColor: centerTheme.mutedText,
+      borderColor: centerTheme.border,
+      glowColor: centerTheme.glow,
+      hoverColor: centerTheme.hover,
       completedCount: completedCatReminders.length,
       isFocused: true,
       isCompletedView: true,
@@ -366,6 +491,10 @@ export function generateCompletedCategoryMesh(
     const remY = manualRem?.manuallyPositioned ? manualRem.y : autoRemY;
     const effectiveRemAngle = Math.atan2(remY - catY, remX - catX);
     const linkedContact = contacts?.find((c) => c.id === reminder.linkedContactId);
+    const reminderAccent = customNodeColors
+      ? accentForNodeType(theme, 'reminder', { completed: true })
+      : category.color;
+    const remTheme = nodeTheme(theme, reminderAccent, { completed: true });
 
     const reminderNode: Node<MeshNodeData> = {
       id: reminder.id,
@@ -375,7 +504,15 @@ export function generateCompletedCategoryMesh(
         id: reminder.id,
         label: reminder.title,
         type: 'reminder',
-        color: category.color,
+        color: remTheme.accent,
+        accentColor: remTheme.accent,
+        surfaceColor: remTheme.surface,
+        surfaceAltColor: remTheme.surfaceAlt,
+        textColor: remTheme.text,
+        mutedTextColor: remTheme.mutedText,
+        borderColor: remTheme.border,
+        glowColor: remTheme.glow,
+        hoverColor: remTheme.hover,
         priority: reminder.priority,
         completed: true,
         dueDate: reminder.dueDate,
@@ -400,7 +537,7 @@ export function generateCompletedCategoryMesh(
       source: category.id,
       target: reminder.id,
       style: {
-        stroke: category.color,
+        stroke: customLines ? theme.connectionColors.reminder : category.color,
         strokeWidth: 2,
         strokeOpacity: 0.65,
       },
@@ -423,6 +560,11 @@ export function generateCompletedCategoryMesh(
         const subX = manualSub?.manuallyPositioned ? manualSub.x : autoSubX;
         const subY = manualSub?.manuallyPositioned ? manualSub.y : autoSubY;
 
+        const subtaskAccent = customNodeColors
+          ? accentForNodeType(theme, 'subtask', { completed: subtask.completed })
+          : category.color;
+        const subTheme = nodeTheme(theme, subtaskAccent, { completed: subtask.completed });
+
         const subNode: Node<MeshNodeData> = {
           id: subtask.id,
           type: 'subtaskNode',
@@ -431,7 +573,15 @@ export function generateCompletedCategoryMesh(
             id: subtask.id,
             label: subtask.title,
             type: 'subtask',
-            color: category.color,
+            color: subTheme.accent,
+            accentColor: subTheme.accent,
+            surfaceColor: subTheme.surfaceAlt,
+            surfaceAltColor: subTheme.surface,
+            textColor: subTheme.text,
+            mutedTextColor: subTheme.mutedText,
+            borderColor: subTheme.border,
+            glowColor: subTheme.glow,
+            hoverColor: subTheme.hover,
             completed: subtask.completed,
             reminderId: reminder.id,
             isCompletedView: true,
@@ -446,7 +596,7 @@ export function generateCompletedCategoryMesh(
           source: reminder.id,
           target: subtask.id,
           style: {
-            stroke: '#64748B',
+            stroke: customLines ? theme.connectionColors.completed : '#64748B',
             strokeWidth: 1.2,
             strokeOpacity: 0.45,
           },

@@ -1,6 +1,7 @@
 import { Category, Reminder, NodePositionMap } from './index';
 import { MoneyState } from './finance';
 import { Contact } from './contact';
+import { AppearanceSettings } from './appearance';
 
 export interface AppPreferences {
   theme?: 'dark' | 'light' | 'system';
@@ -21,6 +22,7 @@ export interface MindMeshBackupData {
   contacts: Contact[];
   contactCategories?: string[];
   contactRelationships?: string[];
+  appearance?: AppearanceSettings;
   preferences?: AppPreferences;
   statistics?: {
     totalCompletedCount?: number;
@@ -52,6 +54,8 @@ export interface RestoreSummary {
   tipsCount: number;
   shiftsCount: number;
   hasMoneyConfig: boolean;
+  hasAppearance: boolean;
+  appearanceTheme?: string;
   warnings: string[];
 }
 

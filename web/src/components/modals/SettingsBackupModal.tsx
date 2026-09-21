@@ -317,6 +317,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                 <li>Contact book entries, photos & relationships</li>
                 <li>Direct debit bills, categories & notification rules</li>
                 <li>Pay schedule, hourly penalty rates, tips & shifts</li>
+                <li>Appearance: theme, node & connection colours, background, code rain</li>
                 <li>User settings & completion statistics</li>
               </ul>
             </div>
@@ -502,6 +503,16 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                     <strong style={{ fontSize: 16, color: '#f8fafc' }}>
                       {restoreSummary.extraIncomeCount + restoreSummary.shiftsCount}
                     </strong>
+                  </div>
+
+                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155' }}>
+                    <span style={{ color: '#94a3b8', display: 'block' }}>Appearance</span>
+                    <strong style={{ fontSize: 16, color: '#f8fafc', textTransform: 'capitalize' }}>
+                      {restoreSummary.hasAppearance ? restoreSummary.appearanceTheme || 'custom' : 'defaults'}
+                    </strong>
+                    <span style={{ fontSize: 10, color: '#10b981', display: 'block' }}>
+                      ({restoreSummary.hasAppearance ? 'theme included' : 'will use current'})
+                    </span>
                   </div>
                 </div>
 

@@ -71,11 +71,13 @@ export interface MindMeshStorageData {
   contactCategories?: string[];
   contactRelationships?: string[];
   preferences?: Record<string, unknown>;
+  appearance?: import('./appearance').AppearanceSettings;
 }
 
 export * from './finance';
 export * from './contact';
 export * from './backup';
+export * from './appearance';
 
 export type ViewMode = 'active' | 'completed';
 
@@ -104,6 +106,15 @@ export interface MeshNodeData extends Record<string, unknown> {
   linkedBillTitle?: string;
   linkedContactId?: string;
   linkedContactName?: string;
+  // Appearance-resolved theme values (set by the layout generator)
+  accentColor?: string;
+  surfaceColor?: string;
+  surfaceAltColor?: string;
+  textColor?: string;
+  mutedTextColor?: string;
+  borderColor?: string;
+  glowColor?: string;
+  hoverColor?: string;
   onNodeClick?: (nodeId: string, type: string) => void;
   onSubtaskToggle?: (subtaskId: string, reminderId: string) => void;
   onReminderCompleteToggle?: (reminderId: string) => void;

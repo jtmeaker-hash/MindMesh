@@ -2,10 +2,26 @@ import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
 import { Sparkles, CheckCircle2 } from 'lucide-react';
 import { MeshNodeData } from '../../types';
+import { getReadableTextColor, withAlpha } from '../../services/appearance';
 
 export const RootNode = memo(({ data }: NodeProps) => {
   const nodeData = data as unknown as MeshNodeData;
   const isCompleted = nodeData.isCompletedView;
+
+  const accent = nodeData.accentColor || nodeData.color || '#6366f1';
+  const surface = nodeData.surfaceColor || (isCompleted ? '#1e293b' : '#312e81');
+  const surfaceAlt = nodeData.surfaceAltColor || '#0f172a';
+  const text = nodeData.textColor || '#f8fafc';
+  const muted = nodeData.mutedTextColor || withAlpha(accent, 0.85);
+  const glow = nodeData.glowColor || withAlpha(accent, 0.35);
+  const hover = nodeData.hoverColor || accent;
+  const iconColor = getReadableTextColor(surface, accent, '#0b1220');
+
+  const hoverVars = {
+    '--mm-hover': hover,
+    '--mm-glow': withAlpha(accent, 0.4),
+    '--mm-glow-strong': withAlpha(accent, 0.65),
+  } as React.CSSProperties;
 
   return (
     <div
@@ -14,13 +30,9 @@ export const RootNode = memo(({ data }: NodeProps) => {
         width: 104,
         height: 104,
         borderRadius: '50%',
-        background: isCompleted
-          ? 'radial-gradient(circle at 35% 35%, #1e293b, #0f172a)'
-          : 'radial-gradient(circle at 35% 35%, #312e81, #0f172a)',
-        border: `2px solid ${isCompleted ? '#38bdf8' : '#6366f1'}`,
-        boxShadow: isCompleted
-          ? '0 0 24px rgba(56, 189, 248, 0.35), inset 0 0 16px rgba(56, 189, 248, 0.2)'
-          : '0 0 28px rgba(99, 102, 241, 0.4), inset 0 0 16px rgba(99, 102, 241, 0.25)',
+        background: `radial-gradient(circle at 35% 35%, ${surface}, ${surfaceAlt})`,
+        border: `2px solid ${nodeData.borderColor || accent}`,
+        boxShadow: `0 0 28px ${glow}, inset 0 0 16px ${withAlpha(accent, 0.25)}`,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -28,9 +40,9 @@ export const RootNode = memo(({ data }: NodeProps) => {
         cursor: 'pointer',
         position: 'relative',
         userSelect: 'none',
-        transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+        ...hoverVars,
       }}
-      className="root-node-glow"
+      className="root-node-glow mm-node"
     >
       {/* Centered handles for all radial connections */}
       <Handle
@@ -46,9 +58,9 @@ export const RootNode = memo(({ data }: NodeProps) => {
 
       <div style={{ marginBottom: 4 }}>
         {isCompleted ? (
-          <CheckCircle2 size={24} color="#38bdf8" />
+          <CheckCircle2 size={24} color={iconColor} />
         ) : (
-          <Sparkles size={24} color="#818cf8" />
+          <Sparkles size={24} color={iconColor} />
         )}
       </div>
 
@@ -57,7 +69,7 @@ export const RootNode = memo(({ data }: NodeProps) => {
           fontSize: 13,
           fontWeight: 700,
           letterSpacing: '-0.02em',
-          color: '#f8fafc',
+          color: text,
           textAlign: 'center',
           lineHeight: 1.1,
         }}
@@ -69,7 +81,7 @@ export const RootNode = memo(({ data }: NodeProps) => {
         style={{
           fontSize: 10,
           fontWeight: 600,
-          color: isCompleted ? '#94a3b8' : '#a5b4fc',
+          color: muted,
           marginTop: 3,
         }}
       >

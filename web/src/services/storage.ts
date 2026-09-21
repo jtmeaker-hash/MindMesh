@@ -1,12 +1,14 @@
 import { Category, Reminder, NodePositionMap, NodePosition, MindMeshStorageData } from '../types';
 import { MoneyState } from '../types/finance';
 import { Contact } from '../types/contact';
+import { AppearanceSettings } from '../types/appearance';
 import { INITIAL_CATEGORIES, INITIAL_REMINDERS } from '../utils/sampleData';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONSHIPS } from '../utils/sampleContactData';
+import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { logger } from './logger';
 
-export const CURRENT_STORAGE_VERSION = 4;
+export const CURRENT_STORAGE_VERSION = 5;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
@@ -23,6 +25,7 @@ export function getDefaultState(): MindMeshStorageData {
     contacts: INITIAL_CONTACTS,
     contactCategories: INITIAL_CONTACT_CATEGORIES,
     contactRelationships: INITIAL_CONTACT_RELATIONSHIPS,
+    appearance: getDefaultAppearance(),
     preferences: {
       theme: 'dark',
       defaultReminderPriority: 'medium',
@@ -44,7 +47,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       return null;
     }
 
-    logger.info('Storage', 'Migrating legacy v1 storage to v4 schema');
+    logger.info('Storage', 'Migrating legacy v1 storage to v5 schema');
 
     let categories: Category[] = INITIAL_CATEGORIES;
     let reminders: Reminder[] = INITIAL_REMINDERS;
@@ -81,6 +84,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       contacts: INITIAL_CONTACTS,
       contactCategories: INITIAL_CONTACT_CATEGORIES,
       contactRelationships: INITIAL_CONTACT_RELATIONSHIPS,
+      appearance: getDefaultAppearance(),
       preferences: {
         theme: 'dark',
       },
@@ -165,6 +169,8 @@ export function loadAllData(): MindMeshStorageData {
       ? parsed.preferences
       : { theme: 'dark' };
 
+    const appearance: AppearanceSettings = normalizeAppearance(parsed.appearance);
+
     logger.debug('Storage', 'State hydrated successfully', {
       categoryCount: categories.length,
       reminderCount: reminders.length,
@@ -182,6 +188,7 @@ export function loadAllData(): MindMeshStorageData {
       contacts,
       contactCategories,
       contactRelationships,
+      appearance,
       preferences,
     };
   } catch (e) {
@@ -237,6 +244,19 @@ export function loadContactRelationships(): string[] {
 export function saveContactRelationships(contactRelationships: string[]): void {
   const current = loadAllData();
   saveAllData({ ...current, contactRelationships });
+}
+
+/**
+ * Appearance / visual customisation helper methods
+ */
+export function loadAppearance(): AppearanceSettings {
+  const data = loadAllData();
+  return normalizeAppearance(data.appearance);
+}
+
+export function saveAppearance(appearance: AppearanceSettings): void {
+  const current = loadAllData();
+  saveAllData({ ...current, appearance });
 }
 
 /**
@@ -389,6 +409,7 @@ export function importStorageJson(json: string): boolean {
       contacts: Array.isArray(parsed.contacts) ? parsed.contacts : INITIAL_CONTACTS,
       contactCategories: Array.isArray(parsed.contactCategories) ? parsed.contactCategories : INITIAL_CONTACT_CATEGORIES,
       contactRelationships: Array.isArray(parsed.contactRelationships) ? parsed.contactRelationships : INITIAL_CONTACT_RELATIONSHIPS,
+      appearance: normalizeAppearance(parsed.appearance),
       preferences: parsed.preferences || {},
     };
     saveAllData(state);

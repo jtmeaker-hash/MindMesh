@@ -13,6 +13,7 @@ import {
   loadContactCategories,
   loadContactRelationships,
   resetMindMeshEntirely,
+  CURRENT_STORAGE_VERSION,
 } from '../services/storage';
 import { Contact } from '../types/contact';
 import { Reminder } from '../types';
@@ -191,7 +192,7 @@ describe('Complete Backup & Restore System', () => {
 
   it('resets MindMesh entirely to fresh state', () => {
     const resetResult = resetMindMeshEntirely();
-    expect(resetResult.version).toBe(4);
+    expect(resetResult.version).toBe(CURRENT_STORAGE_VERSION);
     expect(resetResult.categories.length).toBeGreaterThan(0);
     expect(resetResult.contacts?.length).toBeGreaterThan(0);
   });

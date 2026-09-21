@@ -2,11 +2,21 @@ import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
 import { Check } from 'lucide-react';
 import { MeshNodeData } from '../../types';
+import { withAlpha } from '../../services/appearance';
 
 export const SubtaskNode = memo(({ data }: NodeProps) => {
   const nodeData = data as unknown as MeshNodeData;
   const isDone = Boolean(nodeData.completed);
-  const color = nodeData.color || '#3b82f6';
+  const color = nodeData.accentColor || nodeData.color || '#3b82f6';
+  const surface = nodeData.surfaceColor || '#111827';
+  const surfaceAlt = nodeData.surfaceAltColor || '#0d131f';
+  const text = nodeData.textColor || '#e2e8f0';
+  const muted = nodeData.mutedTextColor || '#64748b';
+  const hover = nodeData.hoverColor || color;
+
+  const hoverVars = {
+    '--mm-hover': hover,
+  } as React.CSSProperties;
 
   return (
     <div
@@ -20,8 +30,8 @@ export const SubtaskNode = memo(({ data }: NodeProps) => {
         maxWidth: 130,
         padding: '5px 8px',
         borderRadius: 10,
-        background: isDone ? '#0d131f' : '#111827',
-        border: `1px solid ${isDone ? '#334155' : `${color}55`}`,
+        background: isDone ? surfaceAlt : surface,
+        border: `1px solid ${isDone ? nodeData.borderColor || '#334155' : nodeData.borderColor || withAlpha(color, 0.45)}`,
         boxShadow: isDone
           ? '0 1px 4px rgba(0,0,0,0.4)'
           : '0 2px 8px rgba(0,0,0,0.5)',
@@ -31,8 +41,9 @@ export const SubtaskNode = memo(({ data }: NodeProps) => {
         cursor: 'pointer',
         userSelect: 'none',
         opacity: isDone ? 0.65 : 1,
-        transition: 'all 0.15s ease',
+        ...hoverVars,
       }}
+      className="mm-node"
       title="Tap to toggle subtask"
     >
       <Handle
@@ -67,7 +78,7 @@ export const SubtaskNode = memo(({ data }: NodeProps) => {
         style={{
           fontSize: 11,
           fontWeight: 500,
-          color: isDone ? '#64748b' : '#e2e8f0',
+          color: isDone ? muted : text,
           textDecoration: isDone ? 'line-through' : 'none',
           whiteSpace: 'nowrap',
           overflow: 'hidden',
