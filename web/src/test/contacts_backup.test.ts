@@ -76,7 +76,7 @@ describe('Complete Backup & Restore System', () => {
   it('generates a valid backup filename with formatted date and time', () => {
     const testDate = new Date('2026-09-20T14:35:00Z');
     const filename = generateBackupFilename(testDate);
-    expect(filename).toMatch(/^MindMesh-Backup-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
+    expect(filename).toMatch(/^mindmesh-backup-\d{4}-\d{2}-\d{2}-\d{6}\.json$/);
   });
 
   it('creates a complete full backup including all data sections', () => {

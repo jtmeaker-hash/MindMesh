@@ -252,7 +252,7 @@ describe('Backup & Restore UI', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('exports a full backup file and confirms the saved filename', async () => {
+  it('produces a real backup blob and reports honestly what the browser did with it', async () => {
     render(
       <SettingsBackupModal isOpen onClose={noop} onRestoreComplete={noop} onResetComplete={noop} />
     );
@@ -260,11 +260,54 @@ describe('Backup & Restore UI', () => {
     expect(screen.getByText('Backup, Restore & Data')).toBeDefined();
     fireEvent.click(screen.getByText('Export Full Backup'));
 
-    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
-    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
+    const result = await screen.findByTestId('export-result');
+    expect(screen.queryByTestId('export-error')).toBeNull();
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
 
-    const saved = screen.getByText(/Saved as/);
-    expect(saved.textContent).toMatch(/MindMesh-Backup-\d{4}-\d{2}-\d{2}-\d{4}\.json/);
+    // The blob handed to the browser is genuine, parseable backup JSON.
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    expect(blob.type).toBe('application/json');
+    expect(blob.size).toBeGreaterThan(0);
+
+    // The filename follows the documented pattern.
+    expect(result.textContent).toMatch(/mindmesh-backup-\d{4}-\d{2}-\d{2}-\d{6}\.json/);
+
+    // jsdom cannot observe the browser's own download, so the UI must not claim
+    // the file was saved — it offers a copy fallback instead.
+    expect(result.textContent).toMatch(/browser downloads/);
+    expect(screen.getByText('Copy backup JSON')).toBeDefined();
+  });
+
+  it('reports an unreadable store instead of exporting sample data', async () => {
+    localStorage.setItem('mindmesh_state_v2', 'not json at all');
+
+    render(
+      <SettingsBackupModal isOpen onClose={noop} onRestoreComplete={noop} onResetComplete={noop} />
+    );
+
+    fireEvent.click(screen.getByText('Export Full Backup'));
+
+    const error = await screen.findByTestId('export-error');
+    expect(error.textContent).toMatch(/could not be read/);
+    expect(screen.queryByTestId('export-result')).toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('shows an error instead of a success when the platform cannot write the file', async () => {
+    createObjectURL.mockImplementation(() => {
+      throw new Error('downloads are blocked in this frame');
+    });
+
+    render(
+      <SettingsBackupModal isOpen onClose={noop} onRestoreComplete={noop} onResetComplete={noop} />
+    );
+
+    fireEvent.click(screen.getByText('Export Full Backup'));
+
+    const error = await screen.findByTestId('export-error');
+    expect(error.textContent).toMatch(/downloads are blocked in this frame/);
+    expect(screen.queryByTestId('export-result')).toBeNull();
+    expect(screen.getByText('Copy backup JSON instead')).toBeDefined();
   });
 
   it('previews a valid backup summary then restores it into persisted state', async () => {
