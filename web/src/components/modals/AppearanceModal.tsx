@@ -936,9 +936,47 @@ export const AppearanceModal: React.FC<AppearanceModalProps> = ({ isOpen, onClos
             />
             <ToggleRow
               label="Graph rotation cues"
-              hint="Adds subtle perspective response without moving the graph itself"
+              hint="Drag the network to orbit through its actual depth layers"
               checked={appearance.threeD.graphRotation}
               onChange={(graphRotation) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, graphRotation } })}
+            />
+            <SliderRow
+              label="Camera sensitivity"
+              value={appearance.threeD.cameraSensitivity}
+              min={0.25}
+              max={2}
+              step={0.05}
+              display={`${Math.round(appearance.threeD.cameraSensitivity * 100)}%`}
+              onChange={(cameraSensitivity) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, cameraSensitivity } })}
+            />
+            <SliderRow
+              label="Zoom sensitivity"
+              value={appearance.threeD.zoomSensitivity}
+              min={0.25}
+              max={2}
+              step={0.05}
+              display={`${Math.round(appearance.threeD.zoomSensitivity * 100)}%`}
+              onChange={(zoomSensitivity) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, zoomSensitivity } })}
+            />
+            <ToggleRow
+              label="Invert orbit direction"
+              checked={appearance.threeD.invertRotation}
+              onChange={(invertRotation) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, invertRotation } })}
+            />
+            <ToggleRow
+              label="Auto-focus selected nodes"
+              hint="Double-tap a node to travel toward it"
+              checked={appearance.threeD.autoFocus}
+              onChange={(autoFocus) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, autoFocus } })}
+            />
+            <SliderRow
+              label="Connection animation"
+              value={appearance.threeD.connectionAnimationIntensity}
+              min={0}
+              max={1}
+              step={0.05}
+              display={`${Math.round(appearance.threeD.connectionAnimationIntensity * 100)}%`}
+              onChange={(connectionAnimationIntensity) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, connectionAnimationIntensity } })}
             />
           </div>
         )}

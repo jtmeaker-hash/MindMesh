@@ -56,6 +56,11 @@ export const DEFAULT_THREE_D: ThreeDSettings = {
   connectionDepth: 0.7,
   cardDepth: 0.9,
   graphRotation: true,
+  cameraSensitivity: 1,
+  zoomSensitivity: 1,
+  invertRotation: false,
+  connectionAnimationIntensity: 0.35,
+  autoFocus: true,
 };
 
 export function getDefaultAppearance(): AppearanceSettings {
@@ -485,6 +490,16 @@ export function normalizeAppearance(raw: unknown): AppearanceSettings {
       connectionDepth: clampNumber(rawThreeD.connectionDepth, 0, 1.5, defaults.threeD.connectionDepth),
       cardDepth: clampNumber(rawThreeD.cardDepth, 0, 1.5, defaults.threeD.cardDepth),
       graphRotation: pickBoolean(rawThreeD.graphRotation, defaults.threeD.graphRotation),
+      cameraSensitivity: clampNumber(rawThreeD.cameraSensitivity, 0.25, 2, defaults.threeD.cameraSensitivity),
+      zoomSensitivity: clampNumber(rawThreeD.zoomSensitivity, 0.25, 2, defaults.threeD.zoomSensitivity),
+      invertRotation: pickBoolean(rawThreeD.invertRotation, defaults.threeD.invertRotation),
+      connectionAnimationIntensity: clampNumber(
+        rawThreeD.connectionAnimationIntensity,
+        0,
+        1,
+        defaults.threeD.connectionAnimationIntensity,
+      ),
+      autoFocus: pickBoolean(rawThreeD.autoFocus, defaults.threeD.autoFocus),
     },
     showGrid: pickBoolean(source.showGrid, defaults.showGrid),
     gridColor: pickGridColor(source.gridColor, defaults.gridColor),

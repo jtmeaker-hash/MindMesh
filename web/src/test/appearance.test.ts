@@ -75,6 +75,9 @@ describe('Appearance engine', () => {
     expect(appearance.matrix.enabled).toBe(false);
     expect(appearance.threeD.level).toBe('medium');
     expect(appearance.threeD.perspective).toBe(900);
+    expect(appearance.threeD.cameraSensitivity).toBe(1);
+    expect(appearance.threeD.zoomSensitivity).toBe(1);
+    expect(appearance.threeD.autoFocus).toBe(true);
 
     const { nodes } = generateActiveMesh(categories, reminders, null, undefined, undefined, undefined, appearance);
     const categoryNode = nodes.find((n) => n.id === 'cat-work');
@@ -177,6 +180,8 @@ describe('Appearance engine', () => {
     expect(sanitised.showGrid).toBe(true);
     expect(sanitised.threeD.level).toBe('medium');
     expect(sanitised.threeD.perspective).toBe(900);
+    expect(sanitised.threeD.cameraSensitivity).toBe(1);
+    expect(sanitised.threeD.zoomSensitivity).toBe(1);
   });
 
   it('computes readable text and contrast helpers', () => {

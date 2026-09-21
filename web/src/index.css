@@ -67,6 +67,150 @@
   will-change: transform, opacity;
 }
 
+/* Lightweight projected 3D network viewport. World positions remain x/y/z
+   coordinates; SVG only draws their perspective projection, so this does not
+   depend on a heavy 3D engine or a second React runtime. */
+.mm-spatial-graph {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  perspective: var(--mm-perspective);
+  background:
+    radial-gradient(ellipse at 50% 46%, rgba(99, 102, 241, 0.09), transparent 55%),
+    linear-gradient(180deg, rgba(2, 6, 23, 0.12), rgba(2, 6, 23, 0.72));
+  isolation: isolate;
+}
+
+.mm-spatial-graph:active { cursor: grabbing; }
+
+.mm-spatial-connections,
+.mm-spatial-stars {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.mm-spatial-connections { z-index: 1; overflow: visible; }
+.mm-spatial-edge { transition: opacity 180ms ease, stroke-width 180ms ease; }
+.mm-spatial-edge--active {
+  filter: drop-shadow(0 0 5px currentColor);
+  stroke-dasharray: 8 13;
+  animation: mmSpatialPulse calc(1800ms / max(var(--mm-connection-motion), 0.25)) linear infinite;
+}
+
+@keyframes mmSpatialPulse { to { stroke-dashoffset: -42; } }
+
+.mm-spatial-stars {
+  z-index: 0;
+  opacity: 0.5;
+  background-image:
+    radial-gradient(circle at 15% 22%, rgba(148, 163, 184, 0.7) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 74% 35%, rgba(56, 189, 248, 0.55) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 48% 82%, rgba(129, 140, 248, 0.5) 0 1px, transparent 1.5px);
+  background-size: 180px 160px, 240px 220px, 310px 280px;
+  transform: translateZ(-120px) scale(1.2);
+}
+
+.mm-spatial-node {
+  position: absolute;
+  z-index: 2;
+  transform-origin: center;
+  transform-style: preserve-3d;
+  transform-box: fill-box;
+  transition: left 120ms ease-out, top 120ms ease-out, opacity 180ms ease, filter 180ms ease;
+  will-change: left, top, transform;
+  pointer-events: auto;
+}
+
+.mm-spatial-node--selected {
+  z-index: 3000 !important;
+  filter: drop-shadow(0 0 12px rgba(129, 140, 248, 0.9));
+}
+
+.mm-spatial-hud {
+  position: absolute;
+  z-index: 4000;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.mm-spatial-breadcrumb,
+.mm-spatial-actions,
+.mm-spatial-help {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(7, 12, 27, 0.72);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+.mm-spatial-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 700;
+  pointer-events: auto;
+}
+
+.mm-spatial-breadcrumb span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-spatial-breadcrumb small { color: #64748b; font-weight: 600; }
+.mm-spatial-compass { color: var(--mm-accent, #818cf8); font-size: 16px; line-height: 1; }
+
+.mm-spatial-actions {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  pointer-events: auto;
+}
+
+.mm-spatial-actions button {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  color: #cbd5e1;
+  background: transparent;
+  cursor: pointer;
+}
+.mm-spatial-actions button:hover,
+.mm-spatial-actions button:focus-visible { background: rgba(99, 102, 241, 0.32); color: #fff; }
+
+.mm-spatial-help {
+  margin-left: auto;
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #94a3b8;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .mm-spatial-hud { left: 8px; right: 8px; bottom: 8px; flex-wrap: wrap; }
+  .mm-spatial-help { width: 100%; margin-left: 0; text-align: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-spatial-edge--active { animation: none; }
+  .mm-spatial-node { transition: none; }
+}
+
 /* React Flow customizations */
 .react-flow__pane {
   cursor: grab;
@@ -115,6 +259,7 @@
   --mm-shadow-strength: 0.65;
   --mm-glow-strength: 0.55;
   --mm-motion: 0.8;
+  --mm-connection-motion: 0.35;
   --mm-surface-highlight: rgba(255, 255, 255, 0.12);
   --mm-surface-shadow: rgba(0, 0, 0, 0.48);
 }
@@ -123,13 +268,48 @@
   isolation: isolate;
   perspective: var(--mm-perspective);
   transform-style: preserve-3d;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mm-topbar {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 64px;
+  box-sizing: border-box;
+  overflow: visible;
+}
+
+.mm-topbar__left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mm-topbar__right {
+  flex: 0 0 auto;
 }
 
 .mm-graph-stage {
   position: relative;
   perspective: var(--mm-perspective);
   transform-style: preserve-3d;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: radial-gradient(ellipse at center, rgba(99,102,241,0.035), transparent 68%);
+}
+
+.mm-graph-stage > .react-flow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 .mm-module {
@@ -292,6 +472,34 @@
 
 @media (max-width: 760px) {
   .mm-app-shell { --mm-perspective: 1200px; }
+  .mm-topbar {
+    min-height: 0;
+    padding: max(8px, env(safe-area-inset-top, 0px)) 10px 8px !important;
+    gap: 8px;
+    align-items: center;
+  }
+  .mm-topbar__left {
+    gap: 8px !important;
+    overflow: hidden;
+  }
+  .mm-topbar__brand { display: none; }
+  .mm-topbar__right { gap: 5px !important; }
+  .mm-navigation {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    flex-shrink: 1;
+    overflow-x: auto;
+    justify-content: flex-start;
+    border-radius: 16px !important;
+    scrollbar-width: none;
+  }
+  .mm-navigation::-webkit-scrollbar { display: none; }
+  .mm-navigation > button {
+    flex: 0 0 auto;
+    padding: 6px 10px !important;
+    font-size: 12px !important;
+  }
   .mm-module { background-color: rgba(8, 11, 18, 0.96); }
   .mm-node:hover { transform: translateZ(var(--mm-depth-2)) scale(1.015); }
 }

@@ -25,6 +25,11 @@ export interface ThreeDSettings {
   connectionDepth: number;
   cardDepth: number;
   graphRotation: boolean;
+  cameraSensitivity: number;
+  zoomSensitivity: number;
+  invertRotation: boolean;
+  connectionAnimationIntensity: number;
+  autoFocus: boolean;
 }
 
 export type BackgroundImageFit = 'cover' | 'contain';

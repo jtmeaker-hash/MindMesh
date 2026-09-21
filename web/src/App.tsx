@@ -102,6 +102,7 @@ import { AppNavigation } from './components/navigation/AppNavigation';
 import { MoneyModule } from './components/money/MoneyModule';
 import { DashboardModule } from './components/dashboard/DashboardModule';
 import { ContactsModule } from './components/contacts/ContactsModule';
+import { SpatialGraph } from './components/graph/SpatialGraph';
 
 const nodeTypes = {
   rootNode: RootNode,
@@ -164,6 +165,8 @@ function MindMeshFlow() {
   const prevViewModeRef = useRef(viewMode);
   const prevFocusedCatRef = useRef(focusedCategoryId);
   const prevCompletedCatRef = useRef(selectedCompletedCategory?.id);
+  const graphViewportRef = useRef<HTMLDivElement>(null);
+  const lastGraphViewportSizeRef = useRef<{ width: number; height: number } | null>(null);
 
   // Save changes to localStorage
   useEffect(() => {
@@ -313,6 +316,56 @@ function MindMeshFlow() {
     return map;
     // notificationEnvKey intentionally participates: permission changes must refresh badges.
   }, [reminders, notificationSettings, notificationHistory, notificationEnvKey]);
+
+  // React Flow normally observes its parent, but the graph also needs a single
+  // fit after a real viewport change (orientation, safe-area, or toolbar resize).
+  // This observer deliberately does not run during pan/zoom, so it cannot fight
+  // normal user interaction.
+  useEffect(() => {
+    if (mainNavTab !== 'reminders' || appearance.threeD.level !== 'off') return;
+    const viewport = graphViewportRef.current;
+    if (!viewport) return;
+
+    let frame = 0;
+    let settleFrame = 0;
+    lastGraphViewportSizeRef.current = null;
+
+    const fitAfterResize = () => {
+      const rect = viewport.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      if (width <= 0 || height <= 0) return;
+
+      const previous = lastGraphViewportSizeRef.current;
+      if (previous && previous.width === width && previous.height === height) return;
+      lastGraphViewportSizeRef.current = { width, height };
+
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(settleFrame);
+      // ResizeObserver fires after layout, but Android WebView may apply its
+      // orientation/safe-area metrics one frame later. Wait for that settle
+      // without fitting during normal pan/zoom interaction.
+      frame = requestAnimationFrame(() => {
+        settleFrame = requestAnimationFrame(() => {
+          fitView({ padding: 0.18, duration: 300 });
+        });
+      });
+    };
+
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fitAfterResize) : null;
+    observer?.observe(viewport);
+    fitAfterResize();
+    window.addEventListener('resize', fitAfterResize, { passive: true });
+    window.addEventListener('orientationchange', fitAfterResize, { passive: true });
+
+    return () => {
+      observer?.disconnect();
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(settleFrame);
+      window.removeEventListener('resize', fitAfterResize);
+      window.removeEventListener('orientationchange', fitAfterResize);
+    };
+  }, [appearance.threeD.level, fitView, mainNavTab]);
 
   // Handle node interaction
   const handleNodeClick = useCallback(
@@ -710,7 +763,7 @@ function MindMeshFlow() {
       data-3d-level={appearance.threeD.level}
       style={{
         width: '100%',
-        height: '100%',
+        height: '100dvh',
         backgroundColor: '#080B12',
         position: 'relative',
         display: 'flex',
@@ -720,6 +773,7 @@ function MindMeshFlow() {
         '--mm-shadow-strength': appearance.threeD.shadowIntensity,
         '--mm-glow-strength': appearance.threeD.glowIntensity,
         '--mm-motion': appearance.threeD.animationIntensity,
+        '--mm-connection-motion': appearance.threeD.connectionAnimationIntensity,
         '--mm-node-depth': `${Math.round(appearance.threeD.nodeDepth * 28)}px`,
         '--mm-connection-depth': `${Math.round(appearance.threeD.connectionDepth * 18)}px`,
         '--mm-card-depth': `${Math.round(appearance.threeD.cardDepth * 22)}px`,
@@ -792,13 +846,14 @@ function MindMeshFlow() {
 
       {/* TOP HEADER */}
       <header
+        className="mm-topbar"
         style={{
-          position: 'absolute',
+          position: 'relative',
           top: 0,
           left: 0,
           right: 0,
           zIndex: 50,
-          padding: '12px 16px',
+          padding: 'max(12px, env(safe-area-inset-top, 0px)) 16px 12px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -807,7 +862,7 @@ function MindMeshFlow() {
           pointerEvents: 'none',
         }}
       >
-        <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div className="mm-topbar__left" style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
           {selectedCompletedCategory ? (
             <button
               type="button"
@@ -829,7 +884,7 @@ function MindMeshFlow() {
               <ArrowLeft size={16} /> Back to Categories
             </button>
           ) : (
-            <div>
+            <div className="mm-topbar__brand">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <h1
                   style={{
@@ -880,7 +935,7 @@ function MindMeshFlow() {
         </div>
 
         {/* Right Controls */}
-        <div style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="mm-topbar__right" style={{ pointerEvents: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           {/* Auto-Arrange pill if manual positioning is active and on reminders tab */}
           {mainNavTab === 'reminders' && Object.keys(nodePositions).length > 0 && (
             <button
@@ -910,7 +965,13 @@ function MindMeshFlow() {
           {mainNavTab === 'reminders' && (
             <button
               type="button"
-              onClick={() => fitView({ padding: 0.18, duration: 400 })}
+              onClick={() => {
+                if (appearance.threeD.level === 'off') {
+                  fitView({ padding: 0.18, duration: 400 });
+                } else {
+                  window.dispatchEvent(new Event('mindmesh-spatial-home'));
+                }
+              }}
               title="Fit Mesh to Screen"
               style={{
                 width: 36,
@@ -1214,60 +1275,73 @@ function MindMeshFlow() {
           )}
 
           {/* MAIN SPIDERWEB CANVAS */}
-          <div className="mm-graph-stage" style={{ position: 'relative', width: '100%', height: '100%', flex: '1 1 0%', minHeight: 0 }}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onNodeDragStart={handleNodeDragStart}
-              onNodeDragStop={handleNodeDragStop}
-              nodesDraggable={true}
-              nodeTypes={nodeTypes}
-              minZoom={0.25}
-              maxZoom={2.2}
-              proOptions={{ hideAttribution: true }}
-              defaultEdgeOptions={{
-                type: 'default',
-                animated: false,
-              }}
-            >
-              {/* Subtle neural grid background (appearance-controlled) */}
-              {appearance.showGrid && (
-                <Background
-                  variant={BackgroundVariant.Dots}
-                  gap={28}
-                  size={1.5}
-                  color={appearance.gridColor}
+          <div
+            ref={graphViewportRef}
+            className="mm-graph-stage"
+            data-testid="graph-viewport"
+            style={{ position: 'relative', width: '100%', minWidth: 0, flex: '1 1 0%', minHeight: 0 }}
+          >
+            {appearance.threeD.level === 'off' ? (
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeDragStart={handleNodeDragStart}
+                onNodeDragStop={handleNodeDragStop}
+                nodesDraggable={true}
+                nodeTypes={nodeTypes}
+                minZoom={0.25}
+                maxZoom={2.2}
+                proOptions={{ hideAttribution: true }}
+                defaultEdgeOptions={{ type: 'default', animated: false }}
+              >
+                {appearance.showGrid && (
+                  <Background
+                    variant={BackgroundVariant.Dots}
+                    gap={28}
+                    size={1.5}
+                    color={appearance.gridColor}
+                  />
+                )}
+                <Controls
+                  position="bottom-left"
+                  showInteractive={false}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'row',
+                    backgroundColor: '#0F172A',
+                    border: '1px solid #334155',
+                    borderRadius: 10,
+                    overflow: 'hidden',
+                    boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+                    marginBottom: 14,
+                    marginLeft: 14,
+                  }}
                 />
-              )}
-              <Controls
-                position="bottom-left"
-                showInteractive={false}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'row',
-                  backgroundColor: '#0F172A',
-                  border: '1px solid #334155',
-                  borderRadius: 10,
-                  overflow: 'hidden',
-                  boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
-                  marginBottom: 75,
-                  marginLeft: 14,
+              </ReactFlow>
+            ) : (
+              <SpatialGraph
+                nodes={nodes}
+                edges={edges}
+                appearance={appearance}
+                onEmptyClick={() => {
+                  setFocusedCategoryId(null);
+                  setSelectedCompletedCategory(null);
                 }}
               />
-            </ReactFlow>
+            )}
           </div>
 
           {/* BOTTOM NAVIGATION & FLOATING ACTION BUTTON */}
           <div
             style={{
-              position: 'absolute',
-              bottom: 0,
+              position: 'relative',
+              flex: '0 0 auto',
               left: 0,
               right: 0,
               zIndex: 50,
-              padding: '12px 16px 20px 16px',
+              padding: '12px 16px calc(12px + env(safe-area-inset-bottom, 0px)) 16px',
               background: chrome.bottomGradient,
               display: 'flex',
               alignItems: 'center',
@@ -1369,7 +1443,7 @@ function MindMeshFlow() {
 
       {/* CONTACTS SECTION */}
       {mainNavTab === 'contacts' && (
-        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, paddingTop: 0, width: '100%', display: 'flex' }}>
           <ContactsModule
             contacts={contacts}
             onUpdateContacts={(updater) => {
@@ -1408,7 +1482,7 @@ function MindMeshFlow() {
 
       {/* MONEY SECTION */}
       {mainNavTab === 'money' && (
-        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, paddingTop: 0, width: '100%', display: 'flex' }}>
           <MoneyModule
             moneyState={moneyState}
             onUpdateMoneyState={setMoneyState}
@@ -1429,7 +1503,7 @@ function MindMeshFlow() {
 
       {/* DASHBOARD SECTION */}
       {mainNavTab === 'dashboard' && (
-        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, paddingTop: 0, width: '100%', display: 'flex' }}>
           <DashboardModule
             reminders={reminders}
             categories={categories}

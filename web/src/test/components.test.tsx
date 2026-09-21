@@ -11,6 +11,26 @@ describe('App Root Render', () => {
     expect(container).toBeDefined();
     expect(screen.getAllByText('MindMesh').length).toBeGreaterThanOrEqual(1);
   });
+
+  it('keeps the graph in a flex viewport and exposes every primary tab', () => {
+    const { container } = render(<App />);
+    const shell = container.querySelector('.mm-app-shell') as HTMLElement;
+    const graphViewport = screen.getByTestId('graph-viewport');
+    const spatialGraph = screen.getByTestId('spatial-graph');
+    const navigation = screen.getByRole('navigation', { name: 'Primary Navigation' });
+
+    expect(shell.style.height).toBe('100dvh');
+    expect(graphViewport.style.flex).toBe('1 1 0%');
+    expect(graphViewport.style.minHeight).toBe('0px');
+    expect(graphViewport.style.minWidth).toBe('0px');
+    expect(spatialGraph.getAttribute('data-spatial-active')).toBe('true');
+    expect(spatialGraph.querySelectorAll('[data-node-id]').length).toBeGreaterThan(0);
+    expect(navigation.querySelectorAll('button')).toHaveLength(4);
+    expect(screen.getByRole('button', { name: /MindMesh/ })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Contacts/ })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Money/ })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Dashboard/ })).toBeDefined();
+  });
 });
 
 describe('Modal & UI Components', () => {
