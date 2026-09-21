@@ -146,6 +146,7 @@ export const ContactsModule: React.FC<ContactsModuleProps> = ({
 
   return (
     <div
+      className="mm-module contacts-module"
       style={{
         flex: 1,
         width: '100%',

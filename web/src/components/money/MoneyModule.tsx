@@ -238,6 +238,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
 
   return (
     <div
+      className="mm-module money-module"
       style={{
         width: '100%',
         height: '100%',

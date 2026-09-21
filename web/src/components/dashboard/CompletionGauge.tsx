@@ -26,6 +26,7 @@ export const CompletionGauge: React.FC<CompletionGaugeProps> = ({
 
   return (
     <div
+      className="mm-card mm-gauge"
       style={{
         display: 'flex',
         flexDirection: 'column',

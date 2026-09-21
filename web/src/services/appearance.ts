@@ -9,6 +9,8 @@ import {
   ConnectionColorPalette,
   MatrixSettings,
   NodeColorMode,
+  ThreeDSettings,
+  ThreeDEffectsLevel,
   NodeColorPalette,
   ResolvedNodeTheme,
   UISurfaceMode,
@@ -44,6 +46,18 @@ const DEFAULT_MATRIX: MatrixSettings = {
   density: 0.75,
 };
 
+export const DEFAULT_THREE_D: ThreeDSettings = {
+  level: 'medium',
+  perspective: 900,
+  shadowIntensity: 0.65,
+  glowIntensity: 0.55,
+  animationIntensity: 0.8,
+  nodeDepth: 1,
+  connectionDepth: 0.7,
+  cardDepth: 0.9,
+  graphRotation: true,
+};
+
 export function getDefaultAppearance(): AppearanceSettings {
   return {
     version: APPEARANCE_VERSION,
@@ -66,6 +80,7 @@ export function getDefaultAppearance(): AppearanceSettings {
       voidAnimated: true,
     },
     matrix: { ...DEFAULT_MATRIX },
+    threeD: { ...DEFAULT_THREE_D },
     showGrid: true,
     gridColor: 'rgba(99, 102, 241, 0.15)',
   };
@@ -402,11 +417,13 @@ export function normalizeAppearance(raw: unknown): AppearanceSettings {
   const rawBg = (source.background && typeof source.background === 'object' ? source.background : {}) as Record<string, unknown>;
   const rawImage = (rawBg.image && typeof rawBg.image === 'object' ? rawBg.image : {}) as Record<string, unknown>;
   const rawMatrix = (source.matrix && typeof source.matrix === 'object' ? source.matrix : {}) as Record<string, unknown>;
+  const rawThreeD = (source.threeD && typeof source.threeD === 'object' ? source.threeD : {}) as Record<string, unknown>;
 
   const backgroundKinds: BackgroundKind[] = ['default', 'black', 'white', 'void', 'image'];
   const imageFit: BackgroundImageFit[] = ['cover', 'contain'];
   const imagePosition: BackgroundImagePosition[] = ['center', 'top', 'bottom', 'left', 'right'];
   const themeIds: AppearanceThemeId[] = ['default', 'aqua', 'orange', 'matrix', 'custom'];
+  const threeDLevels: ThreeDEffectsLevel[] = ['off', 'low', 'medium', 'high'];
 
   const dataUrl = pickDataUrl(rawImage.dataUrl);
   const requestedKind = pickEnum(rawBg.kind, backgroundKinds, defaults.background.kind);
@@ -457,6 +474,17 @@ export function normalizeAppearance(raw: unknown): AppearanceSettings {
       speed: clampNumber(rawMatrix.speed, 0.25, 3, defaults.matrix.speed),
       opacity: clampNumber(rawMatrix.opacity, 0.05, 1, defaults.matrix.opacity),
       density: clampNumber(rawMatrix.density, 0.05, 1, defaults.matrix.density),
+    },
+    threeD: {
+      level: pickEnum(rawThreeD.level, threeDLevels, defaults.threeD.level),
+      perspective: Math.round(clampNumber(rawThreeD.perspective, 500, 1800, defaults.threeD.perspective)),
+      shadowIntensity: clampNumber(rawThreeD.shadowIntensity, 0, 1, defaults.threeD.shadowIntensity),
+      glowIntensity: clampNumber(rawThreeD.glowIntensity, 0, 1, defaults.threeD.glowIntensity),
+      animationIntensity: clampNumber(rawThreeD.animationIntensity, 0, 1, defaults.threeD.animationIntensity),
+      nodeDepth: clampNumber(rawThreeD.nodeDepth, 0, 1.5, defaults.threeD.nodeDepth),
+      connectionDepth: clampNumber(rawThreeD.connectionDepth, 0, 1.5, defaults.threeD.connectionDepth),
+      cardDepth: clampNumber(rawThreeD.cardDepth, 0, 1.5, defaults.threeD.cardDepth),
+      graphRotation: pickBoolean(rawThreeD.graphRotation, defaults.threeD.graphRotation),
     },
     showGrid: pickBoolean(source.showGrid, defaults.showGrid),
     gridColor: pickGridColor(source.gridColor, defaults.gridColor),

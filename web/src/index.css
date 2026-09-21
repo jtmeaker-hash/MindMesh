@@ -95,3 +95,203 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #475569;
 }
+
+/* -------------------------------------------------------------------------
+   MindMesh spatial surface system
+   ------------------------------------------------------------------------- */
+:root {
+  --mm-depth-0: 0px;
+  --mm-depth-1: 4px;
+  --mm-depth-2: 8px;
+  --mm-depth-3: 14px;
+  --mm-depth-4: 20px;
+  --mm-depth-5: 26px;
+  --mm-depth-6: 34px;
+  --mm-depth-7: 44px;
+  --mm-perspective: 900px;
+  --mm-node-depth: 28px;
+  --mm-connection-depth: 18px;
+  --mm-card-depth: 22px;
+  --mm-shadow-strength: 0.65;
+  --mm-glow-strength: 0.55;
+  --mm-motion: 0.8;
+  --mm-surface-highlight: rgba(255, 255, 255, 0.12);
+  --mm-surface-shadow: rgba(0, 0, 0, 0.48);
+}
+
+.mm-app-shell {
+  isolation: isolate;
+  perspective: var(--mm-perspective);
+  transform-style: preserve-3d;
+}
+
+.mm-graph-stage {
+  position: relative;
+  perspective: var(--mm-perspective);
+  transform-style: preserve-3d;
+  background: radial-gradient(ellipse at center, rgba(99,102,241,0.035), transparent 68%);
+}
+
+.mm-module {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(90% 55% at 50% -10%, rgba(99, 102, 241, 0.08), transparent 70%),
+    rgba(8, 11, 18, 0.92);
+}
+
+.mm-module::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(120deg, rgba(255,255,255,0.035), transparent 30%, transparent 70%, rgba(56,189,248,0.025));
+}
+
+.mm-surface,
+.mm-card,
+.contact-card {
+  position: relative;
+  transform: translateZ(var(--mm-card-depth));
+  transform-style: preserve-3d;
+  box-shadow:
+    0 var(--mm-depth-2) calc(var(--mm-depth-4) * 1.5) rgba(0, 0, 0, calc(var(--mm-shadow-strength) * 0.62)),
+    inset 0 1px 0 var(--mm-surface-highlight),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.24);
+}
+
+.mm-card::before,
+.contact-card::before,
+.mm-node::before {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(145deg, rgba(255,255,255,0.12), transparent 28%, transparent 72%, rgba(0,0,0,0.18));
+  opacity: calc(0.32 * var(--mm-glow-strength));
+  z-index: 0;
+}
+
+.mm-card:hover,
+.contact-card:hover {
+  transform: translateY(-2px) translateZ(var(--mm-depth-3));
+  border-color: var(--mm-hover, rgba(255,255,255,0.28)) !important;
+}
+
+.mm-card:active,
+.contact-card:active,
+.mm-button:active,
+.mm-app-shell button:active {
+  transform: translateY(1px) translateZ(var(--mm-depth-1)) scale(0.985);
+}
+
+.mm-button,
+.mm-app-shell button {
+  transform-style: preserve-3d;
+  transition: transform calc(150ms / max(var(--mm-motion), 0.25)) ease, box-shadow 180ms ease, filter 180ms ease;
+}
+
+.mm-button:hover,
+.mm-app-shell button:hover {
+  filter: brightness(1.08);
+}
+
+.mm-button,
+.mm-app-shell input:not([type='color']):not([type='range']),
+.mm-app-shell select,
+.mm-app-shell textarea {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 4px 12px rgba(0,0,0,0.22);
+}
+
+.mm-app-shell input:focus,
+.mm-app-shell select:focus,
+.mm-app-shell textarea:focus {
+  transform: translateZ(var(--mm-depth-2));
+  outline: 2px solid color-mix(in srgb, var(--mm-accent, #818cf8) 65%, transparent);
+  outline-offset: 1px;
+}
+
+.mm-node {
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  will-change: transform, filter;
+}
+
+.mm-node::after {
+  content: '';
+  position: absolute;
+  inset: 8% 12% auto;
+  height: 28%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(ellipse, rgba(255,255,255,0.22), transparent 70%);
+  mix-blend-mode: screen;
+}
+
+.mm-node:hover {
+  transform: translateY(-3px) translateZ(var(--mm-node-depth)) scale(1.025);
+  filter: brightness(1.08) saturate(1.08);
+}
+
+.react-flow__node {
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+}
+
+.mm-graph-stage .react-flow__renderer {
+  transform-style: preserve-3d;
+}
+
+.react-flow__edge-path {
+  filter: drop-shadow(0 0 3px color-mix(in srgb, currentColor 42%, transparent));
+}
+
+.react-flow__controls {
+  transform: translateZ(var(--mm-depth-4));
+  box-shadow: 0 var(--mm-depth-2) var(--mm-depth-4) rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.1) !important;
+}
+
+@keyframes mmDepthIn {
+  from { opacity: 0; transform: translateY(10px) translateZ(-18px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) translateZ(0) scale(1); }
+}
+
+.mm-depth-enter {
+  animation: mmDepthIn calc(320ms / max(var(--mm-motion), 0.25)) cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.mm-app-shell[data-3d-level='off'] {
+  --mm-node-depth: 0px;
+  --mm-card-depth: 0px;
+  --mm-shadow-strength: 0.18;
+  --mm-glow-strength: 0.08;
+  --mm-motion: 0;
+}
+
+.mm-app-shell[data-3d-level='low'] {
+  --mm-shadow-strength: 0.38;
+  --mm-glow-strength: 0.28;
+}
+
+.mm-app-shell[data-3d-level='high'] {
+  --mm-surface-highlight: rgba(255, 255, 255, 0.17);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --mm-motion: 0; }
+  .mm-app-shell *, .mm-app-shell *::before, .mm-app-shell *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  .mm-node:hover, .mm-card:hover, .contact-card:hover { transform: none; }
+}
+
+@media (max-width: 760px) {
+  .mm-app-shell { --mm-perspective: 1200px; }
+  .mm-module { background-color: rgba(8, 11, 18, 0.96); }
+  .mm-node:hover { transform: translateZ(var(--mm-depth-2)) scale(1.015); }
+}

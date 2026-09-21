@@ -50,6 +50,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
 
   return (
     <div
+      className="mm-module dashboard-module"
       style={{
         width: '100%',
         height: '100%',

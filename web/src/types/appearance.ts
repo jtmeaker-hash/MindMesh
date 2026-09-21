@@ -12,6 +12,20 @@ export type ConnectionColorMode = 'inherit' | 'custom';
 
 /** Controls whether node panels render dark or light for contrast against the background */
 export type UISurfaceMode = 'auto' | 'dark' | 'light';
+export type ThreeDEffectsLevel = 'off' | 'low' | 'medium' | 'high';
+
+/** Lightweight 3D treatment controls shared by the graph and app surfaces. */
+export interface ThreeDSettings {
+  level: ThreeDEffectsLevel;
+  perspective: number;
+  shadowIntensity: number;
+  glowIntensity: number;
+  animationIntensity: number;
+  nodeDepth: number;
+  connectionDepth: number;
+  cardDepth: number;
+  graphRotation: boolean;
+}
 
 export type BackgroundImageFit = 'cover' | 'contain';
 export type BackgroundImagePosition = 'center' | 'top' | 'bottom' | 'left' | 'right';
@@ -75,6 +89,7 @@ export interface AppearanceSettings {
   surfaceMode: UISurfaceMode;
   background: BackgroundSettings;
   matrix: MatrixSettings;
+  threeD: ThreeDSettings;
   showGrid: boolean;
   gridColor: string;
 }

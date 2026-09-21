@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { X, Palette, Droplet, Sparkles, Image as ImageIcon, RotateCcw, Trash2, AlertTriangle } from 'lucide-react';
+import { X, Palette, Droplet, Sparkles, Image as ImageIcon, RotateCcw, Trash2, AlertTriangle, Layers } from 'lucide-react';
 import { AppearanceSettings } from '../../types/appearance';
 import {
   APPEARANCE_PRESETS,
@@ -48,12 +48,13 @@ function downscaleImage(dataUrl: string, maxWidth = 1600, quality = 0.82): Promi
   });
 }
 
-type TabId = 'themes' | 'nodes' | 'background' | 'matrix';
+type TabId = 'themes' | 'nodes' | 'depth' | 'background' | 'matrix';
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'themes', label: 'Themes', icon: <Sparkles size={14} /> },
   { id: 'nodes', label: 'Nodes & Lines', icon: <Palette size={14} /> },
   { id: 'background', label: 'Background', icon: <ImageIcon size={14} /> },
+  { id: 'depth', label: '3D Depth', icon: <Layers size={14} /> },
   { id: 'matrix', label: 'Code Rain', icon: <Droplet size={14} /> },
 ];
 
@@ -390,6 +391,10 @@ export const AppearanceModal: React.FC<AppearanceModalProps> = ({ isOpen, onClos
 
   return (
     <div
+      className="mm-depth-enter"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Appearance settings"
       style={{
         position: 'fixed',
         inset: 0,
@@ -406,6 +411,7 @@ export const AppearanceModal: React.FC<AppearanceModalProps> = ({ isOpen, onClos
       onClick={onClose}
     >
       <div
+        className="mm-card"
         style={{
           backgroundColor: '#0F172A',
           border: `1px solid ${chrome.panelBorder}`,
@@ -872,6 +878,68 @@ export const AppearanceModal: React.FC<AppearanceModalProps> = ({ isOpen, onClos
                 onChange={(gridColor) => patch({ gridColor })}
               />
             )}
+          </div>
+        )}
+
+        {/* 3D DEPTH */}
+        {activeTab === 'depth' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>
+              Lightweight depth layers use CSS transforms, gradients and shadows. They remain readable and battery-friendly on older devices.
+            </div>
+            <Segmented
+              ariaLabel="3D effect quality"
+              value={appearance.threeD.level}
+              onChange={(level) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, level } })}
+              options={[
+                { value: 'off', label: 'Off' },
+                { value: 'low', label: 'Low' },
+                { value: 'medium', label: 'Medium' },
+                { value: 'high', label: 'High' },
+              ]}
+            />
+            <SliderRow
+              label="Perspective strength"
+              value={appearance.threeD.perspective}
+              min={500}
+              max={1800}
+              step={50}
+              display={`${appearance.threeD.perspective}px`}
+              onChange={(perspective) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, perspective } })}
+            />
+            <SliderRow
+              label="Shadow intensity"
+              value={appearance.threeD.shadowIntensity}
+              min={0}
+              max={1}
+              step={0.05}
+              display={`${Math.round(appearance.threeD.shadowIntensity * 100)}%`}
+              onChange={(shadowIntensity) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, shadowIntensity } })}
+            />
+            <SliderRow
+              label="Glow intensity"
+              value={appearance.threeD.glowIntensity}
+              min={0}
+              max={1}
+              step={0.05}
+              display={`${Math.round(appearance.threeD.glowIntensity * 100)}%`}
+              onChange={(glowIntensity) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, glowIntensity } })}
+            />
+            <SliderRow
+              label="Animation intensity"
+              value={appearance.threeD.animationIntensity}
+              min={0}
+              max={1}
+              step={0.05}
+              display={`${Math.round(appearance.threeD.animationIntensity * 100)}%`}
+              onChange={(animationIntensity) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, animationIntensity } })}
+            />
+            <ToggleRow
+              label="Graph rotation cues"
+              hint="Adds subtle perspective response without moving the graph itself"
+              checked={appearance.threeD.graphRotation}
+              onChange={(graphRotation) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, graphRotation } })}
+            />
           </div>
         )}
 

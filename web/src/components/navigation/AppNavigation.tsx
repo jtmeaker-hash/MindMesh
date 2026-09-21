@@ -19,6 +19,7 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
 }) => {
   return (
     <nav
+      className="mm-navigation mm-surface"
       aria-label="Primary Navigation"
       style={{
         display: 'flex',

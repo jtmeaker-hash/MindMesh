@@ -706,6 +706,8 @@ function MindMeshFlow() {
 
   return (
     <div
+      className="mm-app-shell"
+      data-3d-level={appearance.threeD.level}
       style={{
         width: '100%',
         height: '100%',
@@ -714,7 +716,15 @@ function MindMeshFlow() {
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-      }}
+        '--mm-perspective': `${appearance.threeD.perspective}px`,
+        '--mm-shadow-strength': appearance.threeD.shadowIntensity,
+        '--mm-glow-strength': appearance.threeD.glowIntensity,
+        '--mm-motion': appearance.threeD.animationIntensity,
+        '--mm-node-depth': `${Math.round(appearance.threeD.nodeDepth * 28)}px`,
+        '--mm-connection-depth': `${Math.round(appearance.threeD.connectionDepth * 18)}px`,
+        '--mm-card-depth': `${Math.round(appearance.threeD.cardDepth * 22)}px`,
+        '--mm-accent': appearance.nodeColors.root,
+      } as React.CSSProperties}
     >
       {/* APPEARANCE BACKGROUND STACK (base / photo / void / matrix rain) */}
       <AppBackground appearance={appearance} />
@@ -1204,7 +1214,7 @@ function MindMeshFlow() {
           )}
 
           {/* MAIN SPIDERWEB CANVAS */}
-          <div style={{ position: 'relative', width: '100%', height: '100%', flex: '1 1 0%', minHeight: 0 }}>
+          <div className="mm-graph-stage" style={{ position: 'relative', width: '100%', height: '100%', flex: '1 1 0%', minHeight: 0 }}>
             <ReactFlow
               nodes={nodes}
               edges={edges}
@@ -1359,7 +1369,7 @@ function MindMeshFlow() {
 
       {/* CONTACTS SECTION */}
       {mainNavTab === 'contacts' && (
-        <div style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
           <ContactsModule
             contacts={contacts}
             onUpdateContacts={(updater) => {
@@ -1398,7 +1408,7 @@ function MindMeshFlow() {
 
       {/* MONEY SECTION */}
       {mainNavTab === 'money' && (
-        <div style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
           <MoneyModule
             moneyState={moneyState}
             onUpdateMoneyState={setMoneyState}
@@ -1419,7 +1429,7 @@ function MindMeshFlow() {
 
       {/* DASHBOARD SECTION */}
       {mainNavTab === 'dashboard' && (
-        <div style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
+        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, paddingTop: 64, width: '100%', height: '100%', display: 'flex' }}>
           <DashboardModule
             reminders={reminders}
             categories={categories}

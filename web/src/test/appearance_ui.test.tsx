@@ -95,6 +95,20 @@ describe('AppearanceModal', () => {
     expect(lastEmitted(onChange).background.kind).toBe('black');
   });
 
+  it('exposes persisted 3D quality and motion controls', () => {
+    const onChange = renderModal();
+
+    fireEvent.click(screen.getByRole('button', { name: '3D Depth' }));
+    const quality = screen.getByRole('group', { name: '3D effect quality' });
+    expect(quality).toBeDefined();
+    fireEvent.click(screen.getByText('High'));
+    fireEvent.click(screen.getByRole('switch', { name: 'Graph rotation cues' }));
+
+    const updated = lastEmitted(onChange);
+    expect(updated.threeD.level).toBe('high');
+    expect(updated.threeD.graphRotation).toBe(false);
+  });
+
   it('edits node colours and connection colours independently', () => {
     const onChange = renderModal();
 

@@ -88,6 +88,7 @@ export function generateActiveMesh(
     id: 'root',
     type: 'rootNode',
     position: { x: rootX, y: rootY },
+    zIndex: 8,
     data: {
       id: 'root',
       label: 'MindMesh',
@@ -139,6 +140,7 @@ export function generateActiveMesh(
       id: category.id,
       type: 'categoryNode',
       position: { x: catX, y: catY },
+      zIndex: 5,
       data: {
         id: category.id,
         label: category.name,
@@ -206,6 +208,7 @@ export function generateActiveMesh(
           id: reminder.id,
           type: 'reminderNode',
           position: { x: remX, y: remY },
+          zIndex: 3,
           data: {
             id: reminder.id,
             label: reminder.title,
@@ -276,6 +279,7 @@ export function generateActiveMesh(
               id: subtask.id,
               type: 'subtaskNode',
               position: { x: subX, y: subY },
+              zIndex: 1,
               data: {
                 id: subtask.id,
                 label: subtask.title,
@@ -357,6 +361,7 @@ export function generateCompletedOverviewMesh(
     id: 'completed-root',
     type: 'rootNode',
     position: { x: rootX, y: rootY },
+    zIndex: 8,
     data: {
       id: 'completed-root',
       label: 'Completed',
@@ -402,6 +407,7 @@ export function generateCompletedOverviewMesh(
       id: category.id,
       type: 'categoryNode',
       position: { x: catX, y: catY },
+      zIndex: 5,
       data: {
         id: category.id,
         label: category.name,
@@ -477,6 +483,7 @@ export function generateCompletedCategoryMesh(
     id: category.id,
     type: 'categoryNode',
     position: { x: catX, y: catY },
+    zIndex: 5,
     data: {
       id: category.id,
       label: category.name,
@@ -525,6 +532,7 @@ export function generateCompletedCategoryMesh(
       id: reminder.id,
       type: 'reminderNode',
       position: { x: remX, y: remY },
+      zIndex: 3,
       data: {
         id: reminder.id,
         label: reminder.title,
@@ -595,6 +603,7 @@ export function generateCompletedCategoryMesh(
           id: subtask.id,
           type: 'subtaskNode',
           position: { x: subX, y: subY },
+          zIndex: 1,
           data: {
             id: subtask.id,
             label: subtask.title,
