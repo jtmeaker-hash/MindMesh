@@ -2,13 +2,21 @@ import { Category, Reminder, NodePositionMap, NodePosition, MindMeshStorageData 
 import { MoneyState } from '../types/finance';
 import { Contact } from '../types/contact';
 import { AppearanceSettings } from '../types/appearance';
+import {
+  AppNotificationSettings,
+  NotificationHistoryEntry,
+  DEFAULT_NOTIFICATION_SETTINGS,
+  normalizeNotificationSettings,
+  normalizeNotificationHistory,
+} from '../types/notifications';
+import { DiagnosticPreferences, normalizeDiagnosticPreferences } from '../types/diagnostics';
 import { INITIAL_CATEGORIES, INITIAL_REMINDERS } from '../utils/sampleData';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONSHIPS } from '../utils/sampleContactData';
 import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { logger } from './logger';
 
-export const CURRENT_STORAGE_VERSION = 5;
+export const CURRENT_STORAGE_VERSION = 6;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
@@ -26,6 +34,8 @@ export function getDefaultState(): MindMeshStorageData {
     contactCategories: INITIAL_CONTACT_CATEGORIES,
     contactRelationships: INITIAL_CONTACT_RELATIONSHIPS,
     appearance: getDefaultAppearance(),
+    notifications: { ...DEFAULT_NOTIFICATION_SETTINGS },
+    notificationHistory: [],
     preferences: {
       theme: 'dark',
       defaultReminderPriority: 'medium',
@@ -47,7 +57,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       return null;
     }
 
-    logger.info('Storage', 'Migrating legacy v1 storage to v5 schema');
+    logger.info('Storage', `Migrating legacy v1 storage to v${CURRENT_STORAGE_VERSION} schema`);
 
     let categories: Category[] = INITIAL_CATEGORIES;
     let reminders: Reminder[] = INITIAL_REMINDERS;
@@ -85,6 +95,8 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       contactCategories: INITIAL_CONTACT_CATEGORIES,
       contactRelationships: INITIAL_CONTACT_RELATIONSHIPS,
       appearance: getDefaultAppearance(),
+      notifications: { ...DEFAULT_NOTIFICATION_SETTINGS },
+      notificationHistory: [],
       preferences: {
         theme: 'dark',
       },
@@ -171,11 +183,19 @@ export function loadAllData(): MindMeshStorageData {
 
     const appearance: AppearanceSettings = normalizeAppearance(parsed.appearance);
 
+    const notifications: AppNotificationSettings = normalizeNotificationSettings(parsed.notifications);
+
+    const notificationHistory: NotificationHistoryEntry[] = normalizeNotificationHistory(
+      parsed.notificationHistory,
+      notifications.historyLimit
+    );
+
     logger.debug('Storage', 'State hydrated successfully', {
       categoryCount: categories.length,
       reminderCount: reminders.length,
       positionCount: Object.keys(nodePositions).length,
       contactCount: contacts.length,
+      pendingNotifications: notificationHistory.filter((entry) => entry.status === 'pending').length,
     });
 
     return {
@@ -189,11 +209,54 @@ export function loadAllData(): MindMeshStorageData {
       contactCategories,
       contactRelationships,
       appearance,
+      notifications,
+      notificationHistory,
       preferences,
     };
   } catch (e) {
     logger.error('Storage', 'Error reading storage, restoring safe default state', e);
     return getDefaultState();
+  }
+}
+
+export interface StorageReadability {
+  /** False when localStorage itself could not be touched at all. */
+  accessible: boolean;
+  /** True when a payload is stored under the MindMesh key. */
+  hasPayload: boolean;
+  /** True when that payload parses as a JSON object. */
+  readable: boolean;
+  rawBytes: number;
+}
+
+/**
+ * Checks whether the persisted payload can actually be read.
+ *
+ * `loadAllData` deliberately swallows read failures and falls back to sample
+ * defaults so the UI always renders. A backup must not do that: exporting the
+ * defaults over an unreadable store would look like a successful backup of an
+ * empty installation and would quietly overwrite the user's real file.
+ */
+export function inspectStorageReadability(): StorageReadability {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY_V2);
+  } catch (e) {
+    logger.error('Storage', 'Local storage is not accessible for reading', e);
+    return { accessible: false, hasPayload: false, readable: false, rawBytes: 0 };
+  }
+
+  if (!raw) {
+    return { accessible: true, hasPayload: false, readable: false, rawBytes: 0 };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const readable = Boolean(parsed) && typeof parsed === 'object' && !Array.isArray(parsed);
+    return { accessible: true, hasPayload: true, readable, rawBytes: raw.length };
+  } catch (e) {
+    logger.error('Storage', 'Stored MindMesh payload is not valid JSON', e);
+    return { accessible: true, hasPayload: true, readable: false, rawBytes: raw.length };
   }
 }
 
@@ -260,6 +323,31 @@ export function saveAppearance(appearance: AppearanceSettings): void {
 }
 
 /**
+ * Notification settings & history helper methods
+ */
+export function loadNotificationSettings(): AppNotificationSettings {
+  const data = loadAllData();
+  return normalizeNotificationSettings(data.notifications);
+}
+
+export function saveNotificationSettings(notifications: AppNotificationSettings): void {
+  const current = loadAllData();
+  saveAllData({ ...current, notifications: normalizeNotificationSettings(notifications) });
+}
+
+export function loadNotificationHistory(): NotificationHistoryEntry[] {
+  const data = loadAllData();
+  const settings = normalizeNotificationSettings(data.notifications);
+  return normalizeNotificationHistory(data.notificationHistory, settings.historyLimit);
+}
+
+export function saveNotificationHistory(history: NotificationHistoryEntry[]): void {
+  const current = loadAllData();
+  const settings = normalizeNotificationSettings(current.notifications);
+  saveAllData({ ...current, notificationHistory: normalizeNotificationHistory(history, settings.historyLimit) });
+}
+
+/**
  * Preferences helper methods
  */
 export function loadPreferences(): Record<string, unknown> {
@@ -269,6 +357,24 @@ export function loadPreferences(): Record<string, unknown> {
 
 export function savePreferences(preferences: Record<string, unknown>): void {
   const current = loadAllData();
+  saveAllData({ ...current, preferences });
+}
+
+/**
+ * Diagnostics preferences live inside the normal preferences payload so they are
+ * covered by the standard backup/restore path (unlike the log store itself).
+ */
+export function loadDiagnosticPreferences(): DiagnosticPreferences {
+  const prefs = loadPreferences();
+  return normalizeDiagnosticPreferences(prefs.diagnostics);
+}
+
+export function saveDiagnosticPreferences(diagnostics: DiagnosticPreferences): void {
+  const current = loadAllData();
+  const preferences = {
+    ...(current.preferences || {}),
+    diagnostics: normalizeDiagnosticPreferences(diagnostics),
+  };
   saveAllData({ ...current, preferences });
 }
 
@@ -410,6 +516,8 @@ export function importStorageJson(json: string): boolean {
       contactCategories: Array.isArray(parsed.contactCategories) ? parsed.contactCategories : INITIAL_CONTACT_CATEGORIES,
       contactRelationships: Array.isArray(parsed.contactRelationships) ? parsed.contactRelationships : INITIAL_CONTACT_RELATIONSHIPS,
       appearance: normalizeAppearance(parsed.appearance),
+      notifications: normalizeNotificationSettings(parsed.notifications),
+      notificationHistory: normalizeNotificationHistory(parsed.notificationHistory),
       preferences: parsed.preferences || {},
     };
     saveAllData(state);

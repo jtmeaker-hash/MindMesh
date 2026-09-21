@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Trash2,
@@ -7,10 +7,25 @@ import {
   Plus,
   Repeat,
   User,
+  Bell,
+  BellOff,
+  BellRing,
+  AlertTriangle,
 } from 'lucide-react';
 import { Reminder, Category, Priority, Subtask, RecurrenceRule, RecurrenceFrequency, CustomRecurrenceUnit, DirectDebit, ExtraIncome } from '../../types';
 import { Contact } from '../../types/contact';
 import { formatRecurrenceLabel } from '../../services/recurrence';
+import {
+  ADVANCE_PRESETS,
+  AppNotificationSettings,
+  DEFAULT_NOTIFICATION_SETTINGS,
+  NotificationHistoryEntry,
+  SNOOZE_PRESETS,
+  formatAdvanceLabel,
+  formatSnoozeLabel,
+  ReminderNotificationSettings,
+} from '../../types/notifications';
+import { getReminderNotificationStatus } from '../../services/notifications';
 
 const WEEKDAYS = [
   { label: 'S', day: 0, title: 'Sunday' },
@@ -31,6 +46,9 @@ interface ReminderModalProps {
   directDebits?: DirectDebit[];
   extraIncomes?: ExtraIncome[];
   contacts?: Contact[];
+  /** App-level notification defaults and history, used for the notification section. */
+  notificationSettings?: AppNotificationSettings;
+  notificationHistory?: NotificationHistoryEntry[];
   onSave: (reminder: Reminder) => void;
   onDelete?: (reminderId: string) => void;
   onToggleComplete?: (reminderId: string) => void;
@@ -45,6 +63,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   directDebits = [],
   extraIncomes = [],
   contacts = [],
+  notificationSettings = DEFAULT_NOTIFICATION_SETTINGS,
+  notificationHistory = [],
   onSave,
   onDelete,
   onToggleComplete,
@@ -60,6 +80,28 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [linkedBillId, setLinkedBillId] = useState('');
   const [linkedExtraIncomeId, setLinkedExtraIncomeId] = useState('');
   const [linkedContactId, setLinkedContactId] = useState('');
+
+  // Notification state
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    notificationSettings.defaultReminderNotifications
+  );
+  const [notifyAtDueTime, setNotifyAtDueTime] = useState(notificationSettings.defaultNotifyAtDueTime);
+  const [advanceMinutes, setAdvanceMinutes] = useState<number[]>(
+    notificationSettings.defaultAdvanceMinutes > 0 ? [notificationSettings.defaultAdvanceMinutes] : []
+  );
+  const [snoozeMinutes, setSnoozeMinutes] = useState(notificationSettings.defaultSnoozeMinutes);
+  const [customAdvance, setCustomAdvance] = useState('');
+
+  // Latest option lists / defaults, kept in refs so the reset effect below only
+  // runs when the user opens a different reminder — never when a list changes
+  // mid-edit (which would wipe everything already typed).
+  const categoriesRef = useRef(categories);
+  const defaultCategoryIdRef = useRef(defaultCategoryId);
+  const notificationSettingsRef = useRef(notificationSettings);
+
+  categoriesRef.current = categories;
+  defaultCategoryIdRef.current = defaultCategoryId;
+  notificationSettingsRef.current = notificationSettings;
 
   // Recurrence state
   const [recurrenceFreq, setRecurrenceFreq] = useState<RecurrenceFrequency>('none');
@@ -82,6 +124,22 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setLinkedBillId(reminder.linkedBillId || '');
       setLinkedExtraIncomeId(reminder.linkedExtraIncomeId || '');
       setLinkedContactId(reminder.linkedContactId || '');
+
+      // Load notification configuration. Existing reminders that were never
+      // configured start switched off (using the app defaults once enabled) so
+      // upgrading never silently starts notifying about old reminders.
+      const notif = reminder.notifications;
+      const defaults = notificationSettingsRef.current;
+      setNotificationsEnabled(notif?.enabled ?? false);
+      setNotifyAtDueTime(notif?.notifyAtDueTime ?? defaults.defaultNotifyAtDueTime);
+      setAdvanceMinutes(
+        notif
+          ? [...notif.advanceMinutes]
+          : defaults.defaultAdvanceMinutes > 0
+            ? [defaults.defaultAdvanceMinutes]
+            : []
+      );
+      setSnoozeMinutes(notif?.snoozeMinutes ?? defaults.defaultSnoozeMinutes);
 
       // Load recurrence
       if (reminder.recurrence) {
@@ -108,7 +166,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     } else {
       setTitle('');
       setNotes('');
-      setCategoryId(defaultCategoryId || (categories[0]?.id ?? ''));
+      setCategoryId(defaultCategoryIdRef.current || (categoriesRef.current[0]?.id ?? ''));
       setDueDate('');
       setDueTime('');
       setPriority('medium');
@@ -116,14 +174,23 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setLinkedBillId('');
       setLinkedExtraIncomeId('');
       setLinkedContactId('');
+      const defaults = notificationSettingsRef.current;
+      setNotificationsEnabled(defaults.defaultReminderNotifications);
+      setNotifyAtDueTime(defaults.defaultNotifyAtDueTime);
+      setAdvanceMinutes(defaults.defaultAdvanceMinutes > 0 ? [defaults.defaultAdvanceMinutes] : []);
+      setSnoozeMinutes(defaults.defaultSnoozeMinutes);
       setRecurrenceFreq('none');
       setRecurrenceInterval(1);
       setRecurrenceUnit('week');
       setRecurrenceDays([]);
       setEndCondition('never');
     }
+    setCustomAdvance('');
     setNewSubtaskTitle('');
-  }, [reminder, defaultCategoryId, categories, isOpen]);
+    // Deliberately keyed on the reminder and visibility only. Option lists and
+    // app defaults are read through refs so that adding a category (or changing
+    // notification defaults) can never reset a half-filled form.
+  }, [reminder, isOpen]);
 
   if (!isOpen) return null;
 
@@ -201,6 +268,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       linkedBillId: linkedBillId || undefined,
       linkedExtraIncomeId: linkedExtraIncomeId || undefined,
       linkedContactId: linkedContactId || undefined,
+      notifications: buildNotificationSettings(),
       subtasks: subtasks.map((s) => ({
         ...s,
         reminderId: reminder?.id || s.reminderId,
@@ -212,6 +280,45 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   };
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
+
+  const buildNotificationSettings = (): ReminderNotificationSettings => ({
+    enabled: notificationsEnabled,
+    notifyAtDueTime,
+    advanceMinutes: [...advanceMinutes].sort((a, b) => a - b),
+    snoozeMinutes,
+  });
+
+  const toggleAdvance = (minutes: number) => {
+    setAdvanceMinutes((prev) =>
+      prev.includes(minutes) ? prev.filter((m) => m !== minutes) : [...prev, minutes].sort((a, b) => a - b)
+    );
+  };
+
+  const addCustomAdvance = () => {
+    const parsed = Number(customAdvance);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const minutes = Math.round(parsed);
+    setAdvanceMinutes((prev) => (prev.includes(minutes) ? prev : [...prev, minutes].sort((a, b) => a - b)));
+    setCustomAdvance('');
+  };
+
+  const hasSchedule = Boolean(dueDate);
+  const notificationPreview = getReminderNotificationStatus(
+    {
+      ...(reminder ?? {
+        id: 'preview',
+        categoryId,
+        title: title || 'Reminder',
+        priority,
+        completed: false,
+        createdAt: new Date().toISOString(),
+        subtasks: [],
+      }),
+      notifications: buildNotificationSettings(),
+    } as Reminder,
+    notificationSettings,
+    notificationHistory
+  );
 
   const previewRecurrence: RecurrenceRule = {
     frequency: recurrenceFreq,
@@ -534,6 +641,213 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 }}
               />
             </div>
+          </div>
+
+          {/* Notifications */}
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 14,
+              backgroundColor: 'rgba(30, 41, 59, 0.6)',
+              border: `1px solid ${notificationsEnabled ? 'rgba(99, 102, 241, 0.4)' : 'rgba(255,255,255,0.08)'}`,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {notificationsEnabled ? (
+                  <Bell size={15} color="#818cf8" />
+                ) : (
+                  <BellOff size={15} color="#64748b" />
+                )}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>NOTIFICATIONS</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1 }}>
+                    {notificationPreview.label}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setNotificationsEnabled((prev) => !prev)}
+                aria-pressed={notificationsEnabled}
+                style={{
+                  flexShrink: 0,
+                  padding: '6px 12px',
+                  borderRadius: 999,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  backgroundColor: notificationsEnabled ? '#6366f1' : 'rgba(255,255,255,0.08)',
+                  color: notificationsEnabled ? '#ffffff' : '#94a3b8',
+                }}
+              >
+                {notificationsEnabled ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            {notificationsEnabled && (
+              <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {!hasSchedule && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      fontSize: 11,
+                      color: '#f59e0b',
+                      padding: '6px 8px',
+                      borderRadius: 8,
+                      backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                    }}
+                  >
+                    <AlertTriangle size={13} />
+                    <span>Set a due date to schedule notifications for this reminder.</span>
+                  </div>
+                )}
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#cbd5e1', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={notifyAtDueTime}
+                    onChange={(e) => setNotifyAtDueTime(e.target.checked)}
+                    style={{ accentColor: '#6366f1', cursor: 'pointer' }}
+                  />
+                  <span>Notify at the exact due time</span>
+                </label>
+
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                    <BellRing size={12} color="#818cf8" />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>
+                      ADVANCE NOTIFICATIONS ({advanceMinutes.length} selected)
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {ADVANCE_PRESETS.map((preset) => {
+                      const active = advanceMinutes.includes(preset.minutes);
+                      return (
+                        <button
+                          key={preset.minutes}
+                          type="button"
+                          onClick={() => toggleAdvance(preset.minutes)}
+                          style={{
+                            padding: '5px 10px',
+                            borderRadius: 999,
+                            border: active ? '1px solid #6366f1' : '1px solid rgba(255,255,255,0.1)',
+                            backgroundColor: active ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255,255,255,0.04)',
+                            color: active ? '#c7d2fe' : '#94a3b8',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {advanceMinutes.filter((m) => !ADVANCE_PRESETS.some((p) => p.minutes === m)).length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                      {advanceMinutes
+                        .filter((m) => !ADVANCE_PRESETS.some((p) => p.minutes === m))
+                        .map((minutes) => (
+                          <button
+                            key={minutes}
+                            type="button"
+                            onClick={() => toggleAdvance(minutes)}
+                            title="Remove custom advance notification"
+                            style={{
+                              padding: '5px 10px',
+                              borderRadius: 999,
+                              border: '1px solid #6366f1',
+                              backgroundColor: 'rgba(99, 102, 241, 0.25)',
+                              color: '#c7d2fe',
+                              fontSize: 11,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {formatAdvanceLabel(minutes)} ×
+                          </button>
+                        ))}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      // No min/max attributes: an out-of-range value would make the
+                      // browser block the entire form submit. It is validated in
+                      // addCustomAdvance() instead.
+                      placeholder="Custom minutes before"
+                      value={customAdvance}
+                      onChange={(e) => setCustomAdvance(e.target.value)}
+                      style={{
+                        flex: 1,
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        backgroundColor: '#1E293B',
+                        border: '1px solid #334155',
+                        color: '#F8FAFC',
+                        fontSize: 12,
+                        outline: 'none',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={addCustomAdvance}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                        border: '1px solid rgba(99, 102, 241, 0.4)',
+                        color: '#c7d2fe',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#94a3b8', marginBottom: 5 }}>
+                    CUSTOM SNOOZE DURATION
+                  </label>
+                  <select
+                    aria-label="Custom snooze duration"
+                    value={snoozeMinutes}
+                    onChange={(e) => setSnoozeMinutes(Number(e.target.value))}
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      backgroundColor: '#1E293B',
+                      border: '1px solid #334155',
+                      color: '#F8FAFC',
+                      fontSize: 12,
+                      outline: 'none',
+                    }}
+                  >
+                    {SNOOZE_PRESETS.map((preset) => (
+                      <option key={preset.minutes} value={preset.minutes}>
+                        {preset.label}
+                      </option>
+                    ))}
+                    {!SNOOZE_PRESETS.some((p) => p.minutes === snoozeMinutes) && (
+                      <option value={snoozeMinutes}>{formatSnoozeLabel(snoozeMinutes)}</option>
+                    )}
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Recurrence Settings */}

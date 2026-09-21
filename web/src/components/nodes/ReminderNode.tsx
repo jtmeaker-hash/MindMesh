@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Check, ListChecks, Calendar, Repeat, DollarSign, User } from 'lucide-react';
+import { Check, ListChecks, Calendar, Repeat, DollarSign, User, Bell, BellOff, AlertTriangle } from 'lucide-react';
 import { MeshNodeData } from '../../types';
 import { withAlpha } from '../../services/appearance';
 
@@ -26,6 +26,21 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
       : '#10b981';
 
   const hasSubtasks = (nodeData.subtaskCount ?? 0) > 0;
+
+  // Compact notification indicator: never more than a single small glyph.
+  const notificationState = nodeData.notificationState;
+  const notificationBadge =
+    notificationState === 'on'
+      ? { color: '#34d399', icon: <Bell size={10} strokeWidth={2.5} /> }
+      : notificationState === 'permission'
+        ? { color: '#f59e0b', icon: <AlertTriangle size={10} strokeWidth={2.5} /> }
+        : notificationState === 'failed'
+          ? { color: '#ef4444', icon: <AlertTriangle size={10} strokeWidth={2.5} /> }
+          : notificationState === 'unsupported'
+            ? { color: '#64748b', icon: <AlertTriangle size={10} strokeWidth={2.5} /> }
+            : notificationState === 'off'
+              ? { color: '#64748b', icon: <BellOff size={10} strokeWidth={2.5} /> }
+              : null;
 
   return (
     <div
@@ -98,6 +113,26 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
               }}
             >
               <Repeat size={10} strokeWidth={2.5} />
+            </span>
+          )}
+
+          {notificationBadge && (
+            <span
+              title={nodeData.notificationLabel || 'Notification status'}
+              aria-label={nodeData.notificationLabel || 'Notification status'}
+              data-notification-state={notificationState}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 2,
+                color: notificationBadge.color,
+                marginLeft: 2,
+              }}
+            >
+              {notificationBadge.icon}
+              {(nodeData.notificationCount ?? 0) > 0 && notificationState === 'on' && (
+                <span style={{ fontSize: 8, fontWeight: 700 }}>{nodeData.notificationCount}</span>
+              )}
             </span>
           )}
 

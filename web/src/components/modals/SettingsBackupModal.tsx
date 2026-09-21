@@ -10,16 +10,28 @@ import {
   FileCheck,
   RefreshCw,
   Info,
+  Copy,
 } from 'lucide-react';
 import { MindMeshBackupFile, RestoreSummary } from '../../types/backup';
 import {
+  BackupExportResult,
   createBackup,
-  downloadBackupFile,
+  serializeBackup,
+  exportBackup,
+  isEmbeddedFrame,
   validateBackup,
   restoreBackup,
   generateBackupFilename,
 } from '../../services/backup';
 import { resetMindMeshEntirely } from '../../services/storage';
+import { logger } from '../../services/logger';
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
 
 interface SettingsBackupModalProps {
   isOpen: boolean;
@@ -36,7 +48,9 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'backup' | 'restore' | 'reset'>('backup');
   const [exporting, setExporting] = useState(false);
-  const [exportedFilename, setExportedFilename] = useState<string | null>(null);
+  const [exportResult, setExportResult] = useState<BackupExportResult | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [copiedBackup, setCopiedBackup] = useState(false);
 
   // Restore state
   const [restoreSummary, setRestoreSummary] = useState<RestoreSummary | null>(null);
@@ -53,18 +67,51 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Handle Full Export
-  const handleExport = () => {
+  // Handle Full Export: only reports success once the platform confirms the write.
+  const handleExport = async () => {
+    setExporting(true);
+    setExportError(null);
+    setCopiedBackup(false);
+    setExportResult(null);
+
     try {
-      setExporting(true);
       const backup = createBackup();
       const filename = generateBackupFilename(new Date(backup.createdAt));
-      downloadBackupFile(backup, filename);
-      setExportedFilename(filename);
-      setTimeout(() => setExporting(false), 800);
+      const result = await exportBackup(backup, filename);
+
+      if (result.ok) {
+        setExportResult(result);
+      } else {
+        setExportError(result.error || 'The backup file could not be created.');
+      }
     } catch (err) {
-      alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      logger.error('BackupService', 'Backup export threw an unexpected error', err);
+      setExportError(err instanceof Error ? err.message : String(err));
+    } finally {
       setExporting(false);
+    }
+  };
+
+  /** Manual fallback for platforms that block programmatic file downloads. */
+  const handleCopyBackupJson = async () => {
+    try {
+      const json = serializeBackup(createBackup());
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(json);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = json;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        document.body.removeChild(area);
+      }
+      setCopiedBackup(true);
+    } catch (err) {
+      logger.error('BackupService', 'Copying the backup JSON failed', err);
+      setExportError(`Copying the backup JSON failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -322,22 +369,129 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
               </ul>
             </div>
 
-            {exportedFilename && (
+            {exportResult && exportResult.ok && (
               <div
+                data-testid="export-result"
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
+                  flexDirection: 'column',
                   gap: 8,
-                  padding: '10px 14px',
+                  padding: '12px 14px',
                   borderRadius: 12,
-                  backgroundColor: 'rgba(16, 185, 129, 0.12)',
-                  border: '1px solid rgba(16, 185, 129, 0.25)',
-                  color: '#34d399',
+                  backgroundColor: exportResult.unverified
+                    ? 'rgba(245, 158, 11, 0.12)'
+                    : 'rgba(16, 185, 129, 0.12)',
+                  border: `1px solid ${exportResult.unverified ? 'rgba(245, 158, 11, 0.3)' : 'rgba(16, 185, 129, 0.25)'}`,
+                  color: exportResult.unverified ? '#fcd34d' : '#34d399',
                   fontSize: 13,
                 }}
               >
-                <CheckCircle2 size={16} />
-                <span>Saved as <strong>{exportedFilename}</strong></span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {exportResult.unverified ? <Info size={16} /> : <CheckCircle2 size={16} />}
+                  <span>
+                    {exportResult.unverified ? (
+                      <>
+                        Sent <strong>{exportResult.filename}</strong> ({formatBytes(exportResult.bytes)}) to your
+                        browser downloads. If it does not appear, use “Copy backup JSON” below.
+                      </>
+                    ) : (
+                      <>
+                        Saved <strong>{exportResult.filename}</strong> ({formatBytes(exportResult.bytes)}) to the
+                        location you chose.
+                      </>
+                    )}
+                  </span>
+                </div>
+                {exportResult.unverified && isEmbeddedFrame() && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <span style={{ fontSize: 11.5, color: '#fcd34d' }}>
+                      MindMesh is running inside another page, which can block save dialogs and
+                      downloads. Open it in its own tab and export again.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => window.open(window.location.href, '_blank', 'noopener')}
+                      style={{
+                        alignSelf: 'flex-start',
+                        padding: '6px 12px',
+                        borderRadius: 9,
+                        border: '1px solid rgba(245, 158, 11, 0.5)',
+                        backgroundColor: 'rgba(245, 158, 11, 0.16)',
+                        color: '#fcd34d',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Open MindMesh in a new tab
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleCopyBackupJson}
+                  style={{
+                    alignSelf: 'flex-start',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 12px',
+                    borderRadius: 9,
+                    border: '1px solid rgba(148, 163, 184, 0.35)',
+                    backgroundColor: 'rgba(148, 163, 184, 0.12)',
+                    color: copiedBackup ? '#34d399' : '#cbd5e1',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Copy size={13} />
+                  <span>{copiedBackup ? 'Copied backup JSON' : 'Copy backup JSON'}</span>
+                </button>
+              </div>
+            )}
+
+            {exportError && (
+              <div
+                data-testid="export-error"
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                  padding: '12px 14px',
+                  borderRadius: 12,
+                  backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  color: '#f87171',
+                  fontSize: 13,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <AlertTriangle size={16} />
+                  <span>{exportError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyBackupJson}
+                  style={{
+                    alignSelf: 'flex-start',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 12px',
+                    borderRadius: 9,
+                    border: '1px solid rgba(148, 163, 184, 0.35)',
+                    backgroundColor: 'rgba(148, 163, 184, 0.12)',
+                    color: copiedBackup ? '#34d399' : '#cbd5e1',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Copy size={13} />
+                  <span>{copiedBackup ? 'Copied backup JSON' : 'Copy backup JSON instead'}</span>
+                </button>
               </div>
             )}
 
@@ -363,7 +517,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
               }}
             >
               <Download size={18} />
-              <span>{exporting ? 'Generating Backup...' : 'Export Full Backup'}</span>
+              <span>{exporting ? 'Creating backup file...' : 'Export Full Backup'}</span>
             </button>
           </div>
         )}
@@ -418,7 +572,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                   {restoreSummary ? 'Select Different Backup File' : 'Choose MindMesh Backup File'}
                 </span>
                 <span style={{ fontSize: 11, color: '#64748b' }}>
-                  Supports MindMesh-Backup-*.json
+                  Supports mindmesh-backup-*.json
                 </span>
               </button>
             </div>
@@ -512,6 +666,30 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                     </strong>
                     <span style={{ fontSize: 10, color: '#10b981', display: 'block' }}>
                       ({restoreSummary.hasAppearance ? 'theme included' : 'will use current'})
+                    </span>
+                  </div>
+
+                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155' }}>
+                    <span style={{ color: '#94a3b8', display: 'block' }}>Notifications</span>
+                    <strong style={{ fontSize: 16, color: '#f8fafc' }}>
+                      {restoreSummary.hasNotifications
+                        ? restoreSummary.notificationHistoryCount
+                        : 'defaults'}
+                    </strong>
+                    <span style={{ fontSize: 10, color: '#10b981', display: 'block' }}>
+                      {restoreSummary.hasNotifications
+                        ? `(${restoreSummary.scheduledNotificationsCount} scheduled)`
+                        : '(settings will use defaults)'}
+                    </span>
+                  </div>
+
+                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155' }}>
+                    <span style={{ color: '#94a3b8', display: 'block' }}>Diagnostic Logs</span>
+                    <strong style={{ fontSize: 16, color: '#f8fafc' }}>
+                      {restoreSummary.diagnosticLogCount}
+                    </strong>
+                    <span style={{ fontSize: 10, color: '#10b981', display: 'block' }}>
+                      {restoreSummary.hasDiagnosticLogs ? '(included)' : '(not included — privacy default)'}
                     </span>
                   </div>
                 </div>

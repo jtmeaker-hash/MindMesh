@@ -24,6 +24,9 @@ import {
   Settings,
   Palette,
   X,
+  Bell,
+  Activity,
+  AlertTriangle,
 } from 'lucide-react';
 
 import {
@@ -36,8 +39,21 @@ import {
   MoneyState,
   Contact,
   AppearanceSettings,
+  AppNotificationSettings,
+  NotificationHistoryEntry,
 } from './types';
 import { getChromeTheme } from './services/appearance';
+import {
+  configureNotificationEngine,
+  cancelReminderNotifications,
+  getReminderNotificationStatus,
+  initNotificationEnvironment,
+  attachNativeBridgeHandlers,
+  subscribeNotificationEngine,
+} from './services/notifications';
+import { runStartupSelfCheck } from './services/diagnostics';
+import { OPEN_DIAGNOSTICS_FLAG, recordStartup } from './services/diagnosticsStore';
+import { logger } from './services/logger';
 import {
   loadCategories,
   saveCategories,
@@ -58,6 +74,10 @@ import {
   saveContactRelationships,
   loadAppearance,
   saveAppearance,
+  loadNotificationSettings,
+  saveNotificationSettings,
+  loadNotificationHistory,
+  saveNotificationHistory,
   loadAllData,
 } from './utils/storage';
 import { generateActiveMesh, generateCompletedOverviewMesh, generateCompletedCategoryMesh } from './utils/layout';
@@ -74,6 +94,8 @@ import { CategoryActionsSheet } from './components/modals/CategoryActionsSheet';
 import { QuickAddModal } from './components/modals/QuickAddModal';
 import { SettingsBackupModal } from './components/modals/SettingsBackupModal';
 import { AppearanceModal } from './components/modals/AppearanceModal';
+import { NotificationsModal } from './components/notifications/NotificationsModal';
+import { DiagnosticsModal } from './components/diagnostics/DiagnosticsModal';
 import { AppBackground } from './components/background/AppBackground';
 
 import { AppNavigation } from './components/navigation/AppNavigation';
@@ -98,6 +120,12 @@ function MindMeshFlow() {
   const [contactCategories, setContactCategories] = useState<string[]>(() => loadContactCategories());
   const [contactRelationships, setContactRelationships] = useState<string[]>(() => loadContactRelationships());
   const [appearance, setAppearance] = useState<AppearanceSettings>(() => loadAppearance());
+  const [notificationSettings, setNotificationSettings] = useState<AppNotificationSettings>(() =>
+    loadNotificationSettings()
+  );
+  const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryEntry[]>(() =>
+    loadNotificationHistory()
+  );
 
   // Navigation state
   const [mainNavTab, setMainNavTab] = useState<AppNavTab>('reminders');
@@ -118,6 +146,12 @@ function MindMeshFlow() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [backupModalOpen, setBackupModalOpen] = useState(false);
   const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
+  const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
+  const [diagnosticsModalOpen, setDiagnosticsModalOpen] = useState(false);
+  const [startupNotice, setStartupNotice] = useState<string | null>(null);
+  // Bumped only when the notification environment changes (never on every sweep),
+  // so the graph is not re-rendered by the scheduling engine.
+  const [notificationEnvKey, setNotificationEnvKey] = useState('');
 
   // React Flow graph state
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<MeshNodeData>>([]);
@@ -164,7 +198,121 @@ function MindMeshFlow() {
     saveAppearance(appearance);
   }, [appearance]);
 
+  useEffect(() => {
+    saveNotificationSettings(notificationSettings);
+  }, [notificationSettings]);
+
+  useEffect(() => {
+    saveNotificationHistory(notificationHistory);
+  }, [notificationHistory]);
+
   const chrome = useMemo(() => getChromeTheme(appearance), [appearance]);
+
+  // ---------------------------------------------------------------------
+  // Notifications engine (lives outside React; no re-render while animating)
+  // ---------------------------------------------------------------------
+
+  useEffect(() => {
+    const environment = initNotificationEnvironment();
+    attachNativeBridgeHandlers();
+    setNotificationEnvKey(`${environment.platform}:${environment.permission}`);
+
+    return subscribeNotificationEngine((state) => {
+      setNotificationEnvKey(`${state.platform}:${state.permission}`);
+    });
+  }, []);
+
+  // If the crash screen asked for diagnostics, open the panel straight away.
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(OPEN_DIAGNOSTICS_FLAG) === '1') {
+        sessionStorage.removeItem(OPEN_DIAGNOSTICS_FLAG);
+        setStartupNotice('MindMesh recovered from an earlier error. Showing diagnostics.');
+        setDiagnosticsModalOpen(true);
+      }
+    } catch {
+      // sessionStorage unavailable: the options menu still exposes Diagnostics.
+    }
+  }, []);
+
+  useEffect(() => {
+    logger.info('App', 'MindMesh started', {
+      categories: categories.length,
+      reminders: reminders.length,
+      contacts: contacts.length,
+    });
+  }, []);
+
+  // Startup self-check: deliberately delayed and non-blocking so launch is never
+  // measurably slower. Minor warnings stay quiet; genuine failures raise a banner.
+  useEffect(() => {
+    let cancelled = false;
+    runStartupSelfCheck()
+      .then((result) => {
+        if (cancelled) return;
+        recordStartup({
+          passed: result.summary.passed,
+          warnings: result.summary.warnings,
+          failed: result.summary.failed,
+        });
+        if (result.bannerMessage) {
+          setStartupNotice(result.bannerMessage);
+          logger.warn('App', 'Startup self-check found issues', {
+            failed: result.summary.failed,
+            warnings: result.summary.warnings,
+          });
+        }
+      })
+      .catch((err) => {
+        logger.error('App', 'Startup self-check failed to run', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleOpenReminderById = useCallback(
+    (remId: string) => {
+      const target = reminders.find((r) => r.id === remId);
+      if (!target) {
+        logger.warn('Notifications', 'Notification opened for a reminder that no longer exists', {
+          reminderId: remId,
+        });
+        return;
+      }
+      setMainNavTab('reminders');
+      setActiveReminder(target);
+      setReminderModalOpen(true);
+    },
+    [reminders]
+  );
+
+  useEffect(() => {
+    configureNotificationEngine({
+      reminders,
+      settings: notificationSettings,
+      history: notificationHistory,
+      onHistoryChange: setNotificationHistory,
+      onOpenReminder: handleOpenReminderById,
+      onCompleteReminder: (remId) => {
+        setReminders((prev) => handleReminderCompletion(remId, prev));
+      },
+      onActionError: (message) => {
+        logger.warn('Notifications', 'Notification action failed', { message });
+      },
+    });
+  }, [reminders, notificationSettings, notificationHistory, handleOpenReminderById]);
+
+  // Compact per-reminder notification status for the mesh node badges.
+  const notificationStatusMap = useMemo(() => {
+    const map: Record<string, { status: 'off' | 'on' | 'permission' | 'failed' | 'unsupported'; label: string; count: number }> = {};
+    for (const reminder of reminders) {
+      const status = getReminderNotificationStatus(reminder, notificationSettings, notificationHistory);
+      map[reminder.id] = { status: status.status, label: status.label, count: status.pendingCount };
+    }
+    return map;
+    // notificationEnvKey intentionally participates: permission changes must refresh badges.
+  }, [reminders, notificationSettings, notificationHistory, notificationEnvKey]);
 
   // Handle node interaction
   const handleNodeClick = useCallback(
@@ -225,7 +373,18 @@ function MindMeshFlow() {
 
   // Quick toggle reminder complete
   const handleReminderCompleteToggle = useCallback((reminderId: string) => {
-    setReminders((prev) => handleReminderCompletion(reminderId, prev));
+    setReminders((prev) => {
+      const next = handleReminderCompletion(reminderId, prev);
+      const updated = next.find((r) => r.id === reminderId);
+      logger.info('Reminders', 'Reminder completion toggled', {
+        reminderId,
+        completed: updated?.completed ?? false,
+        recurring: Boolean(updated?.recurrence && updated.recurrence.frequency !== 'none'),
+      });
+      return next;
+    });
+    // Completing a reminder must stop its remaining scheduled notifications.
+    cancelReminderNotifications(reminderId);
   }, []);
 
   // Node Drag Handlers (Manual Reorganization)
@@ -317,7 +476,8 @@ function MindMeshFlow() {
         },
         nodePositions,
         contacts,
-        appearance
+        appearance,
+        notificationStatusMap
       );
     } else {
       // Completed mode
@@ -330,7 +490,8 @@ function MindMeshFlow() {
           },
           nodePositions,
           contacts,
-          appearance
+          appearance,
+          notificationStatusMap
         );
       } else {
         graph = generateCompletedOverviewMesh(
@@ -376,6 +537,7 @@ function MindMeshFlow() {
     selectedCompletedCategory,
     contacts,
     appearance,
+    notificationStatusMap,
     handleNodeClick,
     handleSubtaskToggle,
     handleReminderCompleteToggle,
@@ -432,15 +594,43 @@ function MindMeshFlow() {
     setReminders((prev) => {
       const idx = prev.findIndex((r) => r.id === rem.id);
       if (idx >= 0) {
+        const previous = prev[idx];
         const next = [...prev];
         next[idx] = rem;
+        if (previous.completed !== rem.completed) {
+          logger.info('Reminders', 'Reminder completion state changed by edit', {
+            reminderId: rem.id,
+            completed: rem.completed,
+          });
+          cancelReminderNotifications(rem.id);
+        } else if (previous.dueDate !== rem.dueDate || previous.dueTime !== rem.dueTime) {
+          logger.info('Reminders', 'Reminder rescheduled', {
+            reminderId: rem.id,
+            from: `${previous.dueDate ?? 'none'} ${previous.dueTime ?? ''}`.trim(),
+            to: `${rem.dueDate ?? 'none'} ${rem.dueTime ?? ''}`.trim(),
+          });
+        } else {
+          logger.info('Reminders', 'Reminder edited', {
+            reminderId: rem.id,
+            notificationsEnabled: rem.notifications?.enabled === true,
+          });
+        }
         return next;
       }
+      logger.info('Reminders', 'Reminder created', {
+        categoryId: rem.categoryId,
+        hasDueDate: Boolean(rem.dueDate),
+        notificationsEnabled: rem.notifications?.enabled === true,
+        advanceCount: rem.notifications?.advanceMinutes.length ?? 0,
+      });
       return [rem, ...prev];
     });
   };
 
   const handleDeleteReminder = (remId: string) => {
+    logger.info('Reminders', 'Reminder deleted', { reminderId: remId });
+    // Cancel every notification still scheduled for this reminder.
+    cancelReminderNotifications(remId);
     setReminders((prev) => prev.filter((r) => r.id !== remId));
 
     // Clean up node position
@@ -495,6 +685,12 @@ function MindMeshFlow() {
     setContactCategories(full.contactCategories || loadContactCategories());
     setContactRelationships(full.contactRelationships || loadContactRelationships());
     setAppearance(full.appearance || loadAppearance());
+
+    // Restored notification settings/history are picked up by the engine effect,
+    // which re-schedules everything against the restored reminders.
+    setNotificationSettings(full.notifications || loadNotificationSettings());
+    setNotificationHistory(full.notificationHistory || loadNotificationHistory());
+
     setFocusedCategoryId(null);
     setSelectedCompletedCategory(null);
     setMenuOpen(false);
@@ -522,6 +718,67 @@ function MindMeshFlow() {
     >
       {/* APPEARANCE BACKGROUND STACK (base / photo / void / matrix rain) */}
       <AppBackground appearance={appearance} />
+
+      {/* STARTUP SELF-CHECK BANNER (only shown for genuine problems) */}
+      {startupNotice && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            top: 70,
+            left: 16,
+            right: 16,
+            zIndex: 60,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            padding: '9px 12px',
+            borderRadius: 12,
+            backgroundColor: 'rgba(245, 158, 11, 0.14)',
+            border: '1px solid rgba(245, 158, 11, 0.4)',
+            backdropFilter: 'blur(8px)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <AlertTriangle size={15} color="#f59e0b" />
+            <span style={{ fontSize: 12.5, color: '#fcd34d' }}>{startupNotice}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => setDiagnosticsModalOpen(true)}
+              style={{
+                padding: '5px 11px',
+                borderRadius: 999,
+                border: '1px solid rgba(245, 158, 11, 0.5)',
+                backgroundColor: 'rgba(245, 158, 11, 0.18)',
+                color: '#fcd34d',
+                fontSize: 11.5,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              View Diagnostics
+            </button>
+            <button
+              type="button"
+              onClick={() => setStartupNotice(null)}
+              aria-label="Dismiss system warning"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#fcd34d',
+                cursor: 'pointer',
+                padding: 4,
+                display: 'flex',
+              }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* TOP HEADER */}
       <header
@@ -601,6 +858,7 @@ function MindMeshFlow() {
             currentTab={mainNavTab}
             onSelectTab={(tab) => {
               setMainNavTab(tab);
+              logger.debug('Navigation', 'Switched tab', { tab });
               if (tab === 'reminders') {
                 setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50);
               }
@@ -730,6 +988,30 @@ function MindMeshFlow() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setNotificationsModalOpen(true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    color: '#a5b4fc',
+                    fontSize: 13,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Bell size={15} color="#818cf8" />
+                  <span>Notifications</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleResetLayout}
                   style={{
                     display: 'flex',
@@ -773,6 +1055,30 @@ function MindMeshFlow() {
                   }}
                 >
                   <span>Backup & Restore Data</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setDiagnosticsModalOpen(true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    color: '#a5b4fc',
+                    fontSize: 13,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Activity size={15} color="#818cf8" />
+                  <span>Diagnostics</span>
                 </button>
                 <button
                   type="button"
@@ -1145,6 +1451,8 @@ function MindMeshFlow() {
         directDebits={moneyState.directDebits}
         extraIncomes={moneyState.extraIncomeList}
         contacts={contacts}
+        notificationSettings={notificationSettings}
+        notificationHistory={notificationHistory}
         onSave={handleSaveReminder}
         onDelete={handleDeleteReminder}
         onToggleComplete={handleReminderCompleteToggle}
@@ -1205,6 +1513,33 @@ function MindMeshFlow() {
         onClose={() => setAppearanceModalOpen(false)}
         appearance={appearance}
         onChange={setAppearance}
+      />
+
+      <NotificationsModal
+        isOpen={notificationsModalOpen}
+        onClose={() => setNotificationsModalOpen(false)}
+        settings={notificationSettings}
+        onChange={setNotificationSettings}
+        history={notificationHistory}
+        onChangeHistory={setNotificationHistory}
+        onOpenReminder={(remId) => {
+          setNotificationsModalOpen(false);
+          handleOpenReminderById(remId);
+        }}
+        onOpenDiagnostics={() => {
+          setNotificationsModalOpen(false);
+          setDiagnosticsModalOpen(true);
+        }}
+      />
+
+      <DiagnosticsModal
+        isOpen={diagnosticsModalOpen}
+        onClose={() => setDiagnosticsModalOpen(false)}
+        startupNotice={startupNotice ?? undefined}
+        onOpenBackup={() => {
+          setDiagnosticsModalOpen(false);
+          setBackupModalOpen(true);
+        }}
       />
     </div>
   );

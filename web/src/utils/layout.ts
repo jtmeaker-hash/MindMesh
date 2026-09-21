@@ -31,6 +31,28 @@ function nodeTheme(
   };
 }
 
+export interface NodeNotificationStatus {
+  status: 'off' | 'on' | 'permission' | 'failed' | 'unsupported';
+  label: string;
+  count: number;
+}
+
+/** Optional per-reminder notification status map, keyed by reminder id. */
+export type NotificationStatusMap = Record<string, NodeNotificationStatus>;
+
+function notificationFields(
+  reminderId: string,
+  notificationStatus?: NotificationStatusMap
+): Pick<MeshNodeData, 'notificationState' | 'notificationLabel' | 'notificationCount'> {
+  const entry = notificationStatus?.[reminderId];
+  if (!entry) return {};
+  return {
+    notificationState: entry.status,
+    notificationLabel: entry.label,
+    notificationCount: entry.count,
+  };
+}
+
 export function generateActiveMesh(
   categories: Category[],
   reminders: Reminder[],
@@ -42,7 +64,8 @@ export function generateActiveMesh(
   },
   manualPositions?: NodePositionMap,
   contacts?: Contact[],
-  appearance?: AppearanceSettings
+  appearance?: AppearanceSettings,
+  notificationStatus?: NotificationStatusMap
 ): GraphElements {
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
@@ -208,6 +231,7 @@ export function generateActiveMesh(
             isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId),
             linkedContactId: reminder.linkedContactId,
             linkedContactName: linkedContact ? (linkedContact.displayName || linkedContact.fullName) : undefined,
+            ...notificationFields(reminder.id, notificationStatus),
             manuallyPositioned: Boolean(manualRem?.manuallyPositioned),
             onNodeClick: callbacks?.onNodeClick,
             onReminderCompleteToggle: callbacks?.onReminderCompleteToggle,
@@ -425,7 +449,8 @@ export function generateCompletedCategoryMesh(
   },
   manualPositions?: NodePositionMap,
   contacts?: Contact[],
-  appearance?: AppearanceSettings
+  appearance?: AppearanceSettings,
+  notificationStatus?: NotificationStatusMap
 ): GraphElements {
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
@@ -525,6 +550,7 @@ export function generateCompletedCategoryMesh(
         isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId),
         linkedContactId: reminder.linkedContactId,
         linkedContactName: linkedContact ? (linkedContact.displayName || linkedContact.fullName) : undefined,
+        ...notificationFields(reminder.id, notificationStatus),
         isCompletedView: true,
         manuallyPositioned: Boolean(manualRem?.manuallyPositioned),
         onNodeClick: callbacks?.onNodeClick,

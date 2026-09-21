@@ -21,7 +21,11 @@ class GreetingScreenshotTest {
 
   @Test
   fun mindmesh_screenshot() {
-    composeTestRule.setContent { MyApplicationTheme { MindMeshApp() } }
+    // The notification bridge is optional: without it the WebView simply has no
+    // window.MindMeshNotifications object, which the web layer detects as unsupported.
+    composeTestRule.setContent {
+      MyApplicationTheme { MindMeshApp(notificationBridge = null, onWebViewReady = {}) }
+    }
 
     composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/greeting.png")
   }

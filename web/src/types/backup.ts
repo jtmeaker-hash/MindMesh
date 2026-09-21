@@ -2,6 +2,8 @@ import { Category, Reminder, NodePositionMap } from './index';
 import { MoneyState } from './finance';
 import { Contact } from './contact';
 import { AppearanceSettings } from './appearance';
+import { AppNotificationSettings, NotificationHistoryEntry } from './notifications';
+import { DiagnosticPreferences, DiagnosticsHistoryEntry, LogEntry } from './diagnostics';
 
 export interface AppPreferences {
   theme?: 'dark' | 'light' | 'system';
@@ -23,7 +25,18 @@ export interface MindMeshBackupData {
   contactCategories?: string[];
   contactRelationships?: string[];
   appearance?: AppearanceSettings;
+  notifications?: AppNotificationSettings;
+  notificationHistory?: NotificationHistoryEntry[];
   preferences?: AppPreferences;
+  /**
+   * Diagnostics preferences always travel with a backup. Logs themselves are
+   * only included when the user opts in (see DiagnosticPreferences).
+   */
+  diagnostics?: {
+    preferences: DiagnosticPreferences;
+    logs?: LogEntry[];
+    history?: DiagnosticsHistoryEntry[];
+  };
   statistics?: {
     totalCompletedCount?: number;
     lastResetAt?: string;
@@ -56,6 +69,12 @@ export interface RestoreSummary {
   hasMoneyConfig: boolean;
   hasAppearance: boolean;
   appearanceTheme?: string;
+  hasNotifications: boolean;
+  notificationHistoryCount: number;
+  scheduledNotificationsCount: number;
+  hasDiagnosticLogs: boolean;
+  diagnosticLogCount: number;
+  diagnosticsPreferences?: DiagnosticPreferences;
   warnings: string[];
 }
 

@@ -40,6 +40,10 @@ export interface Reminder {
   linkedBillId?: string;
   linkedExtraIncomeId?: string;
   linkedContactId?: string;
+  /** Optional per-reminder notification configuration (see types/notifications). */
+  notifications?: import('./notifications').ReminderNotificationSettings;
+  /** Set while a notification for this reminder is snoozed. */
+  snoozeUntil?: string;
 }
 
 export interface Category {
@@ -72,12 +76,16 @@ export interface MindMeshStorageData {
   contactRelationships?: string[];
   preferences?: Record<string, unknown>;
   appearance?: import('./appearance').AppearanceSettings;
+  notifications?: import('./notifications').AppNotificationSettings;
+  notificationHistory?: import('./notifications').NotificationHistoryEntry[];
 }
 
 export * from './finance';
 export * from './contact';
 export * from './backup';
 export * from './appearance';
+export * from './notifications';
+export * from './diagnostics';
 
 export type ViewMode = 'active' | 'completed';
 
@@ -106,6 +114,10 @@ export interface MeshNodeData extends Record<string, unknown> {
   linkedBillTitle?: string;
   linkedContactId?: string;
   linkedContactName?: string;
+  /** Compact notification indicator data for the node badge. */
+  notificationState?: 'off' | 'on' | 'permission' | 'failed' | 'unsupported';
+  notificationLabel?: string;
+  notificationCount?: number;
   // Appearance-resolved theme values (set by the layout generator)
   accentColor?: string;
   surfaceColor?: string;

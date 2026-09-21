@@ -9,22 +9,54 @@ import {
   loadAllData,
   saveAllData,
   resetMindMeshEntirely,
+  inspectStorageReadability,
   CURRENT_STORAGE_VERSION,
 } from './storage';
 import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONSHIPS } from '../utils/sampleContactData';
 import { INITIAL_CATEGORIES } from '../utils/sampleData';
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  NotificationHistoryEntry,
+  normalizeNotificationHistory,
+  normalizeNotificationSettings,
+} from '../types/notifications';
+import {
+  DiagnosticsHistoryEntry,
+  DiagnosticPreferences,
+  LogEntry,
+  normalizeDiagnosticPreferences,
+} from '../types/diagnostics';
+import { loadDiagnosticPreferences, saveDiagnosticPreferences } from './storage';
+import { loadDiagnosticsStore, recordBackup, recordRestore } from './diagnosticsStore';
+import { getLogs } from './logging';
 import { logger } from './logger';
 
-export const BACKUP_FORMAT_VERSION = 1;
-export const APP_VERSION = '1.3.0';
+export const BACKUP_FORMAT_VERSION = 2;
+export const APP_VERSION = '1.4.0';
 
 /**
  * Creates a complete full backup of MindMesh user-persisted data and configuration.
  */
 export function createBackup(): MindMeshBackupFile {
+  // loadAllData() falls back to sample defaults on a read failure. Exported data
+  // must never silently be those defaults, so fail loudly before collecting it.
+  const readability = inspectStorageReadability();
+  if (!readability.accessible) {
+    throw new Error(
+      'MindMesh could not read its local storage, so a backup cannot be trusted. Check that storage is enabled for this app and try again.'
+    );
+  }
+  if (readability.hasPayload && !readability.readable) {
+    throw new Error(
+      'Your saved MindMesh data could not be read, so exporting now would produce an empty backup. Restore an earlier backup or run Diagnostics first.'
+    );
+  }
+
   const state: MindMeshStorageData = loadAllData();
+  const notificationSettings = normalizeNotificationSettings(state.notifications);
+  const diagnosticPreferences: DiagnosticPreferences = loadDiagnosticPreferences();
 
   const backupData: MindMeshBackupData = {
     categories: state.categories || [],
@@ -35,7 +67,13 @@ export function createBackup(): MindMeshBackupFile {
     contactCategories: state.contactCategories || INITIAL_CONTACT_CATEGORIES,
     contactRelationships: state.contactRelationships || INITIAL_CONTACT_RELATIONSHIPS,
     appearance: normalizeAppearance(state.appearance),
+    notifications: notificationSettings,
+    notificationHistory: normalizeNotificationHistory(
+      state.notificationHistory,
+      notificationSettings.historyLimit
+    ),
     preferences: state.preferences || { theme: 'dark' },
+    diagnostics: buildDiagnosticsBackupSection(diagnosticPreferences),
     statistics: {
       totalCompletedCount: (state.reminders || []).filter((r) => r.completed).length,
       createdAt: new Date().toISOString(),
@@ -55,13 +93,39 @@ export function createBackup(): MindMeshBackupFile {
     reminders: backupData.reminders.length,
     contacts: backupData.contacts.length,
     categories: backupData.categories.length,
+    diagnosticLogsIncluded: Boolean(backupData.diagnostics?.logs?.length),
   });
+
+  recordBackup();
 
   return backupFile;
 }
 
 /**
- * Generates formatted default filename for export: MindMesh-Backup-YYYY-MM-DD-HHmm.json
+ * Diagnostics always contribute their preferences; logs are opt-in so a default
+ * backup stays privacy-safe.
+ */
+function buildDiagnosticsBackupSection(preferences: DiagnosticPreferences): {
+  preferences: DiagnosticPreferences;
+  logs?: LogEntry[];
+  history?: DiagnosticsHistoryEntry[];
+} {
+  const section: {
+    preferences: DiagnosticPreferences;
+    logs?: LogEntry[];
+    history?: DiagnosticsHistoryEntry[];
+  } = { preferences };
+
+  if (preferences.includeDiagnosticLogs) {
+    section.logs = getLogs();
+    section.history = loadDiagnosticsStore().history;
+  }
+
+  return section;
+}
+
+/**
+ * Generates formatted default filename for export: mindmesh-backup-YYYY-MM-DD-HHMMSS.json
  */
 export function generateBackupFilename(date: Date = new Date()): string {
   const pad = (n: number) => n.toString().padStart(2, '0');
@@ -70,8 +134,9 @@ export function generateBackupFilename(date: Date = new Date()): string {
   const day = pad(date.getDate());
   const hours = pad(date.getHours());
   const mins = pad(date.getMinutes());
+  const secs = pad(date.getSeconds());
 
-  return `MindMesh-Backup-${year}-${month}-${day}-${hours}${mins}.json`;
+  return `mindmesh-backup-${year}-${month}-${day}-${hours}${mins}${secs}.json`;
 }
 
 /**
@@ -248,6 +313,41 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     }
   }
 
+  // Notifications (sanitised, never fatal)
+  let hasNotifications = false;
+  if (data.notifications !== undefined) {
+    if (data.notifications && typeof data.notifications === 'object' && !Array.isArray(data.notifications)) {
+      hasNotifications = true;
+    } else {
+      warnings.push('Notification settings in this backup were unreadable and will fall back to defaults.');
+    }
+  }
+
+  const notificationHistoryCount = Array.isArray(data.notificationHistory)
+    ? data.notificationHistory.filter((entry) => Boolean(entry) && typeof entry === 'object').length
+    : 0;
+  const scheduledNotificationsCount = Array.isArray(data.notificationHistory)
+    ? data.notificationHistory.filter(
+        (entry) => Boolean(entry) && (entry.status === 'pending' || entry.status === 'snoozed')
+      ).length
+    : 0;
+  if (data.notificationHistory !== undefined && !Array.isArray(data.notificationHistory)) {
+    warnings.push('Notification history in this backup was unreadable and will be discarded.');
+  }
+
+  // Diagnostics (preferences always; logs only when the backup opted in)
+  let diagnosticsPreferences: DiagnosticPreferences | undefined;
+  let diagnosticLogCount = 0;
+  if (data.diagnostics !== undefined) {
+    if (data.diagnostics && typeof data.diagnostics === 'object' && !Array.isArray(data.diagnostics)) {
+      const section = data.diagnostics as Record<string, unknown>;
+      diagnosticsPreferences = normalizeDiagnosticPreferences(section.preferences);
+      if (Array.isArray(section.logs)) diagnosticLogCount = section.logs.length;
+    } else {
+      warnings.push('Diagnostics settings in this backup were unreadable and will fall back to defaults.');
+    }
+  }
+
   const completedReminders = (data.reminders as Reminder[]).filter((r) => r.completed).length;
 
   const summary: RestoreSummary = {
@@ -266,6 +366,12 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     hasMoneyConfig,
     hasAppearance,
     appearanceTheme,
+    hasNotifications,
+    notificationHistoryCount,
+    scheduledNotificationsCount,
+    hasDiagnosticLogs: diagnosticLogCount > 0,
+    diagnosticLogCount,
+    ...(diagnosticsPreferences ? { diagnosticsPreferences } : {}),
     warnings,
   };
 
@@ -369,6 +475,23 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     ? normalizeAppearance(rawData.appearance)
     : getDefaultAppearance();
 
+  // Notifications: schema v1 backups predate this, so default cleanly and keep
+  // any per-reminder notification config that survived the reminder migration.
+  const notifications = rawData.notifications
+    ? normalizeNotificationSettings(rawData.notifications)
+    : { ...DEFAULT_NOTIFICATION_SETTINGS };
+
+  const notificationHistory: NotificationHistoryEntry[] = rawData.notificationHistory
+    ? normalizeNotificationHistory(rawData.notificationHistory, notifications.historyLimit)
+    : [];
+
+  // Diagnostics preferences ride along in preferences; logs are opt-in only.
+  const diagnosticPreferences = normalizeDiagnosticPreferences(rawData.diagnostics?.preferences);
+  const mergedPreferences = {
+    ...(preferences as Record<string, unknown>),
+    diagnostics: diagnosticPreferences,
+  };
+
   return {
     version: targetSchema,
     categories,
@@ -379,7 +502,9 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     contactCategories,
     contactRelationships,
     appearance,
-    preferences,
+    notifications,
+    notificationHistory,
+    preferences: mergedPreferences,
     lastUpdated: new Date().toISOString(),
   };
 }
@@ -407,10 +532,24 @@ export function restoreBackup(backupFile: MindMeshBackupFile): { success: boolea
     // Save to persistence
     saveAllData(migratedState);
 
+    const restoredDiagnosticsPreferences = backupFile.data.diagnostics?.preferences;
+    if (restoredDiagnosticsPreferences) {
+      try {
+        saveDiagnosticPreferences(normalizeDiagnosticPreferences(restoredDiagnosticsPreferences));
+      } catch (err) {
+        logger.warn('BackupService', 'Could not persist diagnostics preferences from backup', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     logger.info('BackupService', 'Backup restored successfully', {
       remindersRestored: migratedState.reminders.length,
       contactsRestored: (migratedState.contacts || []).length,
+      notificationHistoryRestored: (migratedState.notificationHistory || []).length,
     });
+
+    recordRestore();
 
     return {
       success: true,
@@ -432,22 +571,351 @@ export function restoreBackup(backupFile: MindMeshBackupFile): { success: boolea
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * Export pipeline
+ *
+ * The old implementation stringified the backup, handed a blob URL to an
+ * anchor element and reported success immediately. That reports a save even
+ * when nothing was written (WebView, sandboxed frames, blocked downloads),
+ * which is exactly the "I never found the file" symptom.
+ *
+ * The pipeline below serialises through one place, then writes through the
+ * strongest platform channel available and only reports success once the
+ * write has actually completed.
+ * ------------------------------------------------------------------ */
+
+export type BackupExportMethod = 'android-document' | 'file-system-access' | 'browser-download';
+
+export interface BackupExportResult {
+  ok: boolean;
+  filename: string;
+  /** Serialized size of the backup in bytes. */
+  bytes: number;
+  method?: BackupExportMethod;
+  /**
+   * True when the platform performs the write itself (a browser download) and
+   * MindMesh cannot observe the result, so the UI must not claim "saved".
+   */
+  unverified?: boolean;
+  /** Set only when ok is false. */
+  error?: string;
+}
+
+/** Android WebView bridge injected as `window.MindMeshBackup`. */
+interface AndroidBackupBridge {
+  isSupported?(): boolean;
+  saveFile(requestId: string, filename: string, content: string): boolean;
+}
+
+/** Event sink the native bridge pushes its write result into. */
+interface AndroidBackupEvents {
+  onResult(requestId: string, ok: boolean, message: string): void;
+}
+
+interface BackupHostWindow {
+  MindMeshBackup?: AndroidBackupBridge;
+  MindMeshNativeBackupEvents?: AndroidBackupEvents;
+  showSaveFilePicker?: (options?: {
+    suggestedName?: string;
+    types?: { description?: string; accept: Record<string, string[]> }[];
+  }) => Promise<{
+    createWritable(): Promise<{
+      write(data: string | Blob): Promise<void>;
+      close(): Promise<void>;
+      abort?(): Promise<void>;
+    }>;
+  }>;
+}
+
+/** How long to wait for the Android document picker before giving up. */
+const ANDROID_PICKER_TIMEOUT_MS = 5 * 60 * 1000;
+
+const androidPendingSaves = new Map<string, (ok: boolean, message: string) => void>();
+let androidRequestSeq = 0;
+
+function hostWindow(): BackupHostWindow | null {
+  return typeof window === 'undefined' ? null : (window as unknown as BackupHostWindow);
+}
+
 /**
- * Triggers browser download of backup file
+ * The Android bridge cannot accept a JS callback, so results come back through a
+ * global the page installs. This runs on import so an event can never be lost to
+ * a missing handler, and is idempotent.
+ */
+export function installNativeBackupEventBridge(): void {
+  const host = hostWindow();
+  if (!host || host.MindMeshNativeBackupEvents) return;
+  host.MindMeshNativeBackupEvents = {
+    onResult: (requestId: string, ok: boolean, message: string) => {
+      const resolve = androidPendingSaves.get(requestId);
+      if (!resolve) return;
+      androidPendingSaves.delete(requestId);
+      resolve(ok, message);
+    },
+  };
+}
+
+installNativeBackupEventBridge();
+
+/**
+ * Serialises the backup, then proves the result is parseable JSON. Single place
+ * where a backup becomes a file body, so export can never write a half-built
+ * object and never silently produces invalid JSON.
+ */
+export function serializeBackup(backupFile: MindMeshBackupFile): string {
+  if (!backupFile || typeof backupFile !== 'object') {
+    throw new Error('No backup payload was produced');
+  }
+
+  let json: string;
+  try {
+    json = JSON.stringify(backupFile, null, 2);
+  } catch (err) {
+    throw backupSerializationError(err);
+  }
+
+  if (typeof json !== 'string' || json.length === 0) {
+    throw new Error('Backup serialization produced an empty file');
+  }
+
+  try {
+    const roundTrip = JSON.parse(json) as unknown;
+    if (!roundTrip || typeof roundTrip !== 'object' || Array.isArray(roundTrip)) {
+      throw new Error('unexpected payload shape');
+    }
+  } catch {
+    throw new Error('Backup serialization produced invalid JSON');
+  }
+
+  return json;
+}
+
+/** Wraps a serialization failure while preserving the original cause. */
+function backupSerializationError(cause: unknown): Error {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  const error = new Error(`Backup data could not be serialized: ${detail}`);
+  (error as Error & { cause?: unknown }).cause = cause;
+  return error;
+}
+
+function byteLength(text: string): number {
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(text).length;
+  return text.length;
+}
+
+/**
+ * Legacy helper kept for callers that only need the browser download. It throws
+ * if the browser refuses to start the download, so failures are never silent.
  */
 export function downloadBackupFile(backupFile: MindMeshBackupFile, filename?: string): void {
-  const json = JSON.stringify(backupFile, null, 2);
+  const json = serializeBackup(backupFile);
+  const downloadName = filename || generateBackupFilename(new Date(backupFile.createdAt));
+  triggerBrowserDownload(json, downloadName);
+}
+
+function triggerBrowserDownload(json: string, downloadName: string): void {
+  if (typeof document === 'undefined' || typeof URL?.createObjectURL !== 'function') {
+    throw new Error('This environment cannot save files directly');
+  }
+
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-  const downloadName = filename || generateBackupFilename(new Date(backupFile.createdAt));
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = downloadName;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    // Revoking immediately can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+}
 
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = downloadName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+async function saveViaAndroidBridge(
+  filename: string,
+  json: string,
+  bytes: number
+): Promise<BackupExportResult> {
+  const host = hostWindow();
+  const bridge = host?.MindMeshBackup;
+  if (!bridge || typeof bridge.saveFile !== 'function') {
+    return { ok: false, filename, bytes, method: 'android-document', error: 'Android file saving is unavailable' };
+  }
+
+  installNativeBackupEventBridge();
+  const requestId = `mindmesh-backup-${Date.now()}-${(androidRequestSeq += 1)}`;
+
+  return new Promise<BackupExportResult>((resolve) => {
+    const finish = (result: BackupExportResult) => {
+      androidPendingSaves.delete(requestId);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      finish({
+        ok: false,
+        filename,
+        bytes,
+        method: 'android-document',
+        error: 'The Android file picker did not respond. Please try again.',
+      });
+    }, ANDROID_PICKER_TIMEOUT_MS);
+
+    androidPendingSaves.set(requestId, (ok, message) => {
+      clearTimeout(timer);
+      if (ok) {
+        logger.info('BackupService', 'Backup written through the Android document writer', {
+          filename,
+          bytes,
+        });
+        finish({ ok: true, filename, bytes, method: 'android-document' });
+      } else {
+        logger.error('BackupService', 'Android backup write failed', message);
+        finish({ ok: false, filename, bytes, method: 'android-document', error: message });
+      }
+    });
+
+    try {
+      const accepted = bridge.saveFile(requestId, filename, json);
+      if (accepted === false) {
+        clearTimeout(timer);
+        finish({
+          ok: false,
+          filename,
+          bytes,
+          method: 'android-document',
+          error: 'MindMesh could not open the Android save dialog',
+        });
+      }
+    } catch (err) {
+      clearTimeout(timer);
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('BackupService', 'Android backup bridge threw', err);
+      finish({ ok: false, filename, bytes, method: 'android-document', error: message });
+    }
+  });
+}
+
+/**
+ * How a save attempt ended. "dismissed" (the user closed the dialog) and
+ * "unavailable" (the dialog never opened: sandboxed frame, denied permission)
+ * are both recoverable — the caller falls back to a download. Only "failed"
+ * means a write was attempted and did not complete.
+ */
+type SaverStatus = 'saved' | 'dismissed' | 'unavailable' | 'failed';
+
+interface SaverAttempt {
+  status: SaverStatus;
+  error?: string;
+}
+
+async function attemptFileSystemAccessSave(filename: string, json: string, bytes: number): Promise<SaverAttempt> {
+  const picker = hostWindow()?.showSaveFilePicker;
+  if (typeof picker !== 'function') return { status: 'unavailable' };
+
+  let handle: Awaited<ReturnType<NonNullable<BackupHostWindow['showSaveFilePicker']>>>;
+  try {
+    handle = await picker({
+      suggestedName: filename,
+      types: [{ description: 'MindMesh backup', accept: { 'application/json': ['.json'] } }],
+    });
+  } catch (err) {
+    const name = err instanceof Error ? err.name : '';
+    const message = err instanceof Error ? err.message : String(err);
+    if (name === 'AbortError') {
+      logger.info('BackupService', 'Backup export cancelled by the user', { filename });
+      return { status: 'dismissed' };
+    }
+    logger.warn('BackupService', 'The save dialog could not be opened; falling back to a download', {
+      error: message,
+    });
+    return { status: 'unavailable', error: message };
+  }
+
+  // From here the user picked a destination, so any failure is a real failure.
+  try {
+    const writable = await handle.createWritable();
+    await writable.write(json);
+    await writable.close();
+    logger.info('BackupService', 'Backup written to the user-selected file', { filename, bytes });
+    return { status: 'saved' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('BackupService', 'Writing the backup file failed', err);
+    return { status: 'failed', error: `Could not write the backup file: ${message}` };
+  }
+}
+
+/**
+ * Exports a full backup to a real `.json` file.
+ *
+ * Resolution order:
+ *  1. Android WebView document writer (a genuine save-location picker + write).
+ *  2. File System Access API (a genuine save dialog the page can await).
+ *  3. A browser download, which is reported as `unverified` because the page
+ *     cannot observe whether the browser actually wrote the file.
+ */
+export async function exportBackup(
+  backupFile: MindMeshBackupFile,
+  filename?: string
+): Promise<BackupExportResult> {
+  const resolvedName = filename || generateBackupFilename(new Date(backupFile.createdAt));
+
+  let json: string;
+  try {
+    json = serializeBackup(backupFile);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('BackupService', 'Backup JSON generation failed', err);
+    return { ok: false, filename: resolvedName, bytes: 0, error: message };
+  }
+
+  const bytes = byteLength(json);
+  logger.info('BackupService', 'Backup JSON generated', { filename: resolvedName, bytes });
+
+  const host = hostWindow();
+  if (host?.MindMeshBackup && typeof host.MindMeshBackup.saveFile === 'function') {
+    return saveViaAndroidBridge(resolvedName, json, bytes);
+  }
+
+  if (typeof host?.showSaveFilePicker === 'function') {
+    const attempt = await attemptFileSystemAccessSave(resolvedName, json, bytes);
+    if (attempt.status === 'saved') {
+      return { ok: true, filename: resolvedName, bytes, method: 'file-system-access' };
+    }
+    if (attempt.status === 'failed') {
+      return { ok: false, filename: resolvedName, bytes, method: 'file-system-access', error: attempt.error };
+    }
+    // dismissed / unavailable: fall through to the download path below.
+  }
+
+  try {
+    triggerBrowserDownload(json, resolvedName);
+    logger.info('BackupService', 'Backup download handed to the browser', { filename: resolvedName, bytes });
+    return { ok: true, filename: resolvedName, bytes, method: 'browser-download', unverified: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('BackupService', 'Backup download could not be started', err);
+    return { ok: false, filename: resolvedName, bytes, error: message };
+  }
+}
+
+/**
+ * True when MindMesh is running inside an embedding frame. Sandboxed frames
+ * block both save dialogs and downloads, which is the classic "I chose a
+ * location but no file appeared" situation, so the UI can say so.
+ */
+export function isEmbeddedFrame(): boolean {
+  try {
+    return typeof window !== 'undefined' && window.self !== window.top;
+  } catch {
+    // A cross-origin parent throws on access, which itself means we are framed.
+    return true;
+  }
 }
 
 export { resetMindMeshEntirely };
