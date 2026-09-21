@@ -73,6 +73,9 @@ class MainActivity : ComponentActivity() {
    * Restore needs the reverse: a `<input type="file">` inside the WebView only
    * works when `onShowFileChooser` is implemented, otherwise tapping "Choose
    * MindMesh Backup File" does nothing at all.
+   *
+   * The outstanding WebView callback lives here because only the Activity can own
+   * an activity result launcher; the composable delegates to [showFileChooser].
    */
   private var pendingFileChooser: ValueCallback<Array<Uri>>? = null
 
@@ -84,6 +87,37 @@ class MainActivity : ComponentActivity() {
         callback.onReceiveValue(
           WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
         )
+      }
+    }
+
+  /**
+   * Handles `WebChromeClient.onShowFileChooser` on behalf of the WebView composable.
+   *
+   * A second request supersedes the first, so any callback still waiting for a
+   * result is cancelled before this one takes its place — otherwise the WebView
+   * keeps a dangling `<input type="file">` open forever.
+   */
+  private val showFileChooser:
+    (ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams?) -> Boolean =
+    { filePathCallback, fileChooserParams ->
+      pendingFileChooser?.onReceiveValue(null)
+      pendingFileChooser = filePathCallback
+
+      try {
+        val intent = try {
+          fileChooserParams?.createIntent()
+        } catch (err: Exception) {
+          Log.w(TAG, "Could not create the requested file picker intent; using fallback", err)
+          null
+        } ?: Intent(Intent.ACTION_GET_CONTENT).apply { type = "*/*" }
+
+        fileChooserLauncher.launch(intent)
+        true
+      } catch (err: Exception) {
+        Log.e(TAG, "Could not open the file picker", err)
+        pendingFileChooser = null
+        filePathCallback.onReceiveValue(null)
+        false
       }
     }
 
@@ -123,6 +157,7 @@ class MainActivity : ComponentActivity() {
         MindMeshApp(
           notificationBridge = bridge,
           backupBridge = backupBridge,
+          onShowFileChooser = showFileChooser,
           onWebViewReady = { web ->
             webViewRef = web
             flushPendingNotificationEvents()
@@ -146,6 +181,14 @@ class MainActivity : ComponentActivity() {
     flushPendingNotificationEvents()
   }
 
+  override fun onDestroy() {
+    // Never retain a WebView callback past the Activity that owns it: release it
+    // so a stale `<input type="file">` cannot hold the page open.
+    pendingFileChooser?.onReceiveValue(null)
+    pendingFileChooser = null
+    super.onDestroy()
+  }
+
   private fun handleNotificationIntent(intent: Intent?) {
     val reminderId = intent?.getStringExtra(MainActivityIntent.EXTRA_REMINDER_ID)
     if (reminderId.isNullOrEmpty()) return
@@ -166,6 +209,10 @@ class MainActivity : ComponentActivity() {
       }
     }
   }
+
+  private companion object {
+    const val TAG = "MindMeshWebView"
+  }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -173,6 +220,7 @@ class MainActivity : ComponentActivity() {
 fun MindMeshApp(
   notificationBridge: MindMeshNotificationBridge?,
   backupBridge: MindMeshBackupBridge? = null,
+  onShowFileChooser: ((ValueCallback<Array<Uri>>, WebChromeClient.FileChooserParams?) -> Boolean)? = null,
   onWebViewReady: (WebView) -> Unit
 ) {
   var webViewInstance by remember { mutableStateOf<WebView?>(null) }
@@ -265,22 +313,17 @@ fun MindMeshApp(
             ): Boolean {
               if (filePathCallback == null) return false
 
-              // A second request supersedes the first; never leave one hanging.
-              pendingFileChooser?.onReceiveValue(null)
-              pendingFileChooser = filePathCallback
-
-              val intent = fileChooserParams?.createIntent()
-                ?: Intent(Intent.ACTION_GET_CONTENT).apply { type = "*/*" }
-
-              return try {
-                fileChooserLauncher.launch(intent)
-                true
-              } catch (err: Exception) {
-                Log.e("MindMeshWebView", "Could not open the file picker", err)
-                pendingFileChooser = null
+              // The Activity owns the launcher and the pending callback; this
+              // composable only forwards the request (a top-level composable
+              // cannot reach Activity state directly).
+              val handler = onShowFileChooser
+              if (handler == null) {
+                // Without a handler the page would wait forever for a file.
                 filePathCallback.onReceiveValue(null)
-                false
+                return false
               }
+
+              return handler(filePathCallback, fileChooserParams)
             }
 
             override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
