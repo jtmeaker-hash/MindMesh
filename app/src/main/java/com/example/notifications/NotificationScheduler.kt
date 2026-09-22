@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -61,6 +62,11 @@ object NotificationScheduler {
             putExtra(NotificationReceiver.EXTRA_BODY, item.body)
             putExtra(NotificationReceiver.EXTRA_SOUND, item.sound)
             putExtra(NotificationReceiver.EXTRA_VIBRATION, item.vibration)
+            putExtra(NotificationReceiver.EXTRA_KIND, item.kind)
+            putExtra(NotificationReceiver.EXTRA_ACTION_KIND, item.actionKind)
+            putExtra(NotificationReceiver.EXTRA_PRIORITY, item.priority)
+            putExtra(NotificationReceiver.EXTRA_ACTIONS, item.actions.toTypedArray())
+            putExtra(NotificationReceiver.EXTRA_ONGOING, item.ongoing)
         }
         return PendingIntent.getBroadcast(
             context,
@@ -89,6 +95,7 @@ object NotificationScheduler {
         return try {
             manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, firePendingIntent(context, item))
             NotificationStore.put(context, item)
+            Log.i(TAG, "scheduled id=${item.id} triggerAt=$triggerAt kind=${item.kind}")
             true
         } catch (_: SecurityException) {
             try {
@@ -110,6 +117,7 @@ object NotificationScheduler {
             // Cancelling a missing alarm is harmless.
         }
         NotificationStore.remove(context, id)
+        Log.i(TAG, "cancelled id=$id")
     }
 
     fun cancelAll(context: Context) {
@@ -127,11 +135,14 @@ object NotificationScheduler {
             val triggerAt = maxOf(item.triggerAtMillis, System.currentTimeMillis() + 1000L)
             try {
                 manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, firePendingIntent(context, item))
+                Log.i(TAG, "rescheduled id=${item.id} triggerAt=$triggerAt")
             } catch (_: Exception) {
                 // Leave the entry in the store so a later launch can retry.
             }
         }
     }
+
+    private const val TAG = "MindMeshNotifications"
 }
 
 /**
@@ -145,6 +156,11 @@ class NotificationReceiver : BroadcastReceiver() {
         const val EXTRA_BODY = "mindmesh_notification_body"
         const val EXTRA_SOUND = "mindmesh_notification_sound"
         const val EXTRA_VIBRATION = "mindmesh_notification_vibration"
+        const val EXTRA_KIND = "mindmesh_notification_kind"
+        const val EXTRA_ACTION_KIND = "mindmesh_notification_action_kind"
+        const val EXTRA_PRIORITY = "mindmesh_notification_priority"
+        const val EXTRA_ACTIONS = "mindmesh_notification_actions"
+        const val EXTRA_ONGOING = "mindmesh_notification_ongoing"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -153,12 +169,21 @@ class NotificationReceiver : BroadcastReceiver() {
         val body = intent.getStringExtra(EXTRA_BODY) ?: ""
         val sound = intent.getBooleanExtra(EXTRA_SOUND, true)
         val vibration = intent.getBooleanExtra(EXTRA_VIBRATION, true)
+        val kind = intent.getStringExtra(EXTRA_KIND) ?: "reminder"
+        val actionKind = intent.getStringExtra(EXTRA_ACTION_KIND) ?: "reminder"
+        val priority = intent.getStringExtra(EXTRA_PRIORITY) ?: "high"
+        val actions = intent.getStringArrayExtra(EXTRA_ACTIONS)?.toList() ?: listOf("complete", "snooze", "open")
+        val ongoing = intent.getBooleanExtra(EXTRA_ONGOING, false)
 
         if (!canPostNotifications(context)) return
 
         NotificationChannels.ensure(context)
         NotificationStore.remove(context, id)
         NotificationStore.queueDelivered(context, id)
+        if (kind == "routine" && actionKind == "automatic") {
+            NotificationStore.queueAction(context, id, MainActivityIntent.ACTION_START)
+        }
+        Log.i("MindMeshNotifications", "delivered id=$id kind=$kind actionKind=$actionKind")
 
         val openIntent = MainActivityIntent.build(context, id, MainActivityIntent.ACTION_OPEN)
 
@@ -168,12 +193,17 @@ class NotificationReceiver : BroadcastReceiver() {
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(priorityValue(priority))
+            .setCategory(if (kind == "routine") NotificationCompat.CATEGORY_PROGRESS else NotificationCompat.CATEGORY_REMINDER)
+            .setOngoing(ongoing)
             .setContentIntent(openIntent)
-            .addAction(0, "Mark Complete", MainActivityIntent.build(context, id, MainActivityIntent.ACTION_COMPLETE))
-            .addAction(0, "Snooze", MainActivityIntent.build(context, id, MainActivityIntent.ACTION_SNOOZE))
-            .addAction(0, "Open Reminder", openIntent)
+
+        if (actions.contains("complete")) builder.addAction(0, if (kind == "routine") "Complete step" else "Mark Complete", MainActivityIntent.build(context, id, MainActivityIntent.ACTION_COMPLETE))
+        if (actions.contains("start")) builder.addAction(0, "Start", MainActivityIntent.build(context, id, MainActivityIntent.ACTION_START))
+        if (actions.contains("snooze")) builder.addAction(0, "Snooze", MainActivityIntent.build(context, id, MainActivityIntent.ACTION_SNOOZE))
+        if (actions.contains("skip")) builder.addAction(0, "Skip", MainActivityIntent.build(context, id, MainActivityIntent.ACTION_SKIP))
+        if (actions.contains("failed")) builder.addAction(0, "Mark Failed", MainActivityIntent.build(context, id, MainActivityIntent.ACTION_FAILED))
+        if (actions.contains("open")) builder.addAction(0, if (kind == "routine") "Open Routine" else "Open Reminder", openIntent)
 
         if (!sound) builder.setSilent(true)
         if (vibration) builder.setVibrate(longArrayOf(0L, 250L, 150L, 250L))
@@ -184,6 +214,12 @@ class NotificationReceiver : BroadcastReceiver() {
         } catch (_: Exception) {
             // Posting can legitimately fail if the user revoked permission mid-flight.
         }
+    }
+
+    private fun priorityValue(priority: String): Int = when (priority.lowercase()) {
+        "max", "high", "alarm" -> NotificationCompat.PRIORITY_HIGH
+        "low" -> NotificationCompat.PRIORITY_LOW
+        else -> NotificationCompat.PRIORITY_DEFAULT
     }
 
     private fun canPostNotifications(context: Context): Boolean {

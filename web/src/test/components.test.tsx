@@ -25,8 +25,9 @@ describe('App Root Render', () => {
     expect(graphViewport.style.minWidth).toBe('0px');
     expect(spatialGraph.getAttribute('data-spatial-active')).toBe('true');
     expect(spatialGraph.querySelectorAll('[data-node-id]').length).toBeGreaterThan(0);
-    expect(navigation.querySelectorAll('button')).toHaveLength(4);
+    expect(navigation.querySelectorAll('button')).toHaveLength(5);
     expect(screen.getByRole('button', { name: /MindMesh/ })).toBeDefined();
+    expect(screen.getByRole('button', { name: /Routines/ })).toBeDefined();
     expect(screen.getByRole('button', { name: /Contacts/ })).toBeDefined();
     expect(screen.getByRole('button', { name: /Money/ })).toBeDefined();
     expect(screen.getByRole('button', { name: /Dashboard/ })).toBeDefined();

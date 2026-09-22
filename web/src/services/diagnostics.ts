@@ -26,6 +26,7 @@ import { hasDiagnosticsStorageFailed, loadDiagnosticsStore } from './diagnostics
 import { computeDashboardMetrics } from '../utils/dashboard';
 import { getCurrentPayCycleSummary, getUpcomingMoneyTimeline } from '../utils/finance';
 import { logger } from './logger';
+import { diagnoseRoutines } from './routineSafety';
 
 export const BUILD_VERSION = `${APP_VERSION} (${import.meta.env.MODE})`;
 
@@ -1357,6 +1358,24 @@ const checkMoneyTimeline: DiagnosticCheck = ({ state }) => {
   }
 };
 
+const checkRoutineSafety: DiagnosticCheck = () => {
+  const routineReport = diagnoseRoutines();
+  const issues = routineReport.invalidSessions.length + routineReport.missingLinks.length + routineReport.quarantined.length;
+  const status: DiagnosticStatus = routineReport.quarantined.length > 0 || routineReport.invalidSessions.length > 0 ? 'fail' : issues > 0 ? 'warning' : 'pass';
+  return makeResult({
+    id: 'routines.safety',
+    name: 'Routine data safety',
+    category: 'routines',
+    status,
+    explanation: issues === 0
+      ? `Routine definitions are healthy; ${routineReport.scheduleRegistration.scheduled} schedule registration(s) and ${routineReport.trash.count} trashed record(s) checked.`
+      : `${routineReport.invalidSessions.length} invalid session(s), ${routineReport.missingLinks.length} broken link(s), and ${routineReport.quarantined.length} quarantined record(s) need attention.`,
+    details: routineReport as unknown as Record<string, unknown>,
+    suggestedFix: issues > 0 ? 'Open Routine Diagnostics to rebuild schedules, clear stale sessions, repair links, or inspect quarantined records.' : undefined,
+    fixId: issues > 0 ? 'fix.repairRoutineSafety' : undefined,
+  });
+};
+
 /* ------------------------------------------------------------------ *
  * Runner
  * ------------------------------------------------------------------ */
@@ -1393,6 +1412,7 @@ const QUICK_CHECKS: DiagnosticCheck[] = [
   checkServiceWorker,
   checkPwaInstall,
   checkNetwork,
+  checkRoutineSafety,
 ];
 
 const DEEP_CHECKS: DiagnosticCheck[] = [

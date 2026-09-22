@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Reminder, Category } from '../../types';
+import { Routine } from '../../types/routine';
+import { analyzeRoutine, buildTodayPlan } from '../../services/routineAnalytics';
 import { MoneyState, DashboardTimeFilter } from '../../types/finance';
 import { computeDashboardMetrics } from '../../utils/dashboard';
 import { formatCurrency, formatDateAU } from '../../utils/finance';
@@ -23,8 +25,18 @@ interface DashboardModuleProps {
   moneyState: MoneyState;
   onNavigateToMoney?: () => void;
   onNavigateToReminders?: () => void;
+  onNavigateToRoutines?: () => void;
   onOpenReminderModal?: (reminderId: string) => void;
+  routines?: Routine[];
+  onOpenRoutine?: () => void;
 }
+
+const summaryLabel: React.CSSProperties = { display: 'block', color: '#67e8f9', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 800 };
+const summaryValue: React.CSSProperties = { display: 'block', color: '#f8fafc', fontSize: 25, fontWeight: 800, marginTop: 3 };
+const summaryHint: React.CSSProperties = { display: 'block', color: '#94a3b8', fontSize: 11, marginTop: 3 };
+const summaryCard: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 18, padding: 18, borderRadius: 18, background: 'linear-gradient(135deg,rgba(8,47,73,.65),rgba(15,23,42,.85))', border: '1px solid rgba(34,211,238,.22)' };
+const buttonStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, justifyContent: 'center', border: '1px solid rgba(103,232,249,.3)', background: 'rgba(8,145,178,.16)', color: '#67e8f9', borderRadius: 999, padding: '8px 12px', cursor: 'pointer', fontWeight: 700, fontSize: 12 };
+function routineProgress(routines: Routine[]): number { const active = routines.filter((routine) => routine.activeSession); const total = active.reduce((sum, routine) => sum + routine.steps.length, 0); const done = active.reduce((sum, routine) => sum + (routine.activeSession?.completedStepIds.length || 0), 0); return total ? Math.round((done / total) * 100) : 0; }
 
 const TIME_FILTER_OPTIONS: { id: DashboardTimeFilter; label: string }[] = [
   { id: 'today', label: 'Today' },
@@ -40,13 +52,23 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
   moneyState,
   onNavigateToMoney,
   onNavigateToReminders,
+  onNavigateToRoutines,
   onOpenReminderModal,
+  routines = [],
+  onOpenRoutine,
 }) => {
   const [timeFilter, setTimeFilter] = useState<DashboardTimeFilter>('all');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
 
   const activeCategoryFilter = selectedCategoryId === 'all' ? null : selectedCategoryId;
   const metrics = computeDashboardMetrics(reminders, categories, moneyState, timeFilter, activeCategoryFilter);
+  const todayPlan = useMemo(() => buildTodayPlan(routines, reminders, moneyState.directDebits), [routines, reminders, moneyState.directDebits]);
+  const nextSuggestion = useMemo(() => {
+    const candidate = routines.filter((routine) => routine.status === 'active' && routine.activeSession?.status !== 'completed').sort((a, b) => (b.priority === 'critical' ? 1 : 0) - (a.priority === 'critical' ? 1 : 0))[0];
+    if (!candidate) return null;
+    const analytics = analyzeRoutine(candidate);
+    return { routine: candidate, reason: candidate.activeSession?.status === 'running' ? 'It is already in progress.' : analytics.streak > 0 ? `It supports your ${analytics.streak}-day consistency streak.` : 'It is an active routine ready for a small next step.' };
+  }, [routines]);
 
   return (
     <div
@@ -107,6 +129,7 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
 
         {/* Filter Controls: Time & Category */}
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+          {onNavigateToRoutines && <button type="button" onClick={onNavigateToRoutines} style={{ padding: '7px 11px', borderRadius: 999, border: '1px solid rgba(34,211,238,.35)', background: 'rgba(8,145,178,.16)', color: '#67e8f9', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>Open Routines</button>}
           {/* Category Filter Dropdown */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Filter size={14} color="#94a3b8" />
@@ -181,6 +204,12 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
 
       {/* Main Container */}
       <div style={{ padding: '24px', maxWidth: 1180, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+        <section aria-label="Routine summary" style={{ ...summaryCard, marginBottom: 20 }}>
+          <div><span style={summaryLabel}>Routines today</span><strong style={summaryValue}>{routines.filter((routine) => routine.status === 'active' || routine.status === 'paused').length}</strong><span style={summaryHint}>{routines.filter((routine) => routine.activeSession?.status === 'running').length} currently running · {routines.filter((routine) => routine.activeSession?.status === 'completed').length} completed this session</span></div>
+          <div><span style={summaryLabel}>Routine progress</span><strong style={summaryValue}>{routineProgress(routines)}%</strong><span style={summaryHint}>Across completed steps in active sessions</span></div>
+          {onOpenRoutine && <button type="button" onClick={onOpenRoutine} style={{ ...buttonStyle, alignSelf: 'center' }}>Open Routines <ChevronRight size={14} /></button>}
+        </section>
+        <section aria-label="Today plan" style={{ ...summaryCard, marginBottom: 20, gridTemplateColumns: 'minmax(240px,1fr) minmax(240px,1fr)' }}><div><span style={summaryLabel}>What should I do next?</span>{nextSuggestion ? <><strong style={{ ...summaryValue, fontSize: 20 }}>{nextSuggestion.routine.name}</strong><span style={summaryHint}>{nextSuggestion.reason} This is guidance, not a forced action.</span></> : <span style={summaryHint}>Nothing is asking for attention right now. You can choose a routine when ready.</span>}</div><div><span style={summaryLabel}>Today plan</span><strong style={{ ...summaryValue, fontSize: 20 }}>{todayPlan.length} items</strong><span style={summaryHint}>{todayPlan.slice(0, 3).map((item) => item.title).join(' · ') || 'No scheduled routines, reminders, or bills.'}</span></div></section>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {/* Top Row: Task Completion Gauge & High-Level Productivity */}
           <div

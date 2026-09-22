@@ -25,6 +25,8 @@ export const DEFAULT_RELATIONSHIPS = [
 export interface Contact {
   id: string;
   fullName: string;
+  firstName?: string;
+  lastName?: string;
   displayName?: string; // Preferred name
   phoneNumber: string;
   secondaryPhoneNumber?: string;
@@ -32,6 +34,9 @@ export interface Contact {
   address?: string;
   relationship: string;
   photo?: string; // Base64 data URL or local image string
+  /** Source metadata is optional and never replaces MindMesh-only fields. */
+  importedFromDevice?: boolean;
+  sourceContactId?: string;
   notes?: string;
   birthday?: string; // YYYY-MM-DD
   category?: string; // Tag/category

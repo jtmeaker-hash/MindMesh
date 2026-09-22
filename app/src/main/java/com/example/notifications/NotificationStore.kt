@@ -11,7 +11,12 @@ data class ScheduledNotification(
     val body: String,
     val triggerAtMillis: Long,
     val sound: Boolean,
-    val vibration: Boolean
+    val vibration: Boolean,
+    val kind: String = "reminder",
+    val actionKind: String = "reminder",
+    val priority: String = "high",
+    val actions: List<String> = listOf("complete", "snooze", "open"),
+    val ongoing: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -20,6 +25,11 @@ data class ScheduledNotification(
         put("triggerAt", triggerAtMillis)
         put("sound", sound)
         put("vibration", vibration)
+        put("kind", kind)
+        put("actionKind", actionKind)
+        put("priority", priority)
+        put("actions", JSONArray().apply { actions.forEach { put(it) } })
+        put("ongoing", ongoing)
     }
 
     companion object {
@@ -32,7 +42,12 @@ data class ScheduledNotification(
                 body = obj.optString("body", ""),
                 triggerAtMillis = obj.optLong("triggerAt", 0L),
                 sound = obj.optBoolean("sound", true),
-                vibration = obj.optBoolean("vibration", true)
+                vibration = obj.optBoolean("vibration", true),
+                kind = obj.optString("kind", "reminder"),
+                actionKind = obj.optString("actionKind", "reminder"),
+                priority = obj.optString("priority", "high"),
+                actions = obj.optJSONArray("actions")?.let { array -> (0 until array.length()).mapNotNull { index -> array.optString(index, "").takeIf { it.isNotEmpty() } } } ?: listOf("complete", "snooze", "open"),
+                ongoing = obj.optBoolean("ongoing", false)
             )
         }
     }

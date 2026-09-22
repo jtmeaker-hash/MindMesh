@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.PowerManager
+import android.app.AlarmManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -28,6 +30,9 @@ object MainActivityIntent {
     const val ACTION_OPEN = "open"
     const val ACTION_COMPLETE = "complete"
     const val ACTION_SNOOZE = "snooze"
+    const val ACTION_START = "start"
+    const val ACTION_SKIP = "skip"
+    const val ACTION_FAILED = "failed"
 
     fun build(context: Context, reminderId: String, action: String): android.app.PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -115,10 +120,20 @@ class MindMeshNotificationBridge(
 
         var sound = true
         var vibration = true
+        var kind = "reminder"
+        var actionKind = "reminder"
+        var priority = "high"
+        var actions = listOf("complete", "snooze", "open")
+        var ongoing = false
         try {
             val options = JSONObject(optionsJson.ifEmpty { "{}" })
             sound = options.optBoolean("sound", true)
             vibration = options.optBoolean("vibration", true)
+            kind = options.optString("kind", "reminder")
+            actionKind = options.optString("actionKind", "reminder")
+            priority = options.optString("priority", "high")
+            ongoing = options.optBoolean("ongoing", false)
+            options.optJSONArray("actions")?.let { array -> actions = (0 until array.length()).mapNotNull { index -> array.optString(index, "").takeIf { it.isNotEmpty() } } }
         } catch (_: Exception) {
             // Malformed options fall back to defaults rather than failing.
         }
@@ -129,7 +144,12 @@ class MindMeshNotificationBridge(
             body = body,
             triggerAtMillis = triggerAtMillis,
             sound = sound,
-            vibration = vibration
+            vibration = vibration,
+            kind = kind,
+            actionKind = actionKind,
+            priority = priority,
+            actions = actions,
+            ongoing = ongoing
         )
         return NotificationScheduler.schedule(context, item)
     }
@@ -147,6 +167,26 @@ class MindMeshNotificationBridge(
 
     @JavascriptInterface
     fun getScheduledCount(): Int = NotificationStore.count(context)
+
+    @JavascriptInterface
+    fun canScheduleExactAlarms(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager)?.canScheduleExactAlarms() == true
+    } else true
+
+    @JavascriptInterface
+    fun isIgnoringBatteryOptimizations(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val power = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        power?.isIgnoringBatteryOptimizations(context.packageName) == true
+    } else true
+
+    @JavascriptInterface
+    fun getDiagnosticsJson(): String = JSONObject().apply {
+        put("permission", getPermissionState())
+        put("scheduledCount", NotificationStore.count(context))
+        put("exactAlarms", canScheduleExactAlarms())
+        put("batteryOptimizationExempt", isIgnoringBatteryOptimizations())
+        put("channelsEnabled", NotificationManagerCompat.from(context).areNotificationsEnabled())
+    }.toString()
 
     @JavascriptInterface
     fun openNotificationSettings() {

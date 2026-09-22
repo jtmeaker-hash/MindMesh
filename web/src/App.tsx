@@ -79,8 +79,11 @@ import {
   loadNotificationHistory,
   saveNotificationHistory,
   loadAllData,
+  loadRoutines,
 } from './utils/storage';
-import { generateActiveMesh, generateCompletedOverviewMesh, generateCompletedCategoryMesh } from './utils/layout';
+import { generateCompletedCategoryMesh } from './utils/layout';
+import { generateNestedActiveMesh, generateNestedCompletedOverviewMesh } from './utils/nestedLayout';
+import { normalizeCategories, validateCategoryParent, getCategoryDescendantIds, applyCategoryDelete } from './services/categories';
 import { handleReminderCompletion } from './services/recurrence';
 import { upsertReminder } from './services/reminders';
 
@@ -102,6 +105,7 @@ import { AppBackground } from './components/background/AppBackground';
 import { AppNavigation } from './components/navigation/AppNavigation';
 import { MoneyModule } from './components/money/MoneyModule';
 import { DashboardModule } from './components/dashboard/DashboardModule';
+import { RoutineModule } from './components/routines/RoutineModule';
 import { ContactsModule } from './components/contacts/ContactsModule';
 import { SpatialGraph } from './components/graph/SpatialGraph';
 
@@ -128,6 +132,7 @@ function MindMeshFlow() {
   const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryEntry[]>(() =>
     loadNotificationHistory()
   );
+  const [routines, setRoutines] = useState(() => loadRoutines());
 
   // Navigation state
   const [mainNavTab, setMainNavTab] = useState<AppNavTab>('reminders');
@@ -142,6 +147,7 @@ function MindMeshFlow() {
 
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [activeCategory, setActiveCategory] = useState<Category | null>(null);
+  const [newCategoryParentId, setNewCategoryParentId] = useState<string | null>(null);
 
   const [categoryActionsCategory, setCategoryActionsCategory] = useState<Category | null>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -519,7 +525,7 @@ function MindMeshFlow() {
   useEffect(() => {
     let graph;
     if (viewMode === 'active') {
-      graph = generateActiveMesh(
+      graph = generateNestedActiveMesh(
         categories,
         reminders,
         focusedCategoryId,
@@ -548,12 +554,10 @@ function MindMeshFlow() {
           notificationStatusMap
         );
       } else {
-        graph = generateCompletedOverviewMesh(
+        graph = generateNestedCompletedOverviewMesh(
           categories,
           reminders,
-          {
-            onNodeClick: handleNodeClick,
-          },
+          { onNodeClick: handleNodeClick },
           nodePositions,
           appearance
         );
@@ -613,19 +617,28 @@ function MindMeshFlow() {
   // CRUD for Categories
   const handleSaveCategory = (cat: Category) => {
     setCategories((prev) => {
-      const idx = prev.findIndex((c) => c.id === cat.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = cat;
-        return next;
+      const error = validateCategoryParent(prev, cat.id, cat.parentCategoryId);
+      if (error) {
+        window.alert(error);
+        return prev;
       }
-      return [...prev, cat];
+      const idx = prev.findIndex((c) => c.id === cat.id);
+      const next = idx >= 0 ? prev.map((existing) => existing.id === cat.id ? cat : existing) : [...prev, cat];
+      return normalizeCategories(next);
     });
   };
 
   const handleDeleteCategory = (catId: string) => {
-    setCategories((prev) => prev.filter((c) => c.id !== catId));
-    setReminders((prev) => prev.filter((r) => r.categoryId !== catId));
+    const descendants = new Set([catId, ...getCategoryDescendantIds(categories, catId)]);
+    const moveContents = window.confirm('Move child categories and reminders to the parent category? Choose Cancel to delete this category and its descendants instead.')
+      ? 'move-contents'
+      : 'delete-descendants';
+    setCategories((prev) => applyCategoryDelete(prev, catId, moveContents));
+    setReminders((prev) => moveContents === 'move-contents'
+      ? prev.map((reminder) => descendants.has(reminder.categoryId) && reminder.categoryId === catId
+        ? { ...reminder, categoryId: categories.find((category) => category.id === catId)?.parentCategoryId || categories[0]?.id || reminder.categoryId }
+        : reminder).filter((reminder) => moveContents === 'move-contents' || !descendants.has(reminder.categoryId))
+      : prev.filter((reminder) => !descendants.has(reminder.categoryId)));
     if (focusedCategoryId === catId) setFocusedCategoryId(null);
     if (selectedCompletedCategory?.id === catId) setSelectedCompletedCategory(null);
 
@@ -1440,6 +1453,11 @@ function MindMeshFlow() {
         </>
       )}
 
+      {/* ROUTINES SECTION */}
+      {mainNavTab === 'routines' && (
+        <RoutineModule categories={categories} contacts={contacts} reminders={reminders} directDebits={moneyState.directDebits} appearance={appearance} onRoutinesChange={setRoutines} />
+      )}
+
       {/* CONTACTS SECTION */}
       {mainNavTab === 'contacts' && (
         <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, paddingTop: 0, width: '100%', display: 'flex' }}>
@@ -1509,6 +1527,9 @@ function MindMeshFlow() {
             moneyState={moneyState}
             onNavigateToMoney={() => setMainNavTab('money')}
             onNavigateToReminders={() => setMainNavTab('reminders')}
+            onNavigateToRoutines={() => setMainNavTab('routines')}
+            routines={routines}
+            onOpenRoutine={() => setMainNavTab('routines')}
             onOpenReminderModal={(remId) => {
               const r = reminders.find((rem) => rem.id === remId);
               if (r) {
@@ -1546,8 +1567,11 @@ function MindMeshFlow() {
         onClose={() => {
           setCategoryModalOpen(false);
           setActiveCategory(null);
+          setNewCategoryParentId(null);
         }}
         category={activeCategory}
+        categories={categories}
+        parentCategoryId={activeCategory?.parentCategoryId ?? newCategoryParentId}
         onSave={handleSaveCategory}
         onDelete={handleDeleteCategory}
       />
@@ -1565,6 +1589,11 @@ function MindMeshFlow() {
           setActiveCategory(cat);
           setCategoryModalOpen(true);
         }}
+        onAddSubcategory={(parentCategoryId) => {
+          setActiveCategory(null);
+          setNewCategoryParentId(parentCategoryId);
+          setCategoryModalOpen(true);
+        }}
         onDeleteCategory={handleDeleteCategory}
         onUnfocus={() => setFocusedCategoryId(null)}
       />
@@ -1580,6 +1609,7 @@ function MindMeshFlow() {
         }}
         onSelectAddCategory={() => {
           setActiveCategory(null);
+          setNewCategoryParentId(null);
           setCategoryModalOpen(true);
         }}
       />

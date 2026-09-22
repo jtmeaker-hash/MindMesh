@@ -6,7 +6,10 @@ import {
   Filter,
   UserPlus,
   ArrowUpDown,
+  Download,
 } from 'lucide-react';
+import { getContactImportCapability, selectDeviceContacts, deviceRecordToContact, findLikelyDuplicate, resolveImportedContact } from '../../services/contactImport';
+import type { DuplicateDecision } from '../../services/contactImport';
 import { Contact, ContactSortOption } from '../../types/contact';
 import { Reminder } from '../../types';
 import { ContactModal } from './ContactModal';
@@ -38,6 +41,11 @@ export const ContactsModule: React.FC<ContactsModuleProps> = ({
   const [selectedRelationship, setSelectedRelationship] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [sortOption, setSortOption] = useState<ContactSortOption>('name_asc');
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [pendingImports, setPendingImports] = useState<Contact[]>([]);
+  const [importDecisions, setImportDecisions] = useState<Record<string, DuplicateDecision>>({});
+  const [selectedImportIds, setSelectedImportIds] = useState<Set<string>>(new Set());
 
   // Modals
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -131,6 +139,44 @@ export const ContactsModule: React.FC<ContactsModuleProps> = ({
     onUpdateContactCategories((prev) => (prev.includes(cat) ? prev : [...prev, cat]));
   };
 
+  const handleImportContacts = async () => {
+    const capability = getContactImportCapability();
+    if (!capability.supported) { setImportMessage(capability.reason || 'Contact import is unavailable. Manual contact entry remains available.'); return; }
+    setImporting(true); setImportMessage(null);
+    try {
+      const records = await selectDeviceContacts();
+      const imported = await Promise.all(records.map((record) => deviceRecordToContact(record)));
+      setImportDecisions(Object.fromEntries(imported.map((contact) => [contact.id, 'separate' as DuplicateDecision])));
+      setSelectedImportIds(new Set(imported.map((contact) => contact.id)));
+      setPendingImports(imported);
+      if (imported.length === 0) setImportMessage('No contacts were selected.');
+    } catch (error) {
+      setImportMessage(error instanceof Error ? error.message : 'Contact access was cancelled or denied. Manual contact entry is still available.');
+    } finally { setImporting(false); }
+  };
+
+  const commitImportedContacts = () => {
+    const decisions = importDecisions;
+    onUpdateContacts((prev) => {
+      let next = [...prev];
+      for (const imported of pendingImports.filter((contact) => selectedImportIds.has(contact.id))) {
+        const result = resolveImportedContact(next, imported, decisions[imported.id] || 'separate');
+        if (result.action === 'merge') {
+          const merged = result.contacts[0];
+          next = next.map((contact) => contact.id === merged.id ? merged : contact);
+        } else if (result.action === 'separate') {
+          next = [...result.contacts, ...next];
+        }
+      }
+      return next;
+    });
+    const importedCount = pendingImports.filter((contact) => selectedImportIds.has(contact.id) && importDecisions[contact.id] !== 'skip').length;
+    setImportMessage(`Imported ${importedCount} contact${importedCount === 1 ? '' : 's'}.`);
+    setPendingImports([]);
+    setImportDecisions({});
+    setSelectedImportIds(new Set());
+  };
+
   const getInitials = (name: string) => {
     const parts = name.trim().split(/\s+/);
     if (parts.length === 0 || !parts[0]) return '?';
@@ -206,6 +252,7 @@ export const ContactsModule: React.FC<ContactsModuleProps> = ({
         </div>
 
         {/* Add Contact CTA */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button
           type="button"
           onClick={() => {
@@ -231,7 +278,34 @@ export const ContactsModule: React.FC<ContactsModuleProps> = ({
           <UserPlus size={16} />
           <span>Add Contact</span>
         </button>
+        <button type="button" onClick={handleImportContacts} disabled={importing} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 999, border: '1px solid rgba(34,211,238,.35)', background: 'rgba(34,211,238,.12)', color: '#67e8f9', fontSize: 13, fontWeight: 600, cursor: importing ? 'wait' : 'pointer' }}>
+          <Download size={16} /> <span>{importing ? 'Importing…' : 'Import Contacts'}</span>
+        </button>
+        </div>
       </div>
+      {importMessage && <div role="status" style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 10, background: 'rgba(34,211,238,.1)', border: '1px solid rgba(34,211,238,.25)', color: '#a5f3fc', fontSize: 12 }}>{importMessage}</div>}
+
+      {pendingImports.length > 0 && (
+        <div role="dialog" aria-label="Review imported contacts" style={{ marginBottom: 16, padding: 14, borderRadius: 16, background: 'rgba(15,23,42,.92)', border: '1px solid rgba(34,211,238,.35)', boxShadow: '0 12px 32px rgba(0,0,0,.35)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+            <div><strong>Review contacts</strong><div style={{ fontSize: 12, color: '#94a3b8' }}>Select contacts to save and choose how possible duplicates should be handled.</div></div>
+            <button type="button" onClick={() => setPendingImports([])} style={{ background: 'transparent', border: 0, color: '#94a3b8', cursor: 'pointer' }}>Cancel</button>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 12, color: '#cbd5e1' }}><input type="checkbox" checked={selectedImportIds.size === pendingImports.length} onChange={(event) => setSelectedImportIds(event.target.checked ? new Set(pendingImports.map((contact) => contact.id)) : new Set())} /> Select all</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 240, overflowY: 'auto' }}>
+            {pendingImports.map((contact) => {
+              const duplicate = findLikelyDuplicate(contacts, { name: [contact.fullName], tel: [contact.phoneNumber], email: contact.email ? [contact.email] : [] });
+              return <div key={contact.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,.04)' }}><input type="checkbox" checked={selectedImportIds.has(contact.id)} onChange={(event) => setSelectedImportIds((prev) => { const next = new Set(prev); if (event.target.checked) next.add(contact.id); else next.delete(contact.id); return next; })} aria-label={`Select ${contact.fullName}`} />
+                <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700 }}>{contact.displayName || contact.fullName}</div><div style={{ fontSize: 11, color: '#94a3b8' }}>{duplicate ? `Possible duplicate of ${duplicate.displayName || duplicate.fullName}` : 'New contact'}{contact.phoneNumber ? ` • ${contact.phoneNumber}` : ''}</div></div>
+                <select aria-label={`Import decision for ${contact.fullName}`} value={importDecisions[contact.id] || 'separate'} onChange={(event) => setImportDecisions((prev) => ({ ...prev, [contact.id]: event.target.value as DuplicateDecision }))} style={{ width: 112, padding: '6px 8px', borderRadius: 8, background: '#1e293b', color: '#f8fafc', border: '1px solid #475569' }}>
+                  <option value="separate">Import separate</option><option value="merge" disabled={!duplicate}>Merge</option><option value="skip">Skip</option>
+                </select>
+              </div>;
+            })}
+          </div>
+          <button type="button" onClick={commitImportedContacts} style={{ marginTop: 12, width: '100%', padding: '10px 14px', borderRadius: 10, border: 0, background: '#0891b2', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>Import selected contacts</button>
+        </div>
+      )}
 
       {/* Search and Filters Bar */}
       <div

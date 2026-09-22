@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Edit3, Trash2, X, EyeOff } from 'lucide-react';
+import { Plus, Edit3, Trash2, X, EyeOff, FolderPlus } from 'lucide-react';
 import { Category } from '../../types';
 
 interface CategoryActionsSheetProps {
@@ -8,6 +8,7 @@ interface CategoryActionsSheetProps {
   onClose: () => void;
   onAddReminder: (categoryId: string) => void;
   onEditCategory: (category: Category) => void;
+  onAddSubcategory: (parentCategoryId: string) => void;
   onDeleteCategory: (categoryId: string) => void;
   onUnfocus: () => void;
 }
@@ -18,6 +19,7 @@ export const CategoryActionsSheet: React.FC<CategoryActionsSheetProps> = ({
   onClose,
   onAddReminder,
   onEditCategory,
+  onAddSubcategory,
   onDeleteCategory,
   onUnfocus,
 }) => {
@@ -132,6 +134,15 @@ export const CategoryActionsSheet: React.FC<CategoryActionsSheetProps> = ({
           >
             <Plus size={18} color={category.color} strokeWidth={2.5} />
             <span>Add Reminder in {category.name}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { onAddSubcategory(category.id); onClose(); }}
+            style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderRadius: 14, backgroundColor: '#1E293B', border: '1px solid #334155', color: '#f1f5f9', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+          >
+            <FolderPlus size={17} color="#22d3ee" />
+            <span>Add subcategory</span>
           </button>
 
           {/* Edit Category */}

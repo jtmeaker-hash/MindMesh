@@ -1,6 +1,6 @@
 import React from 'react';
 import { AppNavTab } from '../../types/finance';
-import { Network, Users, Wallet, LayoutDashboard } from 'lucide-react';
+import { Network, Users, Wallet, LayoutDashboard, ListChecks } from 'lucide-react';
 
 interface AppNavigationProps {
   currentTab: AppNavTab;
@@ -73,6 +73,22 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
             {activeRemindersCount}
           </span>
         )}
+      </button>
+
+      {/* Routines */}
+      <button
+        type="button"
+        onClick={() => onSelectTab('routines')}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 999,
+          border: 'none', background: currentTab === 'routines' ? 'linear-gradient(135deg, #0891b2 0%, #0e7490 100%)' : 'transparent',
+          color: currentTab === 'routines' ? '#ffffff' : '#94a3b8', fontWeight: currentTab === 'routines' ? 600 : 500,
+          fontSize: 13, cursor: 'pointer', transition: 'all 0.18s ease', minHeight: 34,
+          boxShadow: currentTab === 'routines' ? '0 2px 10px rgba(8,145,178,.4)' : 'none',
+        }}
+      >
+        <ListChecks size={15} />
+        <span>Routines</span>
       </button>
 
       {/* Contacts */}

@@ -16,6 +16,7 @@ import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONSHIPS } from '../utils/sampleContactData';
 import { INITIAL_CATEGORIES } from '../utils/sampleData';
+import { normalizeCategories } from './categories';
 import {
   DEFAULT_NOTIFICATION_SETTINGS,
   NotificationHistoryEntry,
@@ -32,8 +33,9 @@ import { loadDiagnosticPreferences, saveDiagnosticPreferences } from './storage'
 import { loadDiagnosticsStore, recordBackup, recordRestore } from './diagnosticsStore';
 import { getLogs } from './logging';
 import { logger } from './logger';
+import { normalizeRoutines } from '../types/routine';
 
-export const BACKUP_FORMAT_VERSION = 2;
+export const BACKUP_FORMAT_VERSION = 3;
 export const APP_VERSION = '1.4.0';
 
 /**
@@ -61,6 +63,7 @@ export function createBackup(): MindMeshBackupFile {
   const backupData: MindMeshBackupData = {
     categories: state.categories || [],
     reminders: state.reminders || [],
+    routines: state.routines || [],
     nodePositions: state.nodePositions || {},
     money: state.money || getDefaultMoneyState(),
     contacts: state.contacts || INITIAL_CONTACTS,
@@ -209,6 +212,20 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
       valid: false,
       error: 'Corrupted backup: reminders must be a valid array',
     };
+  }
+
+  if (data.routines !== undefined && !Array.isArray(data.routines)) {
+    return {
+      valid: false,
+      error: 'Corrupted backup: routines must be a valid array when present',
+    };
+  }
+
+  if (Array.isArray(data.routines)) {
+    const routineResult = normalizeRoutines(data.routines);
+    if (routineResult.quarantined.length > 0) {
+      warnings.push(`${routineResult.quarantined.length} malformed routine record(s) will be quarantined during restore.`);
+    }
   }
 
   // Sanity check reminders records & duplicate IDs
@@ -372,6 +389,9 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     hasDiagnosticLogs: diagnosticLogCount > 0,
     diagnosticLogCount,
     ...(diagnosticsPreferences ? { diagnosticsPreferences } : {}),
+    routineCount: Array.isArray(data.routines) ? data.routines.length - normalizeRoutines(data.routines).quarantined.length : 0,
+    activeRoutineCount: Array.isArray(data.routines) ? normalizeRoutines(data.routines).routines.filter((routine) => Boolean(routine.activeSession)).length : 0,
+    routineHistoryCount: Array.isArray(data.routines) ? normalizeRoutines(data.routines).routines.reduce((count, routine) => count + routine.history.length, 0) : 0,
     warnings,
   };
 
@@ -390,9 +410,9 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
   const targetSchema = CURRENT_STORAGE_VERSION;
 
   // Clone data safely
-  const categories = Array.isArray(rawData.categories) && rawData.categories.length > 0
-    ? rawData.categories
-    : INITIAL_CATEGORIES;
+  const categories = normalizeCategories(
+    Array.isArray(rawData.categories) && rawData.categories.length > 0 ? rawData.categories : INITIAL_CATEGORIES
+  );
 
   // Validate reminders and ensure all subtasks & clean properties
   const reminders: Reminder[] = (rawData.reminders || []).map((rem) => {
@@ -432,7 +452,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
 
   // Contacts migration: if backup has no contacts, seed defaults or empty
   const contacts = Array.isArray(rawData.contacts)
-    ? rawData.contacts
+    ? rawData.contacts.map((contact) => ({ ...contact, importedFromDevice: contact.importedFromDevice ?? false }))
     : INITIAL_CONTACTS;
 
   const contactCategories = Array.isArray(rawData.contactCategories) && rawData.contactCategories.length > 0
@@ -496,6 +516,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     version: targetSchema,
     categories,
     reminders: fullySanitizedReminders,
+    routines: normalizeRoutines(rawData.routines).routines,
     nodePositions,
     money,
     contacts,
@@ -516,8 +537,12 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
 export function restoreBackup(backupFile: MindMeshBackupFile): { success: boolean; state?: MindMeshStorageData; error?: string } {
   // Snapshot current state in memory
   let originalSnapshot: MindMeshStorageData;
+  let safetySnapshot: MindMeshStorageData;
   try {
     originalSnapshot = loadAllData();
+    // Clone and verify before migration so rollback does not depend on a mutable reference.
+    safetySnapshot = JSON.parse(JSON.stringify(originalSnapshot)) as MindMeshStorageData;
+    if (JSON.stringify(safetySnapshot) !== JSON.stringify(originalSnapshot)) throw new Error('Safety snapshot verification failed');
   } catch (err) {
     return {
       success: false,
@@ -531,6 +556,17 @@ export function restoreBackup(backupFile: MindMeshBackupFile): { success: boolea
 
     // Save to persistence
     saveAllData(migratedState);
+    const verifiedState = loadAllData();
+    const expectedRoutineIds = (migratedState.routines || []).map((routine) => routine.id).sort();
+    const actualRoutineIds = (verifiedState.routines || []).map((routine) => routine.id).sort();
+    if (JSON.stringify(expectedRoutineIds) !== JSON.stringify(actualRoutineIds)) {
+      throw new Error('Restored Routine data could not be verified after persistence');
+    }
+    const expectedActiveSessions = (migratedState.routines || []).filter((routine) => routine.activeSession).length;
+    const actualActiveSessions = (verifiedState.routines || []).filter((routine) => routine.activeSession).length;
+    if (expectedActiveSessions !== actualActiveSessions) {
+      throw new Error('Active Routine session recovery could not be verified after persistence');
+    }
 
     const restoredDiagnosticsPreferences = backupFile.data.diagnostics?.preferences;
     if (restoredDiagnosticsPreferences) {
@@ -559,7 +595,7 @@ export function restoreBackup(backupFile: MindMeshBackupFile): { success: boolea
     // Rollback safely
     logger.error('BackupService', 'Restoration encountered error; rolling back to snapshot', err);
     try {
-      saveAllData(originalSnapshot);
+      saveAllData(safetySnapshot);
     } catch (rbErr) {
       logger.error('BackupService', 'Critical error during rollback', rbErr);
     }

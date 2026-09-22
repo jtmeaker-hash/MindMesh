@@ -1,5 +1,7 @@
 export type Priority = 'low' | 'medium' | 'high';
 
+export * from './routine';
+
 export interface Subtask {
   id: string;
   reminderId: string;
@@ -55,7 +57,10 @@ export interface Category {
   name: string;
   color: string;
   icon?: string;
+  /** Stable parent link; undefined/null means this is a root category. */
+  parentCategoryId?: string | null;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface NodePosition {
@@ -82,6 +87,8 @@ export interface MindMeshStorageData {
   appearance?: import('./appearance').AppearanceSettings;
   notifications?: import('./notifications').AppNotificationSettings;
   notificationHistory?: import('./notifications').NotificationHistoryEntry[];
+  /** Optional so pre-Routine backups and local payloads remain readable. */
+  routines?: import('./routine').Routine[];
 }
 
 export * from './finance';
@@ -125,6 +132,11 @@ export interface MeshNodeData extends Record<string, unknown> {
   notificationState?: 'off' | 'on' | 'permission' | 'failed' | 'unsupported';
   notificationLabel?: string;
   notificationCount?: number;
+  /** Routine graph state used by both the 2D and SpatialGraph adapters. */
+  isRoutineNode?: boolean;
+  routineState?: 'active' | 'current' | 'completed' | 'upcoming';
+  isDependency?: boolean;
+  dependencyLabel?: string;
   // Appearance-resolved theme values (set by the layout generator)
   accentColor?: string;
   surfaceColor?: string;

@@ -6,6 +6,8 @@ interface CategoryModalProps {
   isOpen: boolean;
   onClose: () => void;
   category?: Category | null;
+  categories?: Category[];
+  parentCategoryId?: string | null;
   onSave: (category: Category) => void;
   onDelete?: (categoryId: string) => void;
 }
@@ -25,21 +27,26 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
   isOpen,
   onClose,
   category,
+  categories = [],
+  parentCategoryId = null,
   onSave,
   onDelete,
 }) => {
   const [name, setName] = useState('');
   const [color, setColor] = useState(PALETTE[0]);
+  const [selectedParentId, setSelectedParentId] = useState<string | null>(parentCategoryId);
 
   useEffect(() => {
     if (category) {
       setName(category.name);
       setColor(category.color || PALETTE[0]);
+      setSelectedParentId(category.parentCategoryId ?? null);
     } else {
       setName('');
       setColor(PALETTE[Math.floor(Math.random() * PALETTE.length)]);
+      setSelectedParentId(parentCategoryId ?? null);
     }
-  }, [category, isOpen]);
+  }, [category, isOpen, parentCategoryId]);
 
   if (!isOpen) return null;
 
@@ -52,6 +59,8 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
       name: name.trim(),
       color,
       createdAt: category?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      parentCategoryId: selectedParentId,
     };
 
     onSave(savedCategory);
@@ -154,6 +163,19 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
           </div>
 
           <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+              PARENT CATEGORY
+            </label>
+            <select
+              value={selectedParentId || ''}
+              onChange={(e) => setSelectedParentId(e.target.value || null)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155', color: '#F8FAFC', fontSize: 13, marginBottom: 14 }}
+            >
+              <option value="">Root category</option>
+              {categories.filter((candidate) => candidate.id !== category?.id).map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+              ))}
+            </select>
             <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 8 }}>
               BRANCH COLOR
             </label>

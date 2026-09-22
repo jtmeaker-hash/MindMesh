@@ -16,6 +16,7 @@ import {
   Save,
   ShieldCheck,
   Terminal,
+  Trash2,
   Wand2,
   Wrench,
   X,
@@ -47,11 +48,13 @@ import { getLogs } from '../../services/logging';
 import { getFixesForCheck, runFix } from '../../services/fixer';
 import { FixOutcome } from '../../types/diagnostics';
 import { getNotificationEngineState, getNotificationEnvironment } from '../../services/notifications';
+import { diagnoseRoutines, routineTrashRetentionDays, setRoutineTrashRetentionDays, purgeExpiredRoutineTrash, restoreRoutineVersion } from '../../services/routineSafety';
+import { loadRoutines, saveRoutines } from '../../services/storage';
 import { DIAGNOSTICS_STORAGE_KEY } from '../../services/diagnosticsStore';
 import { LogViewer } from './LogViewer';
 import { FixerPanel } from './FixerPanel';
 
-type DiagnosticsTab = 'health' | 'notifications' | 'storage' | 'backups' | 'logs' | 'fixer' | 'advanced';
+type DiagnosticsTab = 'health' | 'routines' | 'notifications' | 'storage' | 'backups' | 'logs' | 'fixer' | 'advanced';
 
 interface DiagnosticsModalProps {
   isOpen: boolean;
@@ -84,6 +87,7 @@ function readStoredSchemaVersion(): number | 'unknown' {
 
 const TABS: { id: DiagnosticsTab; label: string; icon: React.ReactNode }[] = [
   { id: 'health', label: 'Health', icon: <Activity size={14} /> },
+  { id: 'routines', label: 'Routine Diagnostics', icon: <Wrench size={14} /> },
   { id: 'notifications', label: 'Notifications', icon: <Bell size={14} /> },
   { id: 'storage', label: 'Storage', icon: <HardDrive size={14} /> },
   { id: 'backups', label: 'Backups', icon: <Save size={14} /> },
@@ -172,6 +176,7 @@ function downloadText(content: string, filename: string, type: string): void {
 
 const TAB_CATEGORIES: Record<DiagnosticsTab, DiagnosticCategory[] | null> = {
   health: null, // everything not claimed by a more specific tab
+  routines: ['routines'],
   notifications: ['notifications'],
   storage: ['storage'],
   backups: ['backup'],
@@ -180,7 +185,7 @@ const TAB_CATEGORIES: Record<DiagnosticsTab, DiagnosticCategory[] | null> = {
   advanced: null,
 };
 
-const CLAIMED_CATEGORIES: DiagnosticCategory[] = ['notifications', 'storage', 'backup'];
+const CLAIMED_CATEGORIES: DiagnosticCategory[] = ['notifications', 'storage', 'backup', 'routines'];
 
 interface ResultCardProps {
   result: DiagnosticResult;
@@ -388,12 +393,16 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [includeAppData, setIncludeAppData] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>(() => getLogs());
+  const [routineSafety, setRoutineSafety] = useState(() => diagnoseRoutines());
+  const [trashRetention, setTrashRetention] = useState(() => routineTrashRetentionDays());
 
   const run = useCallback(async (mode: 'quick' | 'deep') => {
     setRunning(true);
     try {
       const next = await runDiagnostics(mode);
       setReport(next);
+      setRoutineSafety(diagnoseRoutines());
+      setTrashRetention(routineTrashRetentionDays());
       setLogs(getLogs());
       appendDiagnosticsHistory({
         id: `diag-${Date.now().toString(36)}`,
@@ -485,6 +494,12 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
   const diagnosticStore = loadDiagnosticsStore();
   const engine = getNotificationEngineState();
   const environment = getNotificationEnvironment();
+
+  const refreshRoutineSafety = () => {
+    setRoutineSafety(diagnoseRoutines());
+    setReport(null);
+    void run('deep');
+  };
 
   return (
     <div
@@ -675,7 +690,28 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
             </div>
           )}
 
-          {tab === 'logs' ? (
+          {tab === 'routines' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: '#67e8f9', letterSpacing: '.08em' }}>ROUTINE DATA SAFETY</div>
+                <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 6 }}>Routine diagnostics are local-only and never discard a definition during repair.</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 8, marginTop: 12 }}>
+                  {[['Schedules', routineSafety.scheduleRegistration.scheduled], ['Active sessions', routineSafety.scheduleRegistration.activeSessions], ['Invalid sessions', routineSafety.invalidSessions.length], ['Broken links', routineSafety.missingLinks.length], ['Quarantined', routineSafety.quarantined.length], ['Trash', routineSafety.trash.count]].map(([label, value]) => <div key={String(label)} style={{ padding: 9, borderRadius: 9, background: 'rgba(30,41,59,.7)' }}><div style={{ fontSize: 10, color: '#64748b' }}>{label}</div><div style={{ fontSize: 18, fontWeight: 800, color: Number(value) > 0 && ['Invalid sessions','Broken links','Quarantined'].includes(String(label)) ? '#fbbf24' : '#e2e8f0' }}>{value}</div></div>)}
+                </div>
+                <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 12 }}>
+                  <button type="button" style={secondaryButton} onClick={() => { void runFix('fix.repairRoutineSafety', { confirmed: true }).then(() => refreshRoutineSafety()); }}><Wand2 size={13} /> Repair Routine state</button>
+                  <button type="button" style={secondaryButton} onClick={() => { const result = purgeExpiredRoutineTrash(Boolean(window.confirm('Permanently remove expired trashed Routines? This cannot be undone.'))); setRoutineSafety(diagnoseRoutines()); window.alert(result.removed ? `Removed ${result.removed} expired Routine(s).` : 'No expired Routine records were removed.'); }}><Trash2 size={13} /> Purge expired Trash</button>
+                </div>
+              </div>
+              <div style={cardStyle}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>TRASH RETENTION</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 12, color: '#cbd5e1' }}>Keep trashed Routines for <input type="number" min={1} max={3650} value={trashRetention} onChange={(e) => { const value = Number(e.target.value); setTrashRetention(value); setRoutineTrashRetentionDays(value); }} style={{ ...secondaryButton, width: 80, display: 'block' }} /> days</label>
+              </div>
+              {routineSafety.quarantined.length > 0 && <div style={cardStyle}><div style={{ fontSize: 12, fontWeight: 700, color: '#fbbf24' }}>QUARANTINED RECORDS</div>{routineSafety.quarantined.map((entry) => <div key={entry.id} style={{ fontSize: 11, color: '#cbd5e1', marginTop: 6 }}><strong>{entry.id}</strong>: {entry.reason}</div>)}</div>}
+              <div style={cardStyle}><div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>VERSION HISTORY & TRASH</div>{loadRoutines().filter((routine) => routine.trashedAt || routine.versionHistory.length > 0).slice(0, 20).map((routine) => <div key={routine.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 0', borderBottom: '1px solid rgba(148,163,184,.1)' }}><div style={{ minWidth: 0 }}><div style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 700 }}>{routine.name}</div><div style={{ fontSize: 10.5, color: '#64748b' }}>{routine.trashedAt ? 'In Trash' : `${routine.versionHistory.length} prior version(s)`}</div></div><div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>{routine.trashedAt && <button type="button" style={secondaryButton} onClick={() => { const next = { ...routine, trashedAt: undefined, status: routine.archivedAt ? 'archived' as const : 'draft' as const, updatedAt: new Date().toISOString() }; saveRoutines(loadRoutines().map((item) => item.id === routine.id ? next : item)); refreshRoutineSafety(); }}>Restore</button>}{routine.versionHistory.length > 0 && <button type="button" style={secondaryButton} onClick={() => { const snapshot = routine.versionHistory[routine.versionHistory.length - 1]; if (window.confirm(`Restore the previous version of ${routine.name}?`)) { restoreRoutineVersion(routine.id, snapshot.id); refreshRoutineSafety(); } }}>Restore prior version</button>}</div></div>)}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{visibleResults.map((result) => <ResultCard key={result.id} result={result} onRepairsApplied={handleRepairsApplied} />)}</div>
+            </div>
+          ) : tab === 'logs' ? (
             <LogViewer onCopyReport={handleCopyReport} onExportReport={handleExportReport} />
           ) : tab === 'fixer' ? (
             <FixerPanel results={report?.results ?? []} onRepairsApplied={handleRepairsApplied} />

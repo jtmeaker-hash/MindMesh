@@ -193,7 +193,7 @@ export interface MoneyState {
   payCycleOverrides: Record<string, number>; // cycleEndDate -> overridden pay
 }
 
-export type AppNavTab = 'reminders' | 'contacts' | 'money' | 'dashboard';
+export type AppNavTab = 'reminders' | 'routines' | 'contacts' | 'money' | 'dashboard';
 export type MoneySubTab = 'overview' | 'bills' | 'income' | 'extra' | 'tips' | 'settings' | 'categories';
 
 export type DashboardTimeFilter = 'today' | '7days' | '30days' | '3months' | 'all';

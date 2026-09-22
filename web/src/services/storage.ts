@@ -11,16 +11,19 @@ import {
 } from '../types/notifications';
 import { DiagnosticPreferences, normalizeDiagnosticPreferences } from '../types/diagnostics';
 import { INITIAL_CATEGORIES, INITIAL_REMINDERS } from '../utils/sampleData';
+import { normalizeCategories } from './categories';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONSHIPS } from '../utils/sampleContactData';
 import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { logger } from './logger';
+import { normalizeRoutines, Routine } from '../types/routine';
 
-export const CURRENT_STORAGE_VERSION = 6;
+export const CURRENT_STORAGE_VERSION = 9;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
 const NODE_POSITIONS_KEY = 'mindmesh_positions_v1';
+export const ROUTINE_QUARANTINE_KEY = 'mindmesh_routine_quarantine_v1';
 
 export function getDefaultState(): MindMeshStorageData {
   return {
@@ -36,6 +39,7 @@ export function getDefaultState(): MindMeshStorageData {
     appearance: getDefaultAppearance(),
     notifications: { ...DEFAULT_NOTIFICATION_SETTINGS },
     notificationHistory: [],
+    routines: [],
     preferences: {
       theme: 'dark',
       defaultReminderPriority: 'medium',
@@ -97,6 +101,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       appearance: getDefaultAppearance(),
       notifications: { ...DEFAULT_NOTIFICATION_SETTINGS },
       notificationHistory: [],
+      routines: [],
       preferences: {
         theme: 'dark',
       },
@@ -133,9 +138,9 @@ export function loadAllData(): MindMeshStorageData {
       return getDefaultState();
     }
 
-    const categories = Array.isArray(parsed.categories) && parsed.categories.length > 0
-      ? parsed.categories
-      : INITIAL_CATEGORIES;
+    const categories = normalizeCategories(
+      Array.isArray(parsed.categories) && parsed.categories.length > 0 ? parsed.categories : INITIAL_CATEGORIES
+    );
 
     const reminders = Array.isArray(parsed.reminders)
       ? parsed.reminders
@@ -166,7 +171,14 @@ export function loadAllData(): MindMeshStorageData {
       : defaultMoney;
 
     const contacts: Contact[] = Array.isArray(parsed.contacts)
-      ? parsed.contacts
+      ? parsed.contacts.filter((contact): contact is Contact => Boolean(contact && typeof contact === 'object' && typeof contact.id === 'string' && typeof contact.fullName === 'string')).map((contact) => ({
+          ...contact,
+          phoneNumber: typeof contact.phoneNumber === 'string' ? contact.phoneNumber : '',
+          relationship: typeof contact.relationship === 'string' ? contact.relationship : 'Other',
+          importedFromDevice: contact.importedFromDevice === true,
+          createdAt: contact.createdAt || new Date().toISOString(),
+          updatedAt: contact.updatedAt || contact.createdAt || new Date().toISOString(),
+        }))
       : INITIAL_CONTACTS;
 
     const contactCategories: string[] = Array.isArray(parsed.contactCategories) && parsed.contactCategories.length > 0
@@ -190,12 +202,25 @@ export function loadAllData(): MindMeshStorageData {
       notifications.historyLimit
     );
 
+    const routineResult = normalizeRoutines(parsed.routines);
+    // Only write quarantine evidence when malformed data is actually found. Clean
+    // hydration must remain read-only so transactional write-failure tests and
+    // normal app startup retain their existing persistence semantics.
+    if (routineResult.quarantined.length > 0) {
+      saveRoutineQuarantine(routineResult.quarantined);
+      logger.warn('Storage', 'Quarantined malformed routine records during hydration', {
+        quarantined: routineResult.quarantined.map((entry) => ({ id: entry.id, reason: entry.reason })),
+      });
+    }
+
     logger.debug('Storage', 'State hydrated successfully', {
       categoryCount: categories.length,
       reminderCount: reminders.length,
       positionCount: Object.keys(nodePositions).length,
       contactCount: contacts.length,
       pendingNotifications: notificationHistory.filter((entry) => entry.status === 'pending').length,
+      routineCount: routineResult.routines.length,
+      quarantinedRoutineCount: routineResult.quarantined.length,
     });
 
     return {
@@ -211,6 +236,7 @@ export function loadAllData(): MindMeshStorageData {
       appearance,
       notifications,
       notificationHistory,
+      routines: routineResult.routines,
       preferences,
     };
   } catch (e) {
@@ -410,6 +436,45 @@ export function loadReminders(): Reminder[] {
   return loadAllData().reminders;
 }
 
+export function loadRoutines(): Routine[] {
+  return loadAllData().routines || [];
+}
+
+export function loadRoutineQuarantine(): import('../types/routine').RoutineQuarantineEntry[] {
+  try {
+    const raw = localStorage.getItem(ROUTINE_QUARANTINE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is import('../types/routine').RoutineQuarantineEntry =>
+      Boolean(entry && typeof entry === 'object' && typeof (entry as { id?: unknown }).id === 'string' && typeof (entry as { reason?: unknown }).reason === 'string')
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function saveRoutineQuarantine(entries: import('../types/routine').RoutineQuarantineEntry[]): void {
+  try {
+    localStorage.setItem(ROUTINE_QUARANTINE_KEY, JSON.stringify(entries));
+  } catch (error) {
+    logger.error('Storage', 'Failed to persist Routine quarantine records', error);
+  }
+}
+
+export function clearRoutineQuarantine(): void {
+  try {
+    localStorage.removeItem(ROUTINE_QUARANTINE_KEY);
+  } catch (error) {
+    logger.error('Storage', 'Failed to clear Routine quarantine records', error);
+  }
+}
+
+export function saveRoutines(routines: Routine[]): void {
+  const current = loadAllData();
+  saveAllData({ ...current, routines });
+}
+
 export function saveReminders(reminders: Reminder[]): void {
   const current = loadAllData();
   saveAllData({ ...current, reminders });
@@ -507,17 +572,25 @@ export function importStorageJson(json: string): boolean {
     }
     const state: MindMeshStorageData = {
       version: CURRENT_STORAGE_VERSION,
-      categories: parsed.categories,
+      categories: normalizeCategories(parsed.categories),
       reminders: parsed.reminders,
       nodePositions: parsed.nodePositions && typeof parsed.nodePositions === 'object' ? parsed.nodePositions : {},
       lastUpdated: new Date().toISOString(),
       money: parsed.money || getDefaultMoneyState(),
-      contacts: Array.isArray(parsed.contacts) ? parsed.contacts : INITIAL_CONTACTS,
+      contacts: Array.isArray(parsed.contacts) ? parsed.contacts.filter((contact: unknown): contact is Contact => Boolean(contact && typeof contact === 'object' && typeof (contact as Contact).id === 'string' && typeof (contact as Contact).fullName === 'string')).map((contact: Contact) => ({
+        ...contact,
+        phoneNumber: typeof contact.phoneNumber === 'string' ? contact.phoneNumber : '',
+        relationship: typeof contact.relationship === 'string' ? contact.relationship : 'Other',
+        importedFromDevice: contact.importedFromDevice === true,
+        createdAt: contact.createdAt || new Date().toISOString(),
+        updatedAt: contact.updatedAt || contact.createdAt || new Date().toISOString(),
+      })) : INITIAL_CONTACTS,
       contactCategories: Array.isArray(parsed.contactCategories) ? parsed.contactCategories : INITIAL_CONTACT_CATEGORIES,
       contactRelationships: Array.isArray(parsed.contactRelationships) ? parsed.contactRelationships : INITIAL_CONTACT_RELATIONSHIPS,
       appearance: normalizeAppearance(parsed.appearance),
       notifications: normalizeNotificationSettings(parsed.notifications),
       notificationHistory: normalizeNotificationHistory(parsed.notificationHistory),
+      routines: normalizeRoutines(parsed.routines).routines,
       preferences: parsed.preferences || {},
     };
     saveAllData(state);

@@ -49,6 +49,9 @@ export interface NativeNotificationBridge {
   cancelAll(): void;
   getScheduledCount(): number;
   openNotificationSettings(): void;
+  canScheduleExactAlarms?: () => boolean;
+  isIgnoringBatteryOptimizations?: () => boolean;
+  getDiagnosticsJson?: () => string;
 }
 
 /**
@@ -66,6 +69,7 @@ declare global {
   interface Window {
     MindMeshNotifications?: NativeNotificationBridge;
     MindMeshNativeNotificationEvents?: NativeNotificationEvents;
+    MindMeshRoutineActionQueue?: Array<{ id: string; action: string }>;
   }
 }
 
@@ -936,6 +940,11 @@ export function handleNotificationAction(entryId: string, action: 'complete' | '
 }
 
 /** Installs the event handlers native code calls into. Safe to call repeatedly. */
+function dispatchRoutineAction(id: string, action: string): void {
+  window.MindMeshRoutineActionQueue = [...(window.MindMeshRoutineActionQueue || []), { id, action }];
+  window.dispatchEvent(new CustomEvent('mindmesh-routine-action', { detail: { id, action } }));
+}
+
 export function attachNativeBridgeHandlers(): void {
   if (typeof window === 'undefined') return;
 
@@ -958,10 +967,18 @@ export function attachNativeBridgeHandlers(): void {
     },
 
     onAction: (id: string, action: string) => {
+      if (id.startsWith('routine:')) {
+        dispatchRoutineAction(id, action);
+        return;
+      }
       handleNotificationAction(id, action);
     },
 
     onOpened: (id: string) => {
+      if (id.startsWith('routine:')) {
+        dispatchRoutineAction(id, 'open');
+        return;
+      }
       const entry = callbacks?.history.find((item) => item.id === id);
       if (entry) {
         callbacks?.onOpenReminder?.(entry.reminderId);
@@ -1218,6 +1235,31 @@ export function replaceNotificationHistory(history: NotificationHistoryEntry[], 
 export function describeNotificationEnvironment(): NotificationEnvironment {
   environment = detectNotificationEnvironment();
   return environment;
+}
+
+export interface NativeNotificationDiagnostics {
+  permission: string;
+  scheduledCount: number;
+  exactAlarms: boolean;
+  batteryOptimizationExempt: boolean;
+  channelsEnabled: boolean;
+}
+
+export function getNativeNotificationDiagnostics(): NativeNotificationDiagnostics | null {
+  const bridge = getNativeBridge();
+  if (!bridge) return null;
+  try {
+    if (bridge.getDiagnosticsJson) return JSON.parse(bridge.getDiagnosticsJson()) as NativeNotificationDiagnostics;
+    return {
+      permission: bridge.getPermissionState(),
+      scheduledCount: bridge.getScheduledCount(),
+      exactAlarms: bridge.canScheduleExactAlarms?.() ?? true,
+      batteryOptimizationExempt: bridge.isIgnoringBatteryOptimizations?.() ?? true,
+      channelsEnabled: true,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export { DEFAULT_NOTIFICATION_SETTINGS };

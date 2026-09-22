@@ -4,6 +4,7 @@ import { Contact } from './contact';
 import { AppearanceSettings } from './appearance';
 import { AppNotificationSettings, NotificationHistoryEntry } from './notifications';
 import { DiagnosticPreferences, DiagnosticsHistoryEntry, LogEntry } from './diagnostics';
+import { Routine } from './routine';
 
 export interface AppPreferences {
   theme?: 'dark' | 'light' | 'system';
@@ -19,6 +20,8 @@ export interface AppPreferences {
 export interface MindMeshBackupData {
   categories: Category[];
   reminders: Reminder[];
+  /** Optional for compatibility with backups created before Routine Builder. */
+  routines?: Routine[];
   nodePositions: NodePositionMap;
   money: MoneyState;
   contacts: Contact[];
@@ -75,6 +78,9 @@ export interface RestoreSummary {
   hasDiagnosticLogs: boolean;
   diagnosticLogCount: number;
   diagnosticsPreferences?: DiagnosticPreferences;
+  routineCount?: number;
+  activeRoutineCount?: number;
+  routineHistoryCount?: number;
   warnings: string[];
 }
 

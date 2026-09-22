@@ -27,6 +27,7 @@ import { getLogRetention, getLogs } from './logging';
 import { openDeviceNotificationSettings, syncNotificationSchedules } from './notifications';
 import { runDiagnostics } from './diagnostics';
 import { logger } from './logger';
+import { clearStaleRoutineSession, diagnoseRoutines, repairRoutineLinks, rebuildRoutineSchedules } from './routineSafety';
 
 /**
  * Diagnostics fixer.
@@ -126,6 +127,14 @@ export const FIX_DEFINITIONS: FixDefinition[] = [
     targetChecks: ['logging.health'],
   },
   {
+    id: 'fix.repairRoutineSafety',
+    title: 'Repair Routine safety state',
+    kind: 'safe',
+    description: 'Re-registers Routine schedules, clears invalid active-session flags, and repairs broken Routine links without deleting definitions.',
+    affectsUserData: false,
+    targetChecks: ['routines.safety'],
+  },
+  {
     id: 'fix.openNotificationSettings',
     title: 'Open device notification settings',
     kind: 'safe',
@@ -203,6 +212,10 @@ interface RepairReport {
 }
 
 type RepairFn = () => RepairReport;
+
+function runRoutineSafetySummary() {
+  return diagnoseRoutines();
+}
 
 function isFiniteAmount(value: unknown): boolean {
   return typeof value === 'number' && Number.isFinite(value);
@@ -442,6 +455,18 @@ const repairs: Record<string, RepairFn> = {
     saveDiagnosticsStore({ ...store, logs: pruned });
     logger.info('Fixer', 'Pruned diagnostic logs', { before, after: pruned.length });
     return { ok: true, message: `Pruned diagnostic logs from ${before} to ${pruned.length} entries.` };
+  },
+
+  'fix.repairRoutineSafety': () => {
+    const before = runRoutineSafetySummary();
+    let clearedSessions = 0;
+    for (const routineId of before.invalidSessions) {
+      if (clearStaleRoutineSession(routineId)) clearedSessions += 1;
+    }
+    const repairedLinks = repairRoutineLinks();
+    const schedules = rebuildRoutineSchedules();
+    logger.info('Fixer', 'Repaired Routine safety state', { clearedSessions, repairedLinks, schedules });
+    return { ok: true, message: `Routine safety repaired: ${clearedSessions} stale session(s) cleared, ${repairedLinks} broken link(s) repaired, ${schedules} schedule(s) re-registered.` };
   },
 
   'fix.openNotificationSettings': () => {
