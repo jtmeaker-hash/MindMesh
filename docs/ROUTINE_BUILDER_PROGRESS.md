@@ -2,9 +2,11 @@
 
 ## Current stage
 
-**Stage 9 — Diagnostics, repair, versioning + data safety — implementation complete**
+**Stage 11 — New standalone GitHub Action — implementation complete**
 
-Stage 9 extends the existing diagnostics/fixer surface with durable Routine quarantine records and validates the existing repair, retention, version restore, draft recovery, and backup safety paths. A standalone GitHub Actions workflow now validates the repository’s web commands on future `main` pushes, pull requests, and manual dispatch.
+Stage 11 adds a second, independent Routine regression workflow. The existing project CI remains unchanged; the new workflow validates the established web lint, type-check, full test, and Android WebView bundle build commands on future `main` pushes, pull requests targeting `main`, and manual dispatch.
+
+Stage 9 extends the existing diagnostics/fixer surface with durable Routine quarantine records and validates the existing repair, retention, version restore, draft recovery, and backup safety paths.
 
 Stage 6 adds local history aggregation, completion/skip/duration analytics, streaks and goals, unified Today planning, supportive skip reasons, quick-start presets, and Dashboard advisory/plan surfaces. Core execution remains local-first and does not require AI.
 
@@ -436,6 +438,52 @@ Routine data is included in full EVERYTHING backups through the existing backup 
 
 **Stage 11 — final integration verification:** run the Android notification/process/reboot/orientation matrix on a configured emulator, validate the standalone CI workflow in GitHub, and close remaining Routine import/history/accessibility polish without changing persistence compatibility.
 
+## Stage 11 implementation
+
+### Completed work
+
+- Added a new standalone workflow at `.github/workflows/mindmesh-routine-regression.yml`.
+- Configured required `push` events for `main` and `workflow_dispatch`, plus `pull_request` events targeting `main`.
+- Kept `.github/workflows/build.yml` and `.github/workflows/routine-builder-ci.yml` independent and untouched; the new workflow does not use `workflow_call`, call another workflow, or replace existing CI.
+- Used only commands verified in the repository’s existing package scripts and CI model:
+  - `npm ci --prefix web`
+  - `npm --prefix web run lint`
+  - `npm --prefix web run type-check`
+  - `npm --prefix web run test -- --run`
+  - `npm --prefix web run build`
+- Kept Android emulator/instrumentation checks out of this workflow because the repository’s established Android workflow already owns Gradle validation and device tests are not reliable on every main push. The existing Android workflow remains responsible for `:app:testDebugUnitTest` and `assembleDebug`.
+- Added no secrets, credentials, third-party services, or persistence changes.
+
+### Files changed in Stage 11
+
+- `.github/workflows/mindmesh-routine-regression.yml`
+- `docs/ROUTINE_BUILDER_PROGRESS.md`
+
+### Architecture / CI decisions
+
+- The workflow is intentionally web-focused because Routine Builder is implemented in the Vite/React WebView layer and the web commands are deterministic in the repository environment.
+- `npm ci --prefix web` and `web/package-lock.json` follow the established CI convention already used by the repository workflows.
+- Critical steps do not use `continue-on-error`; lint, type-check, tests, and build failures fail the workflow.
+
+### Validation
+
+- Verified the workflow file contains the required `push` to `main`, `pull_request` to `main`, and `workflow_dispatch` triggers using a local structural YAML check.
+- Equivalent local commands passed:
+  - `npm --prefix web run lint`
+  - `npm --prefix web run type-check`
+  - `npm --prefix web run test -- --run` — passed: 24 test files, 256 tests.
+  - `npm --prefix web run build` — passed.
+- A full YAML parser was not installed in this workspace; no dependency was added solely for validation. GitHub Actions will perform the authoritative workflow schema validation when the file is pushed.
+
+### Environment limits
+
+- Android Gradle tests remain unavailable in this workspace because no Android SDK or `local.properties` is configured. They remain in the pre-existing Android workflow rather than being silently skipped here.
+- Emulator-only notification, process-death, reboot, permissions, orientation, and 3D performance checks remain manual/device-CI work.
+
+## Exact next stage
+
+**Stage 12 — release-readiness verification:** run the independent workflow and existing Android workflow on GitHub, validate the complete notification/device matrix on a configured emulator, and address any CI-only or accessibility findings without changing persistence compatibility.
+
 ## Last good commit
 
-No stage commit was created in this workspace. Freebuff’s Changes panel owns commit delivery; review and commit only the intended Stage 10 files and earlier uncommitted Routine Builder files that belong to the product change.
+No stage commit was created in this workspace. Freebuff’s Changes panel owns commit delivery; review and commit only the intended Stage 11 files and earlier uncommitted Routine Builder files that belong to the product change.

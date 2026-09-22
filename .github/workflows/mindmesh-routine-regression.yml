@@ -1,0 +1,42 @@
+name: MindMesh Routine Regression
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  routine-regression:
+    name: Routine web regression
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Run web lint
+        run: npm --prefix web run lint
+
+      - name: Run web type-check
+        run: npm --prefix web run type-check
+
+      - name: Run full web regression suite
+        run: npm --prefix web run test -- --run
+
+      - name: Build Android WebView bundle
+        run: npm --prefix web run build
