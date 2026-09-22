@@ -1,4 +1,4 @@
-name: MindMesh Routine Regression
+name: MindMesh Regression
 
 on:
   push:
@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  routine-regression:
-    name: Routine web regression
+  web-regression:
+    name: Web application regression
     runs-on: ubuntu-latest
 
     steps:
@@ -38,5 +38,31 @@ jobs:
       - name: Run full web regression suite
         run: npm --prefix web run test -- --run
 
-      - name: Build Android WebView bundle
+      - name: Build web and Android WebView bundle
         run: npm --prefix web run build
+
+  android-regression:
+    name: Android application regression
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Ensure Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Run Android unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Build Android debug APK
+        run: ./gradlew assembleDebug --stacktrace
