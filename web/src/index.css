@@ -1,3 +1,12 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  max-width: 100%;
+  min-width: 0;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -472,6 +481,59 @@
 
 @media (max-width: 760px) {
   .mm-app-shell { --mm-perspective: 1200px; }
+
+  .money-module,
+  .routine-module {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  .money-module > div,
+  .routine-module > div {
+    min-width: 0;
+  }
+  .money-module [style*='gridTemplateColumns'],
+  .routine-module [style*='gridTemplateColumns'] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .money-timeline-card {
+    align-items: flex-start !important;
+    flex-wrap: wrap;
+    gap: 8px !important;
+  }
+  .money-timeline-card > div:first-of-type {
+    min-width: 0;
+    flex: 1 1 160px;
+  }
+  .money-timeline-card > div:last-of-type {
+    min-width: 0;
+    flex: 0 1 auto;
+    margin-left: auto;
+  }
+  .money-timeline-card span {
+    overflow-wrap: anywhere;
+  }
+  .routine-module {
+    padding: 14px !important;
+  }
+  .routine-module input,
+  .routine-module select,
+  .routine-module textarea {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .routine-step-fields {
+    grid-template-columns: minmax(0, 1fr) !important;
+    padding-left: 10px !important;
+  }
+  .routine-module [draggable] > div:first-child {
+    flex-wrap: wrap;
+  }
+  .routine-module [draggable] > div:first-child input {
+    flex: 1 1 140px !important;
+  }
+  .routine-module [draggable] > div:first-child button {
+    flex: 0 0 auto;
+  }
   .mm-topbar {
     min-height: 0;
     padding: max(8px, env(safe-area-inset-top, 0px)) 10px 8px !important;

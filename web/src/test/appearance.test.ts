@@ -8,6 +8,7 @@ import {
   isLightBackground,
   mixColors,
   normalizeAppearance,
+  validateAppearance,
   resolveNodeTheme,
   withAlpha,
 } from '../services/appearance';
@@ -137,6 +138,23 @@ describe('Appearance engine', () => {
     const aqua = applyPreset(withImage, 'aqua');
     expect(aqua.background.kind).toBe('image');
     expect(aqua.background.image.dataUrl).toBe('data:image/png;base64,AAAA');
+  });
+
+  it('validates built-in presets and custom mode independently', () => {
+    const preset = applyPreset(getDefaultAppearance(), 'aqua');
+    expect(validateAppearance(preset).valid).toBe(true);
+    expect(validateAppearance(preset).mode).toBe('preset');
+
+    const custom = { ...preset, themeId: 'custom' as const, background: { ...preset.background, kind: 'void' as const }, matrix: { ...preset.matrix, enabled: true } };
+    const validation = validateAppearance(custom);
+    expect(validation.valid).toBe(true);
+    expect(validation.mode).toBe('custom');
+    expect(validation.normalized.background.kind).toBe('void');
+    expect(validation.normalized.matrix.enabled).toBe(true);
+
+    expect(validateAppearance({ ...preset, themeId: 'not-a-theme' }).valid).toBe(false);
+    expect(validateAppearance({ themeId: 'custom', background: {} }).valid).toBe(false);
+    expect(validateAppearance({ themeId: 'legacy', backgroundKind: 'void', matrixEnabled: true }).mode).toBe('legacy');
   });
 
   it('normalises hostile or legacy input instead of throwing', () => {

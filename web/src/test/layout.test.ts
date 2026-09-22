@@ -5,6 +5,29 @@ import {
   generateCompletedCategoryMesh,
 } from '../utils/layout';
 import { Category, Reminder, NodePositionMap } from '../types';
+import { diagnoseHorizontalOverflow } from '../services/diagnostics';
+
+describe('Document overflow diagnostics', () => {
+  it('passes when document scroll width fits the viewport', () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 360 });
+    Object.defineProperty(document.documentElement, 'scrollWidth', { configurable: true, value: 360 });
+    expect(diagnoseHorizontalOverflow(document)?.overflow).toBe(0);
+  });
+
+  it('reports meaningful document overflow without changing layout', () => {
+    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 320 });
+    Object.defineProperty(document.documentElement, 'scrollWidth', { configurable: true, value: 372 });
+    const offender = document.createElement('div');
+    offender.dataset.testid = 'overflow-card';
+    offender.getBoundingClientRect = () => ({ left: 0, right: 372, top: 0, bottom: 20, width: 372, height: 20, x: 0, y: 0, toJSON: () => ({}) });
+    document.body.appendChild(offender);
+    const report = diagnoseHorizontalOverflow(document);
+    expect(report?.overflow).toBe(52);
+    expect(report?.offenders).toContain('overflow-card');
+    expect(offender.style.overflowX).toBe('');
+    offender.remove();
+  });
+});
 
 describe('Layout & Mesh Graph Generator', () => {
   const categories: Category[] = [

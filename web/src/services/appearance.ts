@@ -412,6 +412,66 @@ function pickDataUrl(value: unknown): string | undefined {
  * Coerces any unknown input (older storage, hand-edited backup, corrupt JSON)
  * into a fully valid AppearanceSettings object. Never throws.
  */
+export interface AppearanceValidation {
+  valid: boolean;
+  mode: 'preset' | 'custom' | 'legacy' | 'missing' | 'malformed';
+  reason?: string;
+  normalized: AppearanceSettings;
+}
+
+/** Validates the stored shape without treating the intentional custom mode as a preset. */
+export function validateAppearance(raw: unknown): AppearanceValidation {
+  if (!raw) {
+    return { valid: false, mode: 'missing', reason: 'No appearance settings are stored.', normalized: getDefaultAppearance() };
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { valid: false, mode: 'malformed', reason: 'Appearance settings are not an object.', normalized: normalizeAppearance(raw) };
+  }
+
+  const source = raw as Record<string, unknown>;
+  const normalized = normalizeAppearance(raw);
+  const themeId = source.themeId;
+  const isPreset = APPEARANCE_PRESETS.some((preset) => preset.id === themeId);
+  const isCustom = themeId === 'custom';
+  const requiredFields = [
+    'version', 'themeId', 'nodeColorMode', 'connectionColorMode', 'nodeColors', 'connectionColors',
+    'surfaceMode', 'background', 'matrix', 'threeD', 'showGrid', 'gridColor',
+  ];
+  const requiredNested: Record<string, string[]> = {
+    nodeColors: ['root', 'category', 'reminder', 'subtask', 'completed', 'selected', 'hover'],
+    connectionColors: ['branch', 'reminder', 'subtask', 'completed'],
+    background: ['kind', 'color', 'dim', 'voidAnimated', 'image'],
+    matrix: ['enabled', 'color', 'fontSize', 'speed', 'opacity', 'density'],
+    threeD: ['level', 'perspective', 'shadowIntensity', 'glowIntensity', 'animationIntensity', 'nodeDepth', 'connectionDepth', 'cardDepth', 'graphRotation', 'cameraSensitivity', 'zoomSensitivity', 'invertRotation', 'connectionAnimationIntensity', 'autoFocus'],
+  };
+  const hasRequiredShape = requiredFields.every((field) => Object.prototype.hasOwnProperty.call(source, field)) &&
+    Object.entries(requiredNested).every(([field, nested]) => {
+      const value = source[field];
+      return value && typeof value === 'object' && nested.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+    });
+  const stable = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.keys(value as Record<string, unknown>).filter((key) => (value as Record<string, unknown>)[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+  };
+  const shapePreserved = hasRequiredShape && stable(normalized) === stable(raw);
+
+  if (!isPreset && !isCustom) {
+    return { valid: false, mode: 'legacy', reason: `Theme "${String(themeId ?? 'missing')}" is not a supported appearance mode.`, normalized };
+  }
+  if (!shapePreserved) {
+    return {
+      valid: false,
+      mode: isCustom ? 'custom' : 'malformed',
+      reason: isCustom ? 'Custom appearance settings contain missing or invalid fields.' : 'Preset appearance settings contain missing or invalid fields.',
+      normalized,
+    };
+  }
+  return { valid: true, mode: isCustom ? 'custom' : 'preset', normalized };
+}
+
 export function normalizeAppearance(raw: unknown): AppearanceSettings {
   const defaults = getDefaultAppearance();
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return defaults;

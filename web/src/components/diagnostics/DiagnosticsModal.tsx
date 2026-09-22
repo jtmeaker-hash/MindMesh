@@ -522,8 +522,10 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
         aria-modal="true"
         aria-label="MindMesh Diagnostics"
         style={{
-          width: '100%',
+          width: 'calc(100% - 16px)',
           maxWidth: 720,
+          minWidth: 0,
+          boxSizing: 'border-box',
           maxHeight: '92vh',
           display: 'flex',
           flexDirection: 'column',
@@ -673,7 +675,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
         </div>
 
         {/* Body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 28px 18px' }}>
+        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '14px 18px 28px 18px' }}>
           {startupWarning && tab === 'health' && (
             <div
               style={{

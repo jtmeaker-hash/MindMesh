@@ -16,7 +16,7 @@ import {
   loadDiagnosticPreferences,
   saveDiagnosticPreferences,
 } from './storage';
-import { getDefaultAppearance, normalizeAppearance } from './appearance';
+import { getDefaultAppearance, validateAppearance } from './appearance';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import {
   INITIAL_CONTACT_CATEGORIES,
@@ -108,7 +108,9 @@ export const FIX_DEFINITIONS: FixDefinition[] = [
     description:
       'Restores missing or invalid configuration (notification defaults, appearance, money categories, contact labels) without changing the values you chose.',
     affectsUserData: false,
-    targetChecks: ['appearance.config', 'navigation.routes', 'money.storage'],
+    // Verify the check that requested this repair. Other checks may have their own
+    // independent warning and must not make an appearance repair report failure.
+    targetChecks: ['appearance.config'],
   },
   {
     id: 'fix.rerunSafeMigrations',
@@ -385,10 +387,10 @@ const repairs: Record<string, RepairFn> = {
       });
       repaired.push('appearance');
     } else {
-      const normalized = normalizeAppearance(state.appearance);
-      if (JSON.stringify(normalized) !== JSON.stringify(state.appearance)) {
+      const validation = validateAppearance(state.appearance);
+      if (!validation.valid) {
         mutateState((draft) => {
-          draft.appearance = normalized;
+          draft.appearance = validation.normalized;
         });
         repaired.push('appearance');
       }

@@ -12,7 +12,7 @@ import {
 } from '../types/diagnostics';
 import { NotificationHistoryEntry } from '../types/notifications';
 import { CURRENT_STORAGE_VERSION, loadAllData } from './storage';
-import { APPEARANCE_PRESETS, getDefaultAppearance, normalizeAppearance } from './appearance';
+import { APPEARANCE_PRESETS, getDefaultAppearance, validateAppearance } from './appearance';
 import { APP_VERSION, BACKUP_FORMAT_VERSION, createBackup, serializeBackup, validateBackup } from './backup';
 import { computeNextDueDate, formatDateIso, parseIsoDate } from './recurrence';
 import {
@@ -868,31 +868,29 @@ const checkBackupExportChannel: DiagnosticCheck = () => {
 };
 
 const checkAppearanceConfig: DiagnosticCheck = ({ state }) => {
-  const normalized = normalizeAppearance(state.appearance);
-  const knownPreset = APPEARANCE_PRESETS.some((preset) => preset.id === normalized.themeId);
-  const matchesStored = Boolean(state.appearance);
-
-  const status: DiagnosticStatus = !matchesStored ? 'warning' : knownPreset ? 'pass' : 'warning';
+  const validation = validateAppearance(state.appearance);
+  const normalized = validation.normalized;
+  const knownPreset = validation.mode === 'preset';
+  const status: DiagnosticStatus = validation.valid ? 'pass' : 'warning';
   return makeResult({
     id: 'appearance.config',
     name: 'Theme & customisation',
     category: 'appearance',
     status,
-    explanation: !matchesStored
-      ? 'No appearance settings are stored, so defaults are being used.'
-      : knownPreset
-        ? `Appearance configuration is valid (theme "${normalized.themeId}").`
-        : `Appearance theme "${normalized.themeId}" is not a known preset and was normalised.`,
+    explanation: validation.valid
+      ? `Appearance configuration is valid (${validation.mode} mode, theme "${normalized.themeId}").`
+      : validation.reason ?? 'Appearance configuration needs repair.',
     details: {
       themeId: normalized.themeId,
       background: normalized.background.kind,
       matrixEnabled: normalized.matrix.enabled,
       knownPreset,
+      mode: validation.mode,
       presetIds: APPEARANCE_PRESETS.map((preset) => preset.id),
     },
-    ...(!matchesStored || !knownPreset
+    ...(!validation.valid
       ? {
-          suggestedFix: 'Repair missing default settings to restore a valid appearance configuration.',
+          suggestedFix: 'Repair only missing or invalid appearance fields; user custom values are preserved.',
           fixId: 'fix.repairDefaults',
         }
       : {}),
@@ -1001,6 +999,54 @@ const checkPwaInstall: DiagnosticCheck = () => {
         ? 'MindMesh is installed and running as a standalone app.'
         : 'MindMesh is running as a normal browser page.',
     details: { installed, displayMode, androidApplication: isAndroidNative },
+  });
+};
+
+export interface HorizontalOverflowReport {
+  viewportWidth: number;
+  documentWidth: number;
+  overflow: number;
+  offenders: string[];
+  ignoredScrollableContainers: number;
+}
+
+/** Measures real document overflow without changing styles or hiding the problem. */
+export function diagnoseHorizontalOverflow(doc: Document | undefined = typeof document !== 'undefined' ? document : undefined): HorizontalOverflowReport | null {
+  if (!doc?.documentElement) return null;
+  const viewportWidth = doc.documentElement.clientWidth;
+  const documentWidth = doc.documentElement.scrollWidth;
+  const offenders: string[] = [];
+  let ignoredScrollableContainers = 0;
+  if (documentWidth > viewportWidth) {
+    const elements = Array.from(doc.querySelectorAll<HTMLElement>('*'));
+    for (const element of elements) {
+      const style = typeof getComputedStyle === 'function' ? getComputedStyle(element) : null;
+      const intentionallyScrollable = style && (style.overflowX === 'auto' || style.overflowX === 'scroll');
+      if (intentionallyScrollable && element.scrollWidth > element.clientWidth) {
+        ignoredScrollableContainers += 1;
+        continue;
+      }
+      const rect = element.getBoundingClientRect();
+      if (rect.right > viewportWidth + 1 || rect.left < -1) {
+        const label = element.dataset.testid || element.getAttribute('aria-label') || element.className || element.tagName.toLowerCase();
+        offenders.push(String(label).slice(0, 120));
+        if (offenders.length >= 8) break;
+      }
+    }
+  }
+  return { viewportWidth, documentWidth, overflow: Math.max(0, documentWidth - viewportWidth), offenders, ignoredScrollableContainers };
+}
+
+const checkLayoutOverflow: DiagnosticCheck = () => {
+  const report = diagnoseHorizontalOverflow();
+  if (!report) {
+    return makeResult({ id: 'layout.horizontalOverflow', name: 'Document horizontal layout', category: 'app', status: 'unknown', explanation: 'A document is not available in this diagnostic context, so layout overflow cannot be measured.' });
+  }
+  const status: DiagnosticStatus = report.overflow > 0 ? 'warning' : 'pass';
+  return makeResult({
+    id: 'layout.horizontalOverflow', name: 'Document horizontal layout', category: 'app', status,
+    explanation: status === 'pass' ? 'The document fits the viewport; intentionally scrollable child containers are isolated.' : `The document is ${report.overflow}px wider than the viewport. Review the reported elements rather than hiding overflow globally.`,
+    details: report as unknown as Record<string, unknown>,
   });
 };
 
@@ -1413,6 +1459,7 @@ const QUICK_CHECKS: DiagnosticCheck[] = [
   checkPwaInstall,
   checkNetwork,
   checkRoutineSafety,
+  checkLayoutOverflow,
 ];
 
 const DEEP_CHECKS: DiagnosticCheck[] = [
@@ -1546,6 +1593,16 @@ export function buildDiagnosticsReportText(
       push(`[WARNING] ${result.name} (${result.id})`);
       push(`  ${result.explanation}`);
       if (result.suggestedFix) push(`  Suggested fix: ${result.suggestedFix}`);
+    }
+    push();
+  }
+
+  const unknownResults = report.results.filter((result) => result.status === 'unknown');
+  if (unknownResults.length > 0) {
+    push('-- Unknown / Not Applicable Checks --');
+    for (const result of unknownResults) {
+      push(`[UNKNOWN] ${result.name} (${result.id})`);
+      push(`  Reason: ${result.explanation}`);
     }
     push();
   }

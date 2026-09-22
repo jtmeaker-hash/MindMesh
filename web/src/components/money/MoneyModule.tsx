@@ -571,13 +571,13 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                 <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>
                   No upcoming bills or scheduled income found in the next 14 days.
                 </p>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              ) : (<div className="money-timeline" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {timelineItems.map((item) => {
                     const isIncome = item.type === 'income';
                     return (
                       <div
                         key={item.id}
+                        className="money-timeline-card"
                         style={{
                           display: 'flex',
                           alignItems: 'center',
