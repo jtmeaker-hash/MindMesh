@@ -27,7 +27,7 @@ import {
   ReminderNotificationSettings,
 } from '../../types/notifications';
 import { getReminderNotificationStatus } from '../../services/notifications';
-import { enhanceReminderText, reminderAiRequest, ReminderAiError, ReminderAiOperation } from '../../services/reminderAi';
+import { enhanceReminderTextLocally, reminderAiRequest, ReminderAiOperation } from '../../services/reminderAi';
 
 const WEEKDAYS = [
   { label: 'S', day: 0, title: 'Sunday' },
@@ -311,24 +311,20 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     setAiError(null);
     setAiDraft(null);
     try {
-      const text = await enhanceReminderText(
-        reminderAiRequest(
-          {
-            title: title.trim(),
-            description: description.trim() || undefined,
-            summary: summary.trim() || undefined,
-            subtasks,
-            category: selectedCategory?.name,
-          },
-          operation
-        ),
-        controller.signal
+      const request = reminderAiRequest(
+        {
+          title: title.trim(),
+          description: description.trim() || undefined,
+          summary: summary.trim() || undefined,
+          subtasks,
+          category: selectedCategory?.name,
+        },
+        operation
       );
+      const text = enhanceReminderTextLocally(request);
       if (!controller.signal.aborted) setAiDraft({ operation, text });
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setAiError(error instanceof ReminderAiError ? error.message : 'AI enhancement failed. Continue manually.');
-      }
+    } catch {
+      if (!controller.signal.aborted) setAiError('Local enhancement failed. Continue manually.');
     } finally {
       if (aiAbortRef.current === controller) {
         aiAbortRef.current = null;

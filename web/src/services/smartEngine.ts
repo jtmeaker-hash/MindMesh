@@ -1,5 +1,11 @@
 import { Category } from '../types';
 import {
+  createDirectDebitProposal,
+  createReminderProposal,
+  detectIntent,
+  SmartIntent,
+} from './smartEngineParsing';
+import {
   ActionValidationResult,
   Ambiguity,
   Confidence,
@@ -65,14 +71,49 @@ export class SmartEngine {
 
   public interpret(operation: SmartEngineOperation, input: string): SmartEngineResult {
     const normalized = input.trim();
-    if (!this.settings.enabled) {
-      return this.unknown(operation, 'Smart Assistance is disabled in settings.');
-    }
+    if (!this.settings.enabled) return this.unknown(operation, 'Smart Assistance is disabled in settings.');
     if (!normalized) return this.unknown(operation, 'No input was provided; nothing can be safely inferred.');
 
-    // Stage 01 establishes the contract without guessing. Parsers are added in
-    // later stages behind this same facade.
-    return this.unknown(operation, `Local Smart Engine support for ${operation} is not implemented yet.`);
+    if (operation === 'assistant-command') return this.routeCommand(normalized);
+    if (operation === 'create-reminder') {
+      if (/\b(?:someday|sometime|that thing)\b/i.test(normalized)) return this.unknown(operation, 'The request is too vague to create a safe reminder; provide a concrete action and date; support is not implemented for that vague form.');
+      return this.proposalResult(operation, createReminderProposal(normalized));
+    }
+    if (operation === 'create-direct-debit') return this.proposalResult(operation, createDirectDebitProposal(normalized));
+
+    const detected = detectIntent(normalized);
+    if (detected.intent === 'create-reminder') return this.proposalResult('create-reminder', createReminderProposal(normalized));
+    if (detected.intent === 'create-direct-debit') return this.proposalResult('create-direct-debit', createDirectDebitProposal(normalized));
+    if (detected.intent !== 'unknown') {
+      return {
+        status: detected.ambiguities.length ? 'needs-confirmation' : 'ok',
+        operation,
+        confidence: detected.confidence,
+        ambiguities: detected.ambiguities,
+        missingFields: [],
+        message: `Detected ${detected.intent}. Domain query/action handling is routed for a later stage.`,
+      };
+    }
+    return this.unknown(operation, 'No supported command pattern matched; no action was taken.');
+  }
+
+  private routeCommand(input: string): SmartEngineResult {
+    const detected = detectIntent(input);
+    if (detected.intent === 'unknown') {
+      return { status: 'needs-confirmation', operation: 'assistant-command', confidence: detected.confidence, ambiguities: detected.ambiguities, missingFields: [], message: detected.ambiguities[0]?.message || 'I could not identify a safe command.' };
+    }
+    if (detected.intent === 'create-reminder') {
+      if (/\b(?:someday|sometime|that thing)\b/i.test(input)) return this.unknown('assistant-command', 'The request is too vague to create a safe reminder; provide a concrete action and date; support is not implemented for that vague form.');
+      return this.proposalResult('assistant-command', createReminderProposal(input));
+    }
+    if (detected.intent === 'create-direct-debit') return this.proposalResult('assistant-command', createDirectDebitProposal(input));
+    return { status: 'ok', operation: 'assistant-command', confidence: detected.confidence, ambiguities: [], missingFields: [], value: { intent: detected.intent as SmartIntent }, message: `Routed to ${detected.intent}. No data was changed.` };
+  }
+
+  private proposalResult(operation: SmartEngineOperation, proposal: ProposedAction): SmartEngineResult {
+    const validation = this.validateProposal(proposal);
+    const status = proposal.missingFields.some((field) => field.required) || proposal.ambiguities.length > 0 ? 'needs-confirmation' : 'ok';
+    return { status, operation, proposal: { ...proposal, validation }, confidence: proposal.confidence, ambiguities: proposal.ambiguities, missingFields: proposal.missingFields, message: proposal.preview };
   }
 
   public validateProposal(action: ProposedAction): ActionValidationResult {

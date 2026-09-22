@@ -75,3 +75,21 @@ export function reminderAiRequest(reminder: Pick<Reminder, 'title' | 'descriptio
     subtasks: reminder.subtasks.map((step) => step.title),
   };
 }
+
+/**
+ * Offline replacement used by the existing enhancement UI. This is a
+ * deterministic formatter, not a generative model: it only rearranges text
+ * already supplied by the user and never performs I/O.
+ */
+export function enhanceReminderTextLocally(request: ReminderAiRequest): string {
+  const title = request.title.trim();
+  const description = request.description?.trim();
+  const subtasks = (request.subtasks || []).map((item) => item.trim()).filter(Boolean);
+  if (request.operation === 'generate-summary') {
+    if (description) return description.split(/[.!?]+/)[0].trim().slice(0, 140);
+    return subtasks.length > 0 ? `${title}: ${subtasks.slice(0, 3).join(' · ')}` : title;
+  }
+  const parts = [description || `Complete ${title.toLowerCase()}.`];
+  if (subtasks.length > 0) parts.push(`Steps: ${subtasks.join('; ')}.`);
+  return parts.join(' ');
+}
