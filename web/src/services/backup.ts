@@ -34,6 +34,7 @@ import { loadDiagnosticsStore, recordBackup, recordRestore } from './diagnostics
 import { getLogs } from './logging';
 import { logger } from './logger';
 import { normalizeRoutines } from '../types/routine';
+import { normalizeSmartEngineSettings } from '../types/smartEngine';
 
 export const BACKUP_FORMAT_VERSION = 3;
 export const APP_VERSION = '1.4.0';
@@ -75,6 +76,7 @@ export function createBackup(): MindMeshBackupFile {
       state.notificationHistory,
       notificationSettings.historyLimit
     ),
+    smartEngineSettings: normalizeSmartEngineSettings(state.smartEngineSettings),
     preferences: state.preferences || { theme: 'dark' },
     diagnostics: buildDiagnosticsBackupSection(diagnosticPreferences),
     statistics: {
@@ -505,6 +507,8 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     ? normalizeNotificationHistory(rawData.notificationHistory, notifications.historyLimit)
     : [];
 
+  const smartEngineSettings = normalizeSmartEngineSettings(rawData.smartEngineSettings);
+
   // Diagnostics preferences ride along in preferences; logs are opt-in only.
   const diagnosticPreferences = normalizeDiagnosticPreferences(rawData.diagnostics?.preferences);
   const mergedPreferences = {
@@ -525,6 +529,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     appearance,
     notifications,
     notificationHistory,
+    smartEngineSettings,
     preferences: mergedPreferences,
     lastUpdated: new Date().toISOString(),
   };

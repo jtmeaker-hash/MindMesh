@@ -17,6 +17,7 @@ import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONS
 import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { logger } from './logger';
 import { normalizeRoutines, Routine } from '../types/routine';
+import { DEFAULT_SMART_ENGINE_SETTINGS, normalizeSmartEngineSettings, SmartEngineSettings } from '../types/smartEngine';
 
 export const CURRENT_STORAGE_VERSION = 9;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
@@ -39,6 +40,7 @@ export function getDefaultState(): MindMeshStorageData {
     appearance: getDefaultAppearance(),
     notifications: { ...DEFAULT_NOTIFICATION_SETTINGS },
     notificationHistory: [],
+    smartEngineSettings: { ...DEFAULT_SMART_ENGINE_SETTINGS, featureToggles: {} },
     routines: [],
     preferences: {
       theme: 'dark',
@@ -202,6 +204,8 @@ export function loadAllData(): MindMeshStorageData {
       notifications.historyLimit
     );
 
+    const smartEngineSettings: SmartEngineSettings = normalizeSmartEngineSettings(parsed.smartEngineSettings);
+
     const routineResult = normalizeRoutines(parsed.routines);
     // Only write quarantine evidence when malformed data is actually found. Clean
     // hydration must remain read-only so transactional write-failure tests and
@@ -236,6 +240,7 @@ export function loadAllData(): MindMeshStorageData {
       appearance,
       notifications,
       notificationHistory,
+      smartEngineSettings,
       routines: routineResult.routines,
       preferences,
     };
@@ -371,6 +376,16 @@ export function saveNotificationHistory(history: NotificationHistoryEntry[]): vo
   const current = loadAllData();
   const settings = normalizeNotificationSettings(current.notifications);
   saveAllData({ ...current, notificationHistory: normalizeNotificationHistory(history, settings.historyLimit) });
+}
+
+/** Local Smart Engine settings are persisted as a normal state slice. */
+export function loadSmartEngineSettings(): SmartEngineSettings {
+  return normalizeSmartEngineSettings(loadAllData().smartEngineSettings);
+}
+
+export function saveSmartEngineSettings(settings: SmartEngineSettings): void {
+  const current = loadAllData();
+  saveAllData({ ...current, smartEngineSettings: normalizeSmartEngineSettings(settings) });
 }
 
 /**
@@ -590,6 +605,7 @@ export function importStorageJson(json: string): boolean {
       appearance: normalizeAppearance(parsed.appearance),
       notifications: normalizeNotificationSettings(parsed.notifications),
       notificationHistory: normalizeNotificationHistory(parsed.notificationHistory),
+      smartEngineSettings: normalizeSmartEngineSettings(parsed.smartEngineSettings),
       routines: normalizeRoutines(parsed.routines).routines,
       preferences: parsed.preferences || {},
     };

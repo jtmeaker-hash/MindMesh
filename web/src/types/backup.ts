@@ -5,6 +5,7 @@ import { AppearanceSettings } from './appearance';
 import { AppNotificationSettings, NotificationHistoryEntry } from './notifications';
 import { DiagnosticPreferences, DiagnosticsHistoryEntry, LogEntry } from './diagnostics';
 import { Routine } from './routine';
+import { SmartEngineSettings } from './smartEngine';
 
 export interface AppPreferences {
   theme?: 'dark' | 'light' | 'system';
@@ -30,6 +31,7 @@ export interface MindMeshBackupData {
   appearance?: AppearanceSettings;
   notifications?: AppNotificationSettings;
   notificationHistory?: NotificationHistoryEntry[];
+  smartEngineSettings?: SmartEngineSettings;
   preferences?: AppPreferences;
   /**
    * Diagnostics preferences always travel with a backup. Logs themselves are
