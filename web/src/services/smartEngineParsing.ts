@@ -67,8 +67,8 @@ export function detectIntent(input: string): IntentResult {
   if (!text) return { intent: 'unknown', confidence: UNKNOWN, candidates: [], ambiguities: [] };
   const patterns: Array<[SmartIntent, RegExp, number, string]> = [
     ['create-direct-debit', /\b(?:direct debit|recurring bill|bill|subscription)\b|\bevery\s+(?:month|week|fortnight|quarter|year)\b.*\$?\d/i, 0.94, 'bill or recurring-payment wording'],
-    ['create-reminder', /\b(?:remind me|reminder|remember to|todo|to-do|task)\b/i, 0.96, 'explicit reminder wording'],
-    ['edit-reminder', /\b(?:edit|change|update|rename|move|reschedule|make)\b.*\b(?:reminder|task|title|due|date|time)\b/i, 0.9, 'edit wording'],
+    ['create-reminder', /\b(?:remind me|reminder|remember to|todo|to-do|task)\b/i, 0.95, 'explicit reminder wording'],
+    ['edit-reminder', /\b(?:edit|change|update|rename|move|reschedule|make)\b.*\b(?:reminder|task|title|due|date|time)\b/i, 1, 'edit wording'],
     ['create-subcategory', /\b(?:create|add|new)\b.*\bsubcategor(?:y|ies)\b/i, 0.94, 'explicit subcategory wording'],
     ['create-category', /\b(?:create|add|new)\b.*\bcategory\b/i, 0.94, 'explicit category wording'],
     ['query-dashboard', /\b(?:dashboard|statistics|stats|completion rate|how am i doing|summary of my tasks)\b/i, 0.9, 'dashboard/statistics wording'],

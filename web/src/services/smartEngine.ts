@@ -1,10 +1,10 @@
-import { Category } from '../types';
+import { Category, Reminder } from '../types';
 import {
   createDirectDebitProposal,
-  createReminderProposal,
   detectIntent,
   SmartIntent,
 } from './smartEngineParsing';
+import { createCategoryProposal, createEditReminderProposal, createIntelligentReminderProposal, createSubcategoryProposal } from './reminderIntelligence';
 import {
   ActionValidationResult,
   Ambiguity,
@@ -52,6 +52,7 @@ export interface SmartEngineOptions {
   settings?: Partial<SmartEngineSettings>;
   contextProvider?: SmartEngineContextProvider;
   actionValidator?: SmartEngineActionValidator;
+  reminders?: readonly Reminder[];
 }
 
 /**
@@ -62,11 +63,13 @@ export class SmartEngine {
   public readonly settings: SmartEngineSettings;
   private readonly contextProvider: SmartEngineContextProvider;
   private readonly actionValidator: SmartEngineActionValidator;
+  private readonly reminders: readonly Reminder[];
 
   public constructor(options: SmartEngineOptions = {}) {
     this.settings = normalizeSmartEngineSettings({ ...DEFAULT_SMART_ENGINE_SETTINGS, ...options.settings });
     this.contextProvider = options.contextProvider ?? new DefaultSmartEngineContextProvider();
     this.actionValidator = options.actionValidator ?? new DefaultSmartEngineActionValidator();
+    this.reminders = options.reminders ?? [];
   }
 
   public interpret(operation: SmartEngineOperation, input: string): SmartEngineResult {
@@ -77,12 +80,18 @@ export class SmartEngine {
     if (operation === 'assistant-command') return this.routeCommand(normalized);
     if (operation === 'create-reminder') {
       if (/\b(?:someday|sometime|that thing)\b/i.test(normalized)) return this.unknown(operation, 'The request is too vague to create a safe reminder; provide a concrete action and date; support is not implemented for that vague form.');
-      return this.proposalResult(operation, createReminderProposal(normalized));
+      return this.proposalResult(operation, createIntelligentReminderProposal(normalized, this.contextProvider.getCategories() as Category[]));
     }
+    if (operation === 'edit-reminder') return this.proposalResult(operation, createEditReminderProposal(normalized, this.reminders));
+    if (operation === 'create-category') return this.proposalResult(operation, createCategoryProposal(normalized));
+    if (operation === 'create-subcategory') return this.proposalResult(operation, createSubcategoryProposal(normalized, this.contextProvider.getCategories() as Category[]));
     if (operation === 'create-direct-debit') return this.proposalResult(operation, createDirectDebitProposal(normalized));
 
     const detected = detectIntent(normalized);
-    if (detected.intent === 'create-reminder') return this.proposalResult('create-reminder', createReminderProposal(normalized));
+    if (detected.intent === 'create-reminder') return this.proposalResult('create-reminder', createIntelligentReminderProposal(normalized, this.contextProvider.getCategories() as Category[]));
+    if (detected.intent === 'edit-reminder') return this.proposalResult('edit-reminder', createEditReminderProposal(normalized, this.reminders));
+    if (detected.intent === 'create-category') return this.proposalResult('create-category', createCategoryProposal(normalized));
+    if (detected.intent === 'create-subcategory') return this.proposalResult('create-subcategory', createSubcategoryProposal(normalized, this.contextProvider.getCategories() as Category[]));
     if (detected.intent === 'create-direct-debit') return this.proposalResult('create-direct-debit', createDirectDebitProposal(normalized));
     if (detected.intent !== 'unknown') {
       return {
@@ -104,8 +113,11 @@ export class SmartEngine {
     }
     if (detected.intent === 'create-reminder') {
       if (/\b(?:someday|sometime|that thing)\b/i.test(input)) return this.unknown('assistant-command', 'The request is too vague to create a safe reminder; provide a concrete action and date; support is not implemented for that vague form.');
-      return this.proposalResult('assistant-command', createReminderProposal(input));
+      return this.proposalResult('assistant-command', createIntelligentReminderProposal(input, this.contextProvider.getCategories() as Category[]));
     }
+    if (detected.intent === 'edit-reminder') return this.proposalResult('assistant-command', createEditReminderProposal(input, this.reminders));
+    if (detected.intent === 'create-category') return this.proposalResult('assistant-command', createCategoryProposal(input));
+    if (detected.intent === 'create-subcategory') return this.proposalResult('assistant-command', createSubcategoryProposal(input, this.contextProvider.getCategories() as Category[]));
     if (detected.intent === 'create-direct-debit') return this.proposalResult('assistant-command', createDirectDebitProposal(input));
     return { status: 'ok', operation: 'assistant-command', confidence: detected.confidence, ambiguities: [], missingFields: [], value: { intent: detected.intent as SmartIntent }, message: `Routed to ${detected.intent}. No data was changed.` };
   }

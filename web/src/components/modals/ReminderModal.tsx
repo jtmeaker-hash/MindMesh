@@ -301,7 +301,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
 
   const runAi = async (operation: ReminderAiOperation) => {
     if (!title.trim()) {
-      setAiError('Add a title before using AI assistance.');
+      setAiError('Add a title before using Smart Assistance.');
       return;
     }
     aiAbortRef.current?.abort();
@@ -324,7 +324,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       const text = enhanceReminderTextLocally(request);
       if (!controller.signal.aborted) setAiDraft({ operation, text });
     } catch {
-      if (!controller.signal.aborted) setAiError('Local enhancement failed. Continue manually.');
+      if (!controller.signal.aborted) setAiError('Local Smart Assistance failed. Continue manually.');
     } finally {
       if (aiAbortRef.current === controller) {
         aiAbortRef.current = null;
@@ -619,7 +619,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
             {aiError && <div role="alert" style={{ fontSize: 11, color: '#fbbf24' }}>{aiError}</div>}
             {aiDraft && (
               <div style={{ padding: 10, borderRadius: 10, background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(129,140,248,0.35)' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#a5b4fc', marginBottom: 5 }}>AI DRAFT — REVIEW BEFORE APPLYING</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#a5b4fc', marginBottom: 5 }}>SMART DRAFT — REVIEW BEFORE APPLYING</div>
                 <div style={{ fontSize: 13, lineHeight: 1.45, color: '#e2e8f0', whiteSpace: 'pre-wrap' }}>{aiDraft.text}</div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 9 }}>
                   <button type="button" onClick={applyAiDraft} style={{ padding: '6px 10px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Apply Draft</button>

@@ -1,4 +1,5 @@
 import { Reminder } from '../types';
+import { enhanceReminderLocally } from './reminderIntelligence';
 
 export type ReminderAiOperation = 'enhance-description' | 'generate-summary';
 
@@ -89,7 +90,6 @@ export function enhanceReminderTextLocally(request: ReminderAiRequest): string {
     if (description) return description.split(/[.!?]+/)[0].trim().slice(0, 140);
     return subtasks.length > 0 ? `${title}: ${subtasks.slice(0, 3).join(' · ')}` : title;
   }
-  const parts = [description || `Complete ${title.toLowerCase()}.`];
-  if (subtasks.length > 0) parts.push(`Steps: ${subtasks.join('; ')}.`);
-  return parts.join(' ');
+  const enhanced = enhanceReminderLocally(title, description, request.category);
+  return subtasks.length > 0 ? `${enhanced} Steps: ${subtasks.join('; ')}.` : enhanced;
 }
