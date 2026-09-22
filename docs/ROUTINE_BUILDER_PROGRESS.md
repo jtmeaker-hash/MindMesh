@@ -380,6 +380,62 @@ Routine data is included in full EVERYTHING backups through the existing backup 
 - Quarantine records are inspectable through Routine Diagnostics but do not yet have a user-facing record repair/import action; they remain safely isolated.
 - Bulk Routine import conflict review, advanced history browsing, and full analytics/history visualization remain later work.
 
+## Stage 10 implementation
+
+### Completed work
+
+- Ran a whole-web regression pass across the existing Routine, notification, diagnostics, backup/restore, appearance, contacts, and UI suites without changing the local-first storage contract.
+- Added deterministic large-routine graph workload classification (`full`, `simplified`, `minimal`) in `routineGraph.ts`. Large routines automatically reduce decorative dependency rendering while retaining every Routine step and sequential flow edge; users can still enable Performance Mode for smaller routines.
+- Added Stage 10 coverage for large/deep routine graphs, simultaneous active state styling, current/completed state preservation, and graph workload thresholds.
+- Fixed the repository lint blockers found during the pass (`prefer-const` issues and stale unused imports/parameters). Lint now completes cleanly.
+- Kept the existing 2D list/graph and 3D SpatialGraph surfaces intact; no new renderer or persistence layer was introduced.
+
+### Files changed in Stage 10
+
+- `web/src/services/routineGraph.ts`
+- `web/src/components/routines/RoutineModule.tsx`
+- `web/src/services/routineAi.ts`
+- `web/src/services/routineAnalytics.ts`
+- `web/src/services/routineEngine.ts`
+- `web/src/types/routine.ts`
+- `web/src/test/routine_stage9.test.ts`
+- `web/src/test/routine_stage10.test.ts`
+- `docs/ROUTINE_BUILDER_PROGRESS.md`
+
+### Architecture / migration decisions
+
+- Graph simplification is derived from node count and an explicit Performance Mode flag; it does not mutate or omit persisted Routine data.
+- The shared graph adapter remains the single source for list/2D/3D Routine visuals, preserving active/current/completed styling across views.
+- No schema or backup format migration was required. The graph detail level is runtime-only and existing Routine backups remain unchanged.
+
+### Backup / restore implications
+
+- No changes to backup serialization or restore behavior. Routine definitions, active sessions, history, version snapshots, drafts, and Trash state continue to use the existing verified full backup path.
+
+### Tests and validation
+
+- `npm --prefix web run lint` — **passed**.
+- `npm --prefix web run type-check` — **passed**.
+- `npm --prefix web run test -- --run src/test/routine_stage7.test.ts src/test/routine_stage10.test.ts` — **passed: 5 tests**.
+- `npm --prefix web run test -- --run` — **passed: 24 test files, 256 tests**.
+- `npm --prefix web run build` — **passed**; Vite regenerated the production bundle and Android WebView assets. Vite emitted its existing chunk-size advisory for the main bundle.
+- `sh ./gradlew :app:testDebugUnitTest --stacktrace` — **blocked before compilation** because this workspace has no configured Android SDK (`ANDROID_HOME`/`local.properties` missing).
+- Device-only notification, process-death, reboot, permission-disabled, orientation, and 3D frame-time checks remain pending on a configured Android emulator/device.
+
+### Unrelated bugs found/fixed
+
+- Fixed two existing web lint errors and stale Routine-only lint warnings exposed by the regression pass; behavior is unchanged except for cleaner static validation.
+
+### Known issues / remaining work
+
+- Android reliability and UI matrix verification still require a configured emulator/device.
+- The Android app still needs measured large-routine frame-time profiling rather than only deterministic graph workload tests.
+- Bulk Routine import review, advanced history visualization, and routine-specific dependency explanation UI remain follow-up work.
+
+## Exact next stage
+
+**Stage 11 — final integration verification:** run the Android notification/process/reboot/orientation matrix on a configured emulator, validate the standalone CI workflow in GitHub, and close remaining Routine import/history/accessibility polish without changing persistence compatibility.
+
 ## Last good commit
 
-No stage commit was created in this workspace. Freebuff’s Changes panel owns commit delivery; review and commit only the intended Stage 9 files and earlier uncommitted Routine Builder files that belong to the product change.
+No stage commit was created in this workspace. Freebuff’s Changes panel owns commit delivery; review and commit only the intended Stage 10 files and earlier uncommitted Routine Builder files that belong to the product change.

@@ -28,7 +28,7 @@ export async function createRoutineAiProposal(action: RoutineAiAction, prompt: s
 
 export function applyApprovedAiChanges(routine: Routine, proposal: RoutineAiProposal, acceptedChangeIds: string[], confirmDeletes = false): Routine {
   const accepted = new Set(acceptedChangeIds);
-  let next = { ...routine, steps: [...routine.steps] };
+  const next = { ...routine, steps: [...routine.steps] };
   for (const change of proposal.changes) {
     if (!accepted.has(change.id)) continue;
     if (change.type === 'delete-step') {

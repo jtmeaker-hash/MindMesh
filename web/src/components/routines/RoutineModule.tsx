@@ -5,11 +5,10 @@ import { DirectDebit } from '../../types/finance';
 import { RoutineAiProposal } from '../../types/routine';
 import { AppearanceSettings } from '../../types/appearance';
 import { getDefaultAppearance } from '../../services/appearance';
-import { generateRoutineGraph } from '../../services/routineGraph';
+import { generateRoutineGraph, routineGraphLevelOfDetail } from '../../services/routineGraph';
 import { SpatialGraph } from '../graph/SpatialGraph';
 import { saveRoutineAsTemplate } from '../../services/routineTemplates';
 import { createRoutineAiProposal, applyApprovedAiChanges } from '../../services/routineAi';
-import { validateRoutineLinks, repairRoutineLinks } from '../../services/routineIntegrations';
 import { Routine, RoutineStep, createEmptyRoutine, createRoutineStep } from '../../types/routine';
 import { previewRoutineImport, applyRoutineImport, serializeRoutineExport, serializeRoutineHistoryJson, serializeRoutineHistoryCsv, serializeRoutineBulkExport, RoutineImportPreview } from '../../services/routineTransfer';
 import { createRoutine, duplicateRoutine, promoteChildrenWhenRemovingStep, readRoutines, trashRoutine, archiveRoutine, restoreRoutineFromTrash, updateRoutine } from '../../services/routines';
@@ -258,7 +257,10 @@ const StepRow: React.FC<{ step: RoutineStep; index: number; allSteps: RoutineSte
 const GraphView: React.FC<{ routine: Routine; appearance: AppearanceSettings; onChange: (id: string, patch: Partial<RoutineStep>) => void }> = ({ routine, appearance, onChange }) => {
   const [spatial, setSpatial] = useState(true);
   const [performanceMode, setPerformanceMode] = useState(Boolean(routine.visual?.performanceMode));
-  const graph = useMemo(() => generateRoutineGraph(routine, appearance, { performanceMode }), [appearance, performanceMode, routine]);
+  const automaticPerformanceMode = routine.steps.length >= 100;
+  const effectivePerformanceMode = performanceMode || automaticPerformanceMode;
+  const detailLevel = routineGraphLevelOfDetail(routine.steps.length + 1, effectivePerformanceMode);
+  const graph = useMemo(() => generateRoutineGraph(routine, appearance, { performanceMode: effectivePerformanceMode }), [appearance, effectivePerformanceMode, routine]);
   const persistPosition = (nodeId: string, position: { x: number; y: number }) => {
     const step = routine.steps.find((candidate) => candidate.id === nodeId);
     if (step) onChange(nodeId, { position });
@@ -266,8 +268,8 @@ const GraphView: React.FC<{ routine: Routine; appearance: AppearanceSettings; on
 
   return <div data-testid="routine-graph" style={{ minHeight: 320, borderRadius: 12, overflow: 'hidden', background: 'radial-gradient(circle at 50% 20%, rgba(8,145,178,.14), transparent 55%), #0b1220', border: '1px solid #1e3a4a' }}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', padding: '12px 14px', borderBottom: '1px solid rgba(148,163,184,.12)' }}>
-      <div><div style={{ color: '#67e8f9', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.14em' }}>Routine spatial graph</div><span style={{ color: '#94a3b8', fontSize: 11 }}>{graph.nodes.length - 1} steps · current path highlighted · dashed links are dependencies</span></div>
-      <div style={{ display: 'flex', gap: 6 }}><button type="button" onClick={() => setSpatial(false)} style={toggle(!spatial)}>2D</button><button type="button" onClick={() => setSpatial(true)} style={toggle(spatial)}>3D explore</button><button type="button" onClick={() => setPerformanceMode((value) => !value)} style={toggle(performanceMode)}>{performanceMode ? 'Performance on' : 'Performance off'}</button></div>
+      <div><div style={{ color: '#67e8f9', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.14em' }}>Routine spatial graph</div><span style={{ color: '#94a3b8', fontSize: 11 }}>{graph.nodes.length - 1} steps · current path highlighted · dashed links are dependencies{automaticPerformanceMode ? ` · automatic ${detailLevel} detail` : ''}</span></div>
+      <div style={{ display: 'flex', gap: 6 }}><button type="button" onClick={() => setSpatial(false)} style={toggle(!spatial)}>2D</button><button type="button" onClick={() => setSpatial(true)} style={toggle(spatial)}>3D explore</button><button type="button" onClick={() => setPerformanceMode((value) => !value)} style={toggle(effectivePerformanceMode)}>{automaticPerformanceMode ? 'Large routine optimized' : performanceMode ? 'Performance on' : 'Performance off'}</button></div>
     </div>
     {spatial ? <div style={{ height: 390 }}><SpatialGraph nodes={graph.nodes} edges={graph.edges} appearance={{ ...appearance, threeD: performanceMode ? { ...appearance.threeD, level: 'low', animationIntensity: 0, connectionAnimationIntensity: 0 } : appearance.threeD }} onEmptyClick={() => undefined} /></div> : <div style={{ minHeight: 260, padding: 20 }}><div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>{routine.steps.slice().sort((a, b) => a.order - b.order).map((step, index) => <React.Fragment key={step.id}><div draggable onDragEnd={(event) => { const rect = event.currentTarget.getBoundingClientRect(); persistPosition(step.id, { x: Math.round(rect.left), y: Math.round(rect.top) }); }} style={{ ...surface, padding: '13px 16px', minWidth: 150, borderColor: step.id === routine.activeSession?.currentStepId ? '#ffffff' : step.completed ? '#34d399' : '#155e75', opacity: step.completed ? .55 : 1, cursor: 'grab' }}><div style={{ color: '#64748b', fontSize: 10 }}>NODE {index + 1}</div><strong>{step.title}</strong><div style={{ color: '#94a3b8', fontSize: 11 }}>{step.durationTargetMinutes ? `${step.durationTargetMinutes} min` : 'No target'}</div></div>{index < routine.steps.length - 1 && <span style={{ color: '#22d3ee', fontSize: 20 }}>→</span>}</React.Fragment>)}</div></div>}
   </div>;

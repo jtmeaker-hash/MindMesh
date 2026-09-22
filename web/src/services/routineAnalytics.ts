@@ -38,7 +38,7 @@ export function analyzeRoutine(routine: Routine, from = new Date(Date.now() - 30
 
 export function calculateStreak(routine: Routine, settings: Pick<RoutineAnalyticsSettings, 'graceDays' | 'skipBreaksStreak'> = DEFAULT_ROUTINE_ANALYTICS_SETTINGS): number {
   const doneDays = new Set(entries(routine, 'completed').map((entry) => day(entry.at)));
-  let streak = 0; let cursor = new Date(); cursor.setHours(0, 0, 0, 0);
+  let streak = 0; const cursor = new Date(); cursor.setHours(0, 0, 0, 0);
   let grace = settings.graceDays;
   for (let i = 0; i < 366; i += 1) { const date = cursor.toISOString().slice(0, 10); if (doneDays.has(date)) streak += 1; else if (settings.skipBreaksStreak && routine.history.some((entry) => entry.event === 'skipped' && day(entry.at) === date) || grace > 0) grace -= 1; else break; cursor.setDate(cursor.getDate() - 1); }
   return streak;

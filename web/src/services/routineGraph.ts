@@ -14,6 +14,19 @@ export interface RoutineGraphElements {
   edges: Edge[];
 }
 
+export type RoutineGraphLevelOfDetail = 'full' | 'simplified' | 'minimal';
+
+/**
+ * Chooses a conservative visual workload for large routines without changing
+ * the persisted tree. Callers can still opt into Performance Mode for smaller
+ * routines when the device needs it.
+ */
+export function routineGraphLevelOfDetail(nodeCount: number, performanceMode = false): RoutineGraphLevelOfDetail {
+  if (nodeCount >= 240) return 'minimal';
+  if (performanceMode || nodeCount >= 100) return 'simplified';
+  return 'full';
+}
+
 function positionFor(step: RoutineStep, index: number, total: number, parent?: RoutineStep) {
   if (step.position && Number.isFinite(step.position.x) && Number.isFinite(step.position.y)) return step.position;
   const angle = total <= 1 ? 0 : (index / Math.max(1, total - 1) - 0.5) * Math.PI * 1.35;
@@ -133,7 +146,7 @@ export function generateRoutineGraph(
 
   // Performance mode intentionally reduces only decorative dependency edges;
   // all routine steps and flow edges remain available and persisted.
-  if (options.performanceMode) {
+  if (routineGraphLevelOfDetail(nodes.length, options.performanceMode) !== 'full') {
     return { nodes, edges: edges.filter((edge) => !edge.data?.isDependency || edge.source === routine.activeSession?.currentStepId) };
   }
   return { nodes, edges };

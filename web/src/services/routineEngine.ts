@@ -1,4 +1,4 @@
-import { Routine, RoutineOccurrence, RoutineSession, RoutineStep, RoutineOccurrenceStatus } from '../types/routine';
+import { Routine, RoutineOccurrence, RoutineSession, RoutineStep } from '../types/routine';
 
 export interface RoutineOccurrencePreview {
   date: string;
@@ -249,7 +249,7 @@ export function startRoutineStepTimer(routine: Routine, stepId?: string, minutes
   });
 }
 
-export function addRoutineStepTime(routine: Routine, minutes: number, options: RoutineRuntimeOptions = {}): Routine {
+export function addRoutineStepTime(routine: Routine, minutes: number, _options: RoutineRuntimeOptions = {}): Routine {
   return updateRuntime(routine, (next) => {
     const target = next.activeSession?.stepTimerTargetAt;
     if (!target || !next.activeSession) return;

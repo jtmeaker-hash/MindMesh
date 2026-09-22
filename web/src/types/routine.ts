@@ -397,7 +397,7 @@ export function normalizeRoutines(input: unknown): RoutineNormalizationResult {
 export function duplicateRoutine(source: Routine, newId: string, stepId: (step: RoutineStep, index: number) => string): Routine {
   const timestamp = now();
   const stepIds = new Map(source.steps.map((step, index) => [step.id, stepId(step, index)]));
-  const steps = source.steps.map((step, index) => ({
+  const steps = source.steps.map((step, _index) => ({
     ...step,
     id: stepIds.get(step.id)!,
     routineId: newId,
