@@ -62,6 +62,7 @@ import {
   loadNodePositions,
   saveNodePositions,
   clearNodePositions,
+  removeNodePosition,
   resetToSample,
   clearAllData,
   loadMoneyState,
@@ -86,6 +87,7 @@ import { generateNestedActiveMesh, generateNestedCompletedOverviewMesh } from '.
 import { normalizeCategories, validateCategoryParent, getCategoryDescendantIds, applyCategoryDelete } from './services/categories';
 import { handleReminderCompletion } from './services/recurrence';
 import { upsertReminder } from './services/reminders';
+import { commitNodePosition, resetNodePosition } from './services/nodePositions';
 
 import { RootNode } from './components/nodes/RootNode';
 import { CategoryNode } from './components/nodes/CategoryNode';
@@ -156,6 +158,7 @@ function MindMeshFlow() {
   const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
   const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
   const [diagnosticsModalOpen, setDiagnosticsModalOpen] = useState(false);
+  const [positionMenu, setPositionMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [startupNotice, setStartupNotice] = useState<string | null>(null);
   // Bumped only when the notification environment changes (never on every sweep),
   // so the graph is not re-rendered by the scheduling engine.
@@ -458,68 +461,41 @@ function MindMeshFlow() {
 
   const handleNodeDragStop = useCallback(
     (_: unknown, node: Node) => {
-      const newX = Math.round(node.position.x);
-      const newY = Math.round(node.position.y);
-      const startPos = dragStartPosRef.current?.id === node.id ? dragStartPosRef.current : null;
-      const dx = startPos ? newX - startPos.x : 0;
-      const dy = startPos ? newY - startPos.y : 0;
-
+      // XYFlow reports world coordinates here, already accounting for its
+      // viewport transform. Persist only once, after the gesture completes.
       setNodePositions((prev) => {
-        const next: NodePositionMap = { ...prev };
-        next[node.id] = {
-          nodeId: node.id,
-          x: newX,
-          y: newY,
-          manuallyPositioned: true,
-          updatedAt: new Date().toISOString(),
-        };
-
-        // If a category was dragged, also shift any manually positioned children so the branch moves together
-        if (node.type === 'categoryNode' && (dx !== 0 || dy !== 0)) {
-          const catReminders = reminders.filter((r) => r.categoryId === node.id);
-          catReminders.forEach((r) => {
-            if (next[r.id]) {
-              next[r.id] = {
-                ...next[r.id],
-                x: next[r.id].x + dx,
-                y: next[r.id].y + dy,
-                updatedAt: new Date().toISOString(),
-              };
-            }
-            r.subtasks?.forEach((st) => {
-              if (next[st.id]) {
-                next[st.id] = {
-                  ...next[st.id],
-                  x: next[st.id].x + dx,
-                  y: next[st.id].y + dy,
-                  updatedAt: new Date().toISOString(),
-                };
-              }
-            });
-          });
-        } else if (node.type === 'reminderNode' && (dx !== 0 || dy !== 0)) {
-          // If a reminder was dragged, shift any manually positioned subtask children
-          const rem = reminders.find((r) => r.id === node.id);
-          if (rem) {
-            rem.subtasks?.forEach((st) => {
-              if (next[st.id]) {
-                next[st.id] = {
-                  ...next[st.id],
-                  x: next[st.id].x + dx,
-                  y: next[st.id].y + dy,
-                  updatedAt: new Date().toISOString(),
-                };
-              }
-            });
-          }
-        }
-
+        const next = commitNodePosition(prev, node.id, node.position.x, node.position.y);
         saveNodePositions(next);
         return next;
       });
+      dragStartPosRef.current = null;
     },
-    [reminders]
+    []
   );
+
+  const handleSpatialNodePositionChange = useCallback((nodeId: string, x: number, y: number) => {
+    setNodePositions((prev) => {
+      const next = commitNodePosition(prev, nodeId, x, y);
+      saveNodePositions(next);
+      return next;
+    });
+  }, []);
+
+  const handleNodeContextMenu = useCallback((event: React.MouseEvent, node: Node) => {
+    event.preventDefault();
+    setPositionMenu({ id: node.id, x: event.clientX, y: event.clientY });
+  }, []);
+
+  const handleResetNodePosition = useCallback(() => {
+    if (!positionMenu) return;
+    const nodeId = positionMenu.id;
+    setNodePositions((prev) => {
+      const next = resetNodePosition(prev, nodeId);
+      removeNodePosition(nodeId);
+      return next;
+    });
+    setPositionMenu(null);
+  }, [positionMenu]);
 
   // Generate Graph Elements based on current viewMode & manual positions
   useEffect(() => {
@@ -606,8 +582,10 @@ function MindMeshFlow() {
 
   // Reset all manual node positions to return to automatic radial layout
   const handleResetLayout = useCallback(() => {
+    if (!window.confirm('Reset the entire graph layout? Your reminders, categories, routines, contacts, money data, and settings will be kept.')) return;
     clearNodePositions();
     setNodePositions({});
+    setPositionMenu(null);
     setMenuOpen(false);
     setTimeout(() => {
       fitView({ padding: 0.2, duration: 400 });
@@ -1301,7 +1279,14 @@ function MindMeshFlow() {
                 onEdgesChange={onEdgesChange}
                 onNodeDragStart={handleNodeDragStart}
                 onNodeDragStop={handleNodeDragStop}
+                onNodeContextMenu={handleNodeContextMenu}
+                onPaneClick={() => setPositionMenu(null)}
                 nodesDraggable={true}
+                panOnDrag={true}
+                selectionOnDrag={false}
+                zoomOnPinch={true}
+                preventScrolling={true}
+                nodesConnectable={false}
                 nodeTypes={nodeTypes}
                 minZoom={0.25}
                 maxZoom={2.2}
@@ -1337,11 +1322,22 @@ function MindMeshFlow() {
                 nodes={nodes}
                 edges={edges}
                 appearance={appearance}
+                onNodePositionChange={handleSpatialNodePositionChange}
                 onEmptyClick={() => {
                   setFocusedCategoryId(null);
                   setSelectedCompletedCategory(null);
                 }}
               />
+            )}
+            {positionMenu && (
+              <div
+                role="menu"
+                style={{ position: 'fixed', left: positionMenu.x, top: positionMenu.y, zIndex: 500, minWidth: 170, padding: 6, borderRadius: 12, background: '#0F172A', border: '1px solid #334155', boxShadow: '0 10px 28px rgba(0,0,0,0.55)' }}
+              >
+                <button type="button" onClick={handleResetNodePosition} style={{ width: '100%', padding: '9px 10px', border: 0, borderRadius: 8, background: 'transparent', color: '#e2e8f0', textAlign: 'left', cursor: 'pointer', fontSize: 12 }}>
+                  Return to auto layout
+                </button>
+              </div>
             )}
           </div>
 

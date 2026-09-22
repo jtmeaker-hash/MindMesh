@@ -18,6 +18,7 @@ import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { logger } from './logger';
 import { normalizeRoutines, Routine } from '../types/routine';
 import { DEFAULT_SMART_ENGINE_SETTINGS, normalizeSmartEngineSettings, SmartEngineSettings } from '../types/smartEngine';
+import { normalizeNodePositions } from './nodePositions';
 
 export const CURRENT_STORAGE_VERSION = 9;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
@@ -86,7 +87,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
     if (rawPositions) {
       const parsedPos = JSON.parse(rawPositions);
       if (typeof parsedPos === 'object' && parsedPos !== null) {
-        nodePositions = parsedPos;
+        nodePositions = normalizeNodePositions(parsedPos);
       }
     }
 
@@ -148,9 +149,7 @@ export function loadAllData(): MindMeshStorageData {
       ? parsed.reminders
       : INITIAL_REMINDERS;
 
-    const nodePositions = parsed.nodePositions && typeof parsed.nodePositions === 'object'
-      ? parsed.nodePositions
-      : {};
+    const nodePositions = normalizeNodePositions(parsed.nodePositions);
 
     const defaultMoney = getDefaultMoneyState();
     const money: MoneyState = parsed.money && typeof parsed.money === 'object'
@@ -504,7 +503,7 @@ export function loadNodePositions(): NodePositionMap {
 
 export function saveNodePositions(nodePositions: NodePositionMap): void {
   const current = loadAllData();
-  saveAllData({ ...current, nodePositions });
+  saveAllData({ ...current, nodePositions: normalizeNodePositions(nodePositions) });
   logger.debug('Storage', 'Saved node positions', { count: Object.keys(nodePositions).length });
 }
 
@@ -589,8 +588,7 @@ export function importStorageJson(json: string): boolean {
       version: CURRENT_STORAGE_VERSION,
       categories: normalizeCategories(parsed.categories),
       reminders: parsed.reminders,
-      nodePositions: parsed.nodePositions && typeof parsed.nodePositions === 'object' ? parsed.nodePositions : {},
-      lastUpdated: new Date().toISOString(),
+      nodePositions: normalizeNodePositions(parsed.nodePositions),      lastUpdated: new Date().toISOString(),
       money: parsed.money || getDefaultMoneyState(),
       contacts: Array.isArray(parsed.contacts) ? parsed.contacts.filter((contact: unknown): contact is Contact => Boolean(contact && typeof contact === 'object' && typeof (contact as Contact).id === 'string' && typeof (contact as Contact).fullName === 'string')).map((contact: Contact) => ({
         ...contact,

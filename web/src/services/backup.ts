@@ -35,6 +35,7 @@ import { getLogs } from './logging';
 import { logger } from './logger';
 import { normalizeRoutines } from '../types/routine';
 import { normalizeSmartEngineSettings } from '../types/smartEngine';
+import { normalizeNodePositions } from './nodePositions';
 
 export const BACKUP_FORMAT_VERSION = 3;
 export const APP_VERSION = '1.4.0';
@@ -427,9 +428,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     };
   });
 
-  const nodePositions = rawData.nodePositions && typeof rawData.nodePositions === 'object'
-    ? rawData.nodePositions
-    : {};
+  const nodePositions = normalizeNodePositions(rawData.nodePositions);
 
   // Money state migration
   const defaultMoney = getDefaultMoneyState();

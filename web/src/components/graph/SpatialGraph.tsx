@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Home, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
+import { Home, RotateCcw, ZoomIn, ZoomOut, Crosshair } from 'lucide-react';
 import { Edge, Node, Position } from '@xyflow/react';
 import { MeshNodeData, AppearanceSettings } from '../../types';
 import { RootNode } from '../nodes/RootNode';
@@ -12,12 +12,13 @@ interface SpatialGraphProps {
   edges: Edge[];
   appearance: AppearanceSettings;
   onEmptyClick?: () => void;
+  onNodePositionChange?: (nodeId: string, x: number, y: number) => void;
 }
 
 type Point3 = { x: number; y: number; z: number };
-type Camera = { target: Point3; yaw: number; pitch: number; distance: number };
+export type SpatialCamera = { target: Point3; yaw: number; pitch: number; distance: number };
 type ProjectedPoint = Point3 & { screenX: number; screenY: number; scale: number; depth: number };
-
+type PointerMode = 'orbit' | 'pan';
 type NodeComponent = React.ComponentType<Record<string, unknown>>;
 
 const NODE_COMPONENTS: Record<string, NodeComponent> = {
@@ -28,9 +29,7 @@ const NODE_COMPONENTS: Record<string, NodeComponent> = {
 };
 
 function depthForNode(node: Node<MeshNodeData>, index: number): number {
-  const type = node.data.type;
-  const base = type === 'root' ? 0 : type === 'category' ? 105 : type === 'reminder' ? 235 : 350;
-  // Stable variation prevents a large branch from becoming a single flat wall.
+  const base = node.data.type === 'root' ? 0 : node.data.type === 'category' ? 105 : node.data.type === 'reminder' ? 235 : 350;
   const hash = Array.from(node.id).reduce((sum, char) => sum + char.charCodeAt(0), 0);
   return base + ((hash + index * 37) % 120) - 60;
 }
@@ -39,7 +38,7 @@ function worldPoint(node: Node<MeshNodeData>, index: number): Point3 {
   return { x: node.position.x, y: node.position.y, z: depthForNode(node, index) };
 }
 
-function project(point: Point3, camera: Camera, width: number, height: number, focal: number): ProjectedPoint {
+export function projectSpatialPoint(point: Point3, camera: SpatialCamera, width: number, height: number, focal: number): ProjectedPoint {
   const dx = point.x - camera.target.x;
   const dy = point.y - camera.target.y;
   const dz = point.z - camera.target.z;
@@ -51,70 +50,107 @@ function project(point: Point3, camera: Camera, width: number, height: number, f
   const sinPitch = Math.sin(camera.pitch);
   const pitchY = dy * cosPitch - yawZ * sinPitch;
   const cameraZ = dy * sinPitch + yawZ * cosPitch;
-  const depth = Math.max(120, camera.distance - cameraZ);
+  const depth = Math.max(30, camera.distance - cameraZ);
   const scale = focal / depth;
-
-  return {
-    ...point,
-    screenX: width / 2 + yawX * scale,
-    screenY: height / 2 + pitchY * scale,
-    scale,
-    depth,
-  };
+  return { ...point, screenX: width / 2 + yawX * scale, screenY: height / 2 + pitchY * scale, scale, depth };
 }
 
-function clampCamera(camera: Camera): Camera {
+/** Only safety limits remain: no target or orbit-area restriction is imposed. */
+export function clampSpatialCamera(camera: SpatialCamera): SpatialCamera {
+  const pitchLimit = Math.PI / 2 - 0.015;
   return {
     target: {
-      x: Math.max(-1400, Math.min(1400, camera.target.x)),
-      y: Math.max(-1100, Math.min(1100, camera.target.y)),
-      z: Math.max(-450, Math.min(650, camera.target.z)),
+      x: Number.isFinite(camera.target.x) ? camera.target.x : 0,
+      y: Number.isFinite(camera.target.y) ? camera.target.y : 0,
+      z: Number.isFinite(camera.target.z) ? camera.target.z : 0,
     },
-    yaw: Math.max(-Math.PI * 0.95, Math.min(Math.PI * 0.95, camera.yaw)),
-    pitch: Math.max(-0.85, Math.min(0.85, camera.pitch)),
-    distance: Math.max(420, Math.min(1900, camera.distance)),
+    yaw: Number.isFinite(camera.yaw) ? camera.yaw : 0,
+    pitch: Math.max(-pitchLimit, Math.min(pitchLimit, Number.isFinite(camera.pitch) ? camera.pitch : 0)),
+    distance: Math.max(90, Math.min(50_000, Number.isFinite(camera.distance) ? camera.distance : 1200)),
   };
 }
 
-function defaultCamera(): Camera {
+function defaultCamera(): SpatialCamera {
   return { target: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0.04, distance: 1180 };
 }
 
-export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appearance, onEmptyClick }) => {
+export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appearance, onEmptyClick, onNodePositionChange }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
-  const cameraRef = useRef<Camera>(defaultCamera());
+  const pointerModesRef = useRef(new Map<number, PointerMode>());
+  const cameraRef = useRef<SpatialCamera>(defaultCamera());
   const animationRef = useRef<number>(0);
+  const publishFrameRef = useRef<number>(0);
+  const gestureRef = useRef<{ centerX: number; centerY: number; distance: number } | null>(null);
+  const initialHomeDoneRef = useRef(false);
   const [size, setSize] = useState({ width: 1, height: 1 });
-  const [camera, setCamera] = useState<Camera>(defaultCamera);
+  const [camera, setCamera] = useState<SpatialCamera>(defaultCamera);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
+  const [draggedPositions, setDraggedPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const nodeDragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean; active: boolean; timer?: number } | null>(null);
+  const suppressNodeClickRef = useRef(false);
 
   const focal = Math.max(260, Math.min(size.width, size.height) * 1.05);
   const nodePoints = useMemo(() => {
     const map = new Map<string, Point3>();
-    nodes.forEach((node, index) => map.set(node.id, worldPoint(node, index)));
+    nodes.forEach((node, index) => {
+      const override = draggedPositions[node.id];
+      map.set(node.id, worldPoint(override ? { ...node, position: override } : node, index));
+    });
     return map;
-  }, [nodes]);
+  }, [draggedPositions, nodes]);
 
   const projected = useMemo(() => {
     const result = new Map<string, ProjectedPoint>();
     nodes.forEach((node) => {
       const point = nodePoints.get(node.id);
-      if (point) result.set(node.id, project(point, camera, size.width, size.height, focal));
+      if (point) result.set(node.id, projectSpatialPoint(point, camera, size.width, size.height, focal));
     });
     return result;
   }, [camera, focal, nodePoints, nodes, size.height, size.width]);
 
-  const animateCamera = useCallback((next: Camera) => {
+  const publishCamera = useCallback(() => {
+    if (publishFrameRef.current) return;
+    publishFrameRef.current = requestAnimationFrame(() => {
+      publishFrameRef.current = 0;
+      setCamera({ ...cameraRef.current, target: { ...cameraRef.current.target } });
+    });
+  }, []);
+
+  const updateCamera = useCallback((updater: (current: SpatialCamera) => SpatialCamera) => {
     cancelAnimationFrame(animationRef.current);
-    const from = cameraRef.current;
+    cameraRef.current = clampSpatialCamera(updater(cameraRef.current));
+    publishCamera();
+  }, [publishCamera]);
+
+  const cameraForOverview = useCallback((): SpatialCamera => {
+    if (nodes.length === 0) return defaultCamera();
+    const points = nodes.map((node, index) => worldPoint(node, index));
+    const minX = Math.min(...points.map((point) => point.x));
+    const maxX = Math.max(...points.map((point) => point.x));
+    const minY = Math.min(...points.map((point) => point.y));
+    const maxY = Math.max(...points.map((point) => point.y));
+    const minZ = Math.min(...points.map((point) => point.z));
+    const maxZ = Math.max(...points.map((point) => point.z));
+    const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 520);
+    return clampSpatialCamera({
+      target: { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: (minZ + maxZ) / 2 },
+      yaw: 0,
+      pitch: 0.04,
+      distance: span * 1.35 + 420,
+    });
+  }, [nodes]);
+
+  const animateCamera = useCallback((next: SpatialCamera) => {
+    cancelAnimationFrame(animationRef.current);
+    const from = { ...cameraRef.current, target: { ...cameraRef.current.target } };
     const started = performance.now();
     const duration = appearance.threeD.animationIntensity === 0 ? 0 : 460;
     const tick = (now: number) => {
       const progress = duration === 0 ? 1 : Math.min(1, (now - started) / duration);
       const eased = 1 - Math.pow(1 - progress, 3);
-      const value: Camera = {
+      cameraRef.current = clampSpatialCamera({
         target: {
           x: from.target.x + (next.target.x - from.target.x) * eased,
           y: from.target.y + (next.target.y - from.target.y) * eased,
@@ -123,25 +159,21 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
         yaw: from.yaw + (next.yaw - from.yaw) * eased,
         pitch: from.pitch + (next.pitch - from.pitch) * eased,
         distance: from.distance + (next.distance - from.distance) * eased,
-      };
-      cameraRef.current = value;
-      setCamera(value);
+      });
+      publishCamera();
       if (progress < 1) animationRef.current = requestAnimationFrame(tick);
     };
     animationRef.current = requestAnimationFrame(tick);
-  }, [appearance.threeD.animationIntensity]);
+  }, [appearance.threeD.animationIntensity, publishCamera]);
 
-  const focusNode = useCallback((nodeId: string | null) => {
-    setSelectedId(nodeId);
-    if (!nodeId) {
-      animateCamera(defaultCamera());
-      return;
-    }
+  const resetCamera = useCallback(() => animateCamera(cameraForOverview()), [animateCamera, cameraForOverview]);
+
+  const focusNode = useCallback((nodeId: string) => {
     const point = nodePoints.get(nodeId);
     if (!point) return;
     const node = nodes.find((entry) => entry.id === nodeId);
     const distance = node?.data.type === 'root' ? 1180 : node?.data.type === 'category' ? 820 : node?.data.type === 'reminder' ? 640 : 520;
-    animateCamera(clampCamera({ target: { ...point, z: point.z * 0.7 }, yaw: cameraRef.current.yaw, pitch: 0.05, distance }));
+    animateCamera(clampSpatialCamera({ target: { ...point, z: point.z * 0.7 }, yaw: cameraRef.current.yaw, pitch: 0.18, distance }));
   }, [animateCamera, nodePoints, nodes]);
 
   useEffect(() => {
@@ -157,27 +189,45 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
     return () => observer?.disconnect();
   }, []);
 
+  // One overview fit when this graph surface is first opened; later data changes
+  // never change the camera unless the user explicitly presses Home or Focus.
   useEffect(() => {
-    const handleHome = () => focusNode(null);
+    if (!initialHomeDoneRef.current && nodes.length > 0 && size.width > 1 && size.height > 1) {
+      initialHomeDoneRef.current = true;
+      cameraRef.current = cameraForOverview();
+      publishCamera();
+    }
+  }, [cameraForOverview, nodes.length, publishCamera, size.height, size.width]);
+
+  useEffect(() => {
+    const handleHome = () => resetCamera();
     window.addEventListener('mindmesh-spatial-home', handleHome);
     return () => window.removeEventListener('mindmesh-spatial-home', handleHome);
-  }, [focusNode]);
+  }, [resetCamera]);
 
   useEffect(() => () => {
     cancelAnimationFrame(animationRef.current);
+    cancelAnimationFrame(publishFrameRef.current);
     pointersRef.current.clear();
+    pointerModesRef.current.clear();
   }, []);
 
-  const updateCamera = (updater: (current: Camera) => Camera) => {
-    cancelAnimationFrame(animationRef.current);
-    const next = clampCamera(updater(cameraRef.current));
-    cameraRef.current = next;
-    setCamera(next);
+  const beginTwoPointerGesture = () => {
+    const values = Array.from(pointersRef.current.values());
+    if (values.length < 2) return;
+    const centerX = values.reduce((sum, point) => sum + point.x, 0) / values.length;
+    const centerY = values.reduce((sum, point) => sum + point.y, 0) / values.length;
+    const distance = Math.hypot(values[0].x - values[1].x, values[0].y - values[1].y);
+    gestureRef.current = { centerX, centerY, distance };
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget && (event.button === 0 || event.pointerType === 'touch')) return;
+    event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    pointerModesRef.current.set(event.pointerId, event.button === 1 || event.button === 2 ? 'pan' : 'orbit');
+    if (pointersRef.current.size >= 2) beginTwoPointerGesture();
     setIsInteracting(true);
   };
 
@@ -188,51 +238,56 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     const dx = event.clientX - previous.x;
     const dy = event.clientY - previous.y;
-    const sensitivity = 0.0045 * appearance.threeD.cameraSensitivity;
 
     if (pointers.size >= 2) {
-      const all = Array.from(pointers.values());
-      const centerX = all.reduce((sum, point) => sum + point.x, 0) / all.length;
-      const centerY = all.reduce((sum, point) => sum + point.y, 0) / all.length;
-      const previousCenterX = centerX - dx / all.length;
-      const previousCenterY = centerY - dy / all.length;
+      const values = Array.from(pointers.values());
+      const centerX = values.reduce((sum, point) => sum + point.x, 0) / values.length;
+      const centerY = values.reduce((sum, point) => sum + point.y, 0) / values.length;
+      const distance = Math.hypot(values[0].x - values[1].x, values[0].y - values[1].y);
+      const previousGesture = gestureRef.current;
+      if (previousGesture) {
+        const panScale = Math.max(0.7, cameraRef.current.distance / focal);
+        const pinchDelta = distance - previousGesture.distance;
+        updateCamera((current) => ({
+          ...current,
+          target: {
+            ...current.target,
+            x: current.target.x - (centerX - previousGesture.centerX) * panScale,
+            y: current.target.y - (centerY - previousGesture.centerY) * panScale,
+          },
+          distance: current.distance - pinchDelta * 1.65 * appearance.threeD.zoomSensitivity,
+        }));
+      }
+      gestureRef.current = { centerX, centerY, distance };
+      return;
+    }
+
+    const mode = pointerModesRef.current.get(event.pointerId) ?? 'orbit';
+    if (mode === 'pan') {
       const panScale = Math.max(0.7, cameraRef.current.distance / focal);
-      updateCamera((current) => ({
-        ...current,
-        target: {
-          ...current.target,
-          x: current.target.x - (centerX - previousCenterX) * panScale,
-          y: current.target.y - (centerY - previousCenterY) * panScale,
-        },
-        distance: current.distance,
-      }));
+      updateCamera((current) => ({ ...current, target: { ...current.target, x: current.target.x - dx * panScale, y: current.target.y - dy * panScale } }));
       return;
     }
 
     if (appearance.threeD.graphRotation) {
       const direction = appearance.threeD.invertRotation ? -1 : 1;
-      updateCamera((current) => ({
-        ...current,
-        yaw: current.yaw + dx * sensitivity * direction,
-        pitch: current.pitch + dy * sensitivity * direction,
-      }));
+      const sensitivity = 0.006 * appearance.threeD.cameraSensitivity;
+      updateCamera((current) => ({ ...current, yaw: current.yaw + dx * sensitivity * direction, pitch: current.pitch + dy * sensitivity * direction }));
     }
   };
 
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     pointersRef.current.delete(event.pointerId);
+    pointerModesRef.current.delete(event.pointerId);
+    if (pointersRef.current.size < 2) gestureRef.current = null;
     if (pointersRef.current.size === 0) setIsInteracting(false);
   };
 
   const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
-    updateCamera((current) => ({
-      ...current,
-      distance: current.distance + event.deltaY * 0.8 * appearance.threeD.zoomSensitivity,
-    }));
+    updateCamera((current) => ({ ...current, distance: current.distance + event.deltaY * 1.2 * appearance.threeD.zoomSensitivity }));
   };
 
-  const resetCamera = () => focusNode(null);
   const zoom = (amount: number) => updateCamera((current) => ({ ...current, distance: current.distance + amount }));
 
   const visibleNodeIds = useMemo(() => {
@@ -240,18 +295,14 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
     nodes.forEach((node) => {
       const point = projected.get(node.id);
       if (!point) return;
-      const hideDistantSubtask = node.data.type === 'subtask' && (camera.distance > 1450 || point.scale < 0.24);
-      const hideDistantReminder = node.data.type === 'reminder' && camera.distance > 1780 && point.scale < 0.3;
+      const hideDistantSubtask = node.data.type === 'subtask' && (camera.distance > 14_000 || point.scale < 0.045);
+      const hideDistantReminder = node.data.type === 'reminder' && (camera.distance > 24_000 || point.scale < 0.06);
       if (!hideDistantSubtask && !hideDistantReminder) visible.add(node.id);
     });
     return visible;
   }, [camera.distance, nodes, projected]);
 
-  const renderedNodes = nodes
-    .filter((node) => visibleNodeIds.has(node.id))
-    .sort((a, b) => {
-      return (projected.get(b.id)?.depth ?? 0) - (projected.get(a.id)?.depth ?? 0);
-    });
+  const renderedNodes = nodes.filter((node) => visibleNodeIds.has(node.id)).sort((a, b) => (projected.get(b.id)?.depth ?? 0) - (projected.get(a.id)?.depth ?? 0));
 
   return (
     <div
@@ -259,10 +310,15 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
       className="mm-spatial-graph"
       data-testid="spatial-graph"
       data-spatial-active="true"
+      data-camera-yaw={camera.yaw}
+      data-camera-pitch={camera.pitch}
+      data-camera-distance={camera.distance}
+      data-camera-target-x={camera.target.x}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
+      onContextMenu={(event) => event.preventDefault()}
       onWheel={handleWheel}
       onClick={(event) => {
         if (event.target === event.currentTarget) {
@@ -280,20 +336,7 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
           const selectedPath = selectedId === edge.source || selectedId === edge.target;
           const stroke = typeof edge.style?.stroke === 'string' ? edge.style.stroke : '#64748b';
           const opacity = selectedId && !selectedPath ? 0.12 : Number(edge.style?.strokeOpacity ?? 0.55) * (source.scale + target.scale) * 0.9;
-          return (
-            <line
-              key={edge.id}
-              x1={source.screenX}
-              y1={source.screenY}
-              x2={target.screenX}
-              y2={target.screenY}
-              stroke={stroke}
-              strokeWidth={selectedPath ? 3.5 : Number(edge.style?.strokeWidth ?? 1.5) * Math.max(0.7, (source.scale + target.scale) / 1.6)}
-              strokeOpacity={opacity}
-              strokeLinecap="round"
-              className={edge.animated || selectedPath ? 'mm-spatial-edge mm-spatial-edge--active' : 'mm-spatial-edge'}
-            />
-          );
+          return <line key={edge.id} x1={source.screenX} y1={source.screenY} x2={target.screenX} y2={target.screenY} stroke={stroke} strokeWidth={selectedPath ? 3.5 : Number(edge.style?.strokeWidth ?? 1.5) * Math.max(0.7, (source.scale + target.scale) / 1.6)} strokeOpacity={opacity} strokeLinecap="round" className={edge.animated || selectedPath ? 'mm-spatial-edge mm-spatial-edge--active' : 'mm-spatial-edge'} />;
         })}
       </svg>
 
@@ -302,7 +345,7 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
         const point = projected.get(node.id);
         const Component = NODE_COMPONENTS[node.type || ''];
         if (!point || !Component) return null;
-        const visibleScale = Math.max(0.48, Math.min(1.28, point.scale * 1.55));
+        const visibleScale = Math.max(0.42, Math.min(1.28, point.scale * 1.55));
         const isSelected = selectedId === node.id;
         const isDimmed = Boolean(selectedId && !isSelected && node.data.type !== 'root');
         return (
@@ -311,36 +354,55 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
             className={`mm-spatial-node${isSelected ? ' mm-spatial-node--selected' : ''}`}
             data-node-id={node.id}
             data-depth={Math.round(point.z)}
-            onClick={() => {
-              if (appearance.threeD.autoFocus) focusNode(node.id);
-              else setSelectedId(node.id);
-            }}
-            onDoubleClick={(event) => {
+            onPointerDown={(event) => {
               event.stopPropagation();
-              focusNode(node.id);
+              event.preventDefault();
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+              const isTouch = event.pointerType === 'touch';
+              const drag: NonNullable<typeof nodeDragRef.current> = { id: node.id, startX: event.clientX, startY: event.clientY, originX: node.position.x, originY: node.position.y, moved: false, active: !isTouch };
+              nodeDragRef.current = drag;
+              if (isTouch) drag.timer = window.setTimeout(() => { if (nodeDragRef.current === drag) drag.active = true; }, 280);
             }}
-            style={{
-              left: point.screenX,
-              top: point.screenY,
-              zIndex: Math.round(2000 - point.depth),
-              opacity: isDimmed ? 0.28 : Math.max(0.58, Math.min(1, 1.15 - point.depth / 2100)),
-              filter: point.depth > 1250 ? 'saturate(0.72)' : undefined,
-              transform: `translate(-50%, -50%) scale(${visibleScale})`,
+            onPointerMove={(event) => {
+              const drag = nodeDragRef.current;
+              if (!drag || drag.id !== node.id) return;
+              event.stopPropagation();
+              const point = projected.get(node.id);
+              if (!point || !drag.active) return;
+              const dx = event.clientX - drag.startX;
+              const dy = event.clientY - drag.startY;
+              if (Math.hypot(dx, dy) < 4 && !drag.moved) return;
+              drag.moved = true;
+              setDraggedPositions((previous) => ({ ...previous, [node.id]: { x: drag.originX + dx / Math.max(point.scale, 0.001), y: drag.originY + dy / Math.max(point.scale, 0.001) } }));
             }}
+            onPointerUp={(event) => {
+              const drag = nodeDragRef.current;
+              if (!drag || drag.id !== node.id) return;
+              event.stopPropagation();
+              if (drag.timer) window.clearTimeout(drag.timer);
+              if (drag.moved) {
+                suppressNodeClickRef.current = true;
+                const position = draggedPositions[node.id];
+                if (position) onNodePositionChange?.(node.id, position.x, position.y);
+                setDraggedPositions((previous) => { const next = { ...previous }; delete next[node.id]; return next; });
+              }
+              nodeDragRef.current = null;
+            }}
+            onPointerCancel={(event) => {
+              event.stopPropagation();
+              const drag = nodeDragRef.current;
+              if (drag?.timer) window.clearTimeout(drag.timer);
+              nodeDragRef.current = null;
+              setDraggedPositions((previous) => { const next = { ...previous }; delete next[node.id]; return next; });
+            }}
+            onClick={() => {
+              if (suppressNodeClickRef.current) { suppressNodeClickRef.current = false; return; }
+              setSelectedId(node.id);
+              node.data.onNodeClick?.(node.id, node.data.type);
+            }}
+            style={{ left: point.screenX, top: point.screenY, zIndex: Math.round(2000 - point.depth), opacity: isDimmed ? 0.28 : Math.max(0.58, Math.min(1, 1.15 - point.depth / 2100)), filter: point.depth > 1250 ? 'saturate(0.72)' : undefined, transform: `translate(-50%, -50%) scale(${visibleScale})` }}
           >
-            <Component
-              id={node.id}
-              type={node.type}
-              data={node.data}
-              selected={isSelected}
-              dragging={false}
-              zIndex={node.zIndex}
-              xPos={node.position.x}
-              yPos={node.position.y}
-              sourcePosition={Position.Bottom}
-              targetPosition={Position.Top}
-              isConnectable={false}
-            />
+            <Component id={node.id} type={node.type} data={node.data} selected={isSelected} dragging={Boolean(nodeDragRef.current?.id === node.id && nodeDragRef.current.active)} zIndex={node.zIndex} xPos={node.position.x} yPos={node.position.y} sourcePosition={Position.Bottom} targetPosition={Position.Top} isConnectable={false} />
           </div>
         );
       })}
@@ -353,11 +415,12 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
         </div>
         <div className="mm-spatial-actions">
           <button type="button" onClick={resetCamera} aria-label="Home view" title="Home view"><Home size={15} /></button>
-          <button type="button" onClick={() => zoom(-120)} aria-label="Zoom in" title="Zoom in"><ZoomIn size={15} /></button>
-          <button type="button" onClick={() => zoom(120)} aria-label="Zoom out" title="Zoom out"><ZoomOut size={15} /></button>
+          <button type="button" onClick={() => zoom(-180)} aria-label="Zoom in" title="Zoom in"><ZoomIn size={15} /></button>
+          <button type="button" onClick={() => zoom(180)} aria-label="Zoom out" title="Zoom out"><ZoomOut size={15} /></button>
+          {selectedId && <button type="button" onClick={() => focusNode(selectedId)} aria-label="Focus selected node" title="Focus selected node"><Crosshair size={14} /></button>}
           <button type="button" onClick={resetCamera} aria-label="Reset camera" title="Reset camera"><RotateCcw size={14} /></button>
         </div>
-        <div className="mm-spatial-help">Drag to orbit · two fingers to pan · pinch or wheel to travel</div>
+        <div className="mm-spatial-help">Empty drag: orbit · right/middle drag: pan · two fingers: pan/pinch · wheel: dolly</div>
       </div>
     </div>
   );

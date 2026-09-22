@@ -4,6 +4,7 @@ import { Contact } from '../types/contact';
 import { AppearanceSettings } from '../types/appearance';
 import { accentForNodeType, getDefaultAppearance, resolveNodeTheme, withAlpha } from '../services/appearance';
 import { getChildCategories } from '../services/categories';
+import { findAvailablePosition } from '../services/nodePositions';
 
 export interface NestedGraphElements { nodes: Node<MeshNodeData>[]; edges: Edge[] }
 
@@ -29,7 +30,17 @@ export function generateNestedActiveMesh(
   const activeReminders = reminders.filter((reminder) => !reminder.completed);
   const customNodes = appearance.nodeColorMode === 'custom';
   const customLines = appearance.connectionColorMode === 'custom';
-  const rootPosition = manualPositions.root?.manuallyPositioned ? manualPositions.root : { x: 0, y: 0 };
+  const occupied: Array<{ position: { x: number; y: number }; size: { width: number; height: number } }> = [];
+  const place = (ideal: { x: number; y: number }, manual: { x: number; y: number; manuallyPositioned?: boolean } | undefined, size: { width: number; height: number }) => {
+    const position = manual?.manuallyPositioned ? { x: manual.x, y: manual.y } : findAvailablePosition(ideal, occupied, size);
+    occupied.push({ position, size });
+    return position;
+  };
+  const rootPosition = place(
+    manualPositions.root?.manuallyPositioned ? manualPositions.root : { x: 0, y: 0 },
+    manualPositions.root,
+    { width: 104, height: 104 },
+  );
   const rootTheme = themeFor(appearance, accentForNodeType(appearance, 'root'));
 
   nodes.push({ id: 'root', type: 'rootNode', position: { x: rootPosition.x, y: rootPosition.y }, zIndex: 20, data: {
@@ -44,8 +55,13 @@ export function generateNestedActiveMesh(
       const angle = parentAngle - 0.45 + (reminder.subtasks.length === 1 ? 0.45 : index * 0.9 / (reminder.subtasks.length - 1));
       const distance = 125 + (index % 2) * 24;
       const manual = manualPositions[subtask.id];
-      const subX = manual?.manuallyPositioned ? manual.x : Math.round(x + distance * Math.cos(angle));
-      const subY = manual?.manuallyPositioned ? manual.y : Math.round(y + distance * Math.sin(angle));
+      const subPosition = place(
+        { x: Math.round(x + distance * Math.cos(angle)), y: Math.round(y + distance * Math.sin(angle)) },
+        manual,
+        { width: 130, height: 42 },
+      );
+      const subX = subPosition.x;
+      const subY = subPosition.y;
       const subTheme = themeFor(appearance, customNodes ? accentForNodeType(appearance, 'subtask') : color, subtask.completed);
       nodes.push({ id: subtask.id, type: 'subtaskNode', position: { x: subX, y: subY }, zIndex: 1, data: {
         id: subtask.id, label: subtask.title, type: 'subtask', color: subTheme.accent, accentColor: subTheme.accent,
@@ -66,8 +82,13 @@ export function generateNestedActiveMesh(
     const angle = (2 * Math.PI * branchIndex) / Math.max(siblingCount, 1) - Math.PI / 2;
     const distance = depth === 0 ? 230 : 190;
     const manual = manualPositions[category.id];
-    const x = manual?.manuallyPositioned ? manual.x : Math.round(parentX + distance * Math.cos(angle));
-    const y = manual?.manuallyPositioned ? manual.y : Math.round(parentY + distance * Math.sin(angle));
+    const categoryPosition = place(
+      { x: Math.round(parentX + distance * Math.cos(angle)), y: Math.round(parentY + distance * Math.sin(angle)) },
+      manual,
+      { width: 78, height: 78 },
+    );
+    const x = categoryPosition.x;
+    const y = categoryPosition.y;
     const focused = focusedCategoryId === category.id;
     const accent = customNodes ? accentForNodeType(appearance, 'category') : category.color;
     const catTheme = themeFor(appearance, focused ? appearance.nodeColors.selected : accent);
@@ -88,8 +109,13 @@ export function generateNestedActiveMesh(
       const reminderAngle = angle - 0.65 + (branchReminders.length === 1 ? 0.65 : index * 1.3 / (branchReminders.length - 1));
       const reminderDistance = focused ? 225 : 190;
       const reminderManual = manualPositions[reminder.id];
-      const reminderX = reminderManual?.manuallyPositioned ? reminderManual.x : Math.round(x + reminderDistance * Math.cos(reminderAngle));
-      const reminderY = reminderManual?.manuallyPositioned ? reminderManual.y : Math.round(y + reminderDistance * Math.sin(reminderAngle));
+      const reminderPosition = place(
+        { x: Math.round(x + reminderDistance * Math.cos(reminderAngle)), y: Math.round(y + reminderDistance * Math.sin(reminderAngle)) },
+        reminderManual,
+        { width: 165, height: 100 },
+      );
+      const reminderX = reminderPosition.x;
+      const reminderY = reminderPosition.y;
       const remTheme = themeFor(appearance, customNodes ? accentForNodeType(appearance, 'reminder') : category.color, reminder.completed);
       const linkedContact = contacts.find((contact) => contact.id === reminder.linkedContactId);
       nodes.push({ id: reminder.id, type: 'reminderNode', position: { x: reminderX, y: reminderY }, zIndex: 5, data: {
