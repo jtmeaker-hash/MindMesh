@@ -87,6 +87,8 @@ export interface MindMeshStorageData {
   appearance?: import('./appearance').AppearanceSettings;
   notifications?: import('./notifications').AppNotificationSettings;
   notificationHistory?: import('./notifications').NotificationHistoryEntry[];
+  /** Local Smart Engine preferences; absent in older payloads and restored to safe defaults. */
+  smartEngineSettings?: import('./smartEngine').SmartEngineSettings;
   /** Optional so pre-Routine backups and local payloads remain readable. */
   routines?: import('./routine').Routine[];
 }
@@ -97,6 +99,7 @@ export * from './backup';
 export * from './appearance';
 export * from './notifications';
 export * from './diagnostics';
+export * from './smartEngine';
 
 export type ViewMode = 'active' | 'completed';
 

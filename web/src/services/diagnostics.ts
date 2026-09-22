@@ -1037,6 +1037,40 @@ export function diagnoseHorizontalOverflow(doc: Document | undefined = typeof do
   return { viewportWidth, documentWidth, overflow: Math.max(0, documentWidth - viewportWidth), offenders, ignoredScrollableContainers };
 }
 
+const checkRoutineGraphLayout: DiagnosticCheck = () => {
+  const builder = typeof document !== 'undefined' ? document.querySelector<HTMLElement>('[data-testid="routine-builder"]') : null;
+  const viewport = typeof document !== 'undefined' ? document.querySelector<HTMLElement>('[data-testid="routine-graph-viewport"]') : null;
+  if (!viewport) {
+    return makeResult({
+      id: 'routines.graphLayout',
+      name: 'Routine graph containment',
+      category: 'routines',
+      status: 'pass',
+      explanation: 'The Routine Builder graph is inactive, so no graph overlay is mounted.',
+      details: { active: false },
+    });
+  }
+
+  const mode = builder?.dataset.editorMode;
+  const graph = viewport?.querySelector('[data-testid="routine-graph"]');
+  const contained = Boolean(viewport && graph && viewport.contains(graph));
+  const viewportStyle = viewport?.getAttribute('style') || '';
+  const hasBoundedViewport = /position:\s*relative/.test(viewportStyle) && /overflow:\s*hidden/.test(viewportStyle) && /width:\s*100%/.test(viewportStyle);
+  const problems: string[] = [];
+  if (mode !== 'graph') problems.push(`graph mounted while editor mode is ${mode || 'unknown'}`);
+  if (!contained) problems.push('graph content is outside its graph viewport');
+  if (!hasBoundedViewport) problems.push('graph viewport is missing bounded relative containment');
+
+  return makeResult({
+    id: 'routines.graphLayout',
+    name: 'Routine graph containment',
+    category: 'routines',
+    status: problems.length === 0 ? 'pass' : 'fail',
+    explanation: problems.length === 0 ? 'The active Routine graph is mounted inside its bounded Builder viewport.' : problems.join('; '),
+    details: { active: true, editorMode: mode || 'unknown', contained, hasBoundedViewport },
+  });
+};
+
 const checkLayoutOverflow: DiagnosticCheck = () => {
   const report = diagnoseHorizontalOverflow();
   if (!report) {
@@ -1459,6 +1493,7 @@ const QUICK_CHECKS: DiagnosticCheck[] = [
   checkPwaInstall,
   checkNetwork,
   checkRoutineSafety,
+  checkRoutineGraphLayout,
   checkLayoutOverflow,
 ];
 

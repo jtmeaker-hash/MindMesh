@@ -163,7 +163,10 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
     return () => window.removeEventListener('mindmesh-spatial-home', handleHome);
   }, [focusNode]);
 
-  useEffect(() => () => cancelAnimationFrame(animationRef.current), []);
+  useEffect(() => () => {
+    cancelAnimationFrame(animationRef.current);
+    pointersRef.current.clear();
+  }, []);
 
   const updateCamera = (updater: (current: Camera) => Camera) => {
     cancelAnimationFrame(animationRef.current);

@@ -103,7 +103,7 @@ html, body, #root {
   pointer-events: none;
 }
 
-.mm-spatial-connections { z-index: 1; overflow: visible; }
+.mm-spatial-connections { z-index: 1; overflow: hidden; }
 .mm-spatial-edge { transition: opacity 180ms ease, stroke-width 180ms ease; }
 .mm-spatial-edge--active {
   filter: drop-shadow(0 0 5px currentColor);
@@ -218,6 +218,29 @@ html, body, #root {
 @media (prefers-reduced-motion: reduce) {
   .mm-spatial-edge--active { animation: none; }
   .mm-spatial-node { transition: none; }
+}
+
+.routine-module {
+  overflow-x: hidden;
+}
+
+.routine-graph-viewport {
+  contain: layout paint;
+}
+
+@media (max-width: 760px) {
+  .routine-module {
+    padding: 12px !important;
+  }
+
+  .routine-builder-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .routine-graph-viewport {
+    height: min(68vh, 500px) !important;
+    min-height: 360px !important;
+  }
 }
 
 /* React Flow customizations */
