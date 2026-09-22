@@ -60,20 +60,25 @@ export function readRoutines(options: { includeArchived?: boolean; includeTrash?
 export function updateRoutine(routine: Routine): Routine {
   validateRoutine(routine);
   const timestamp = new Date().toISOString();
+  // The caller generally passes an edited copy. Read the persisted definition so
+  // the history entry is genuinely recoverable as the pre-edit state rather than
+  // another copy of the new values.
+  const persisted = loadRoutines().find((item) => item.id === routine.id);
+  const previous = persisted || routine;
   const snapshot = {
-    id: `${routine.id}-version-${routine.version}-${Date.now()}`,
+    id: `${routine.id}-version-${previous.version}-${Date.now()}`,
     routineId: routine.id,
-    version: routine.version,
+    version: previous.version,
     createdAt: timestamp,
     reason: 'Before edit',
-    name: routine.name,
-    description: routine.description,
-    steps: routine.steps.map((step) => ({ ...step })),
+    name: previous.name,
+    description: previous.description,
+    steps: previous.steps.map((step) => ({ ...step })),
   };
   const updated = {
     ...routine,
-    version: routine.version + 1,
-    versionHistory: [...(routine.versionHistory || []), snapshot].slice(-50),
+    version: Math.max(routine.version, previous.version) + 1,
+    versionHistory: [...(previous.versionHistory || []), snapshot].slice(-50),
     updatedAt: timestamp,
   };
   replaceRoutine(updated);

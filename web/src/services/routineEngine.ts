@@ -104,10 +104,6 @@ export function getNextRoutineOccurrence(routine: Routine, from = new Date()): R
   return undefined;
 }
 
-function childSteps(routine: Routine, parentId: string | null | undefined): RoutineStep[] {
-  return routine.steps.filter((step) => (step.parentStepId || null) === (parentId || null)).sort((a, b) => a.order - b.order);
-}
-
 function conditionAllows(routine: Routine, step: RoutineStep): boolean {
   const condition = step.conditionId ? routine.conditions.find((item) => item.id === step.conditionId) : undefined;
   if (!condition || !condition.expression.trim()) return true;
@@ -118,17 +114,26 @@ function conditionAllows(routine: Routine, step: RoutineStep): boolean {
 export function getEligibleRoutineSteps(routine: Routine, options: RoutineRuntimeOptions = {}): RoutineStep[] {
   const session = routine.activeSession;
   const completed = new Set(session?.completedStepIds || []);
-  return routine.steps.filter((step) => {
+  const eligible = routine.steps.filter((step) => {
     if (completed.has(step.id) || !conditionAllows(routine, step)) return false;
     const dependencyIds = step.dependencyIds || [];
     if (!options.allowDependencyOverride && dependencyIds.some((dependencyId) => !completed.has(dependencyId))) return false;
     return true;
   }).sort((a, b) => a.order - b.order);
+  // Sequential routines expose exactly one next action. Dependencies still apply,
+  // but a routine without explicit dependency edges must not become flexible by
+  // accident.
+  return routine.executionMode === 'sequential' ? eligible.slice(0, 1) : eligible;
+}
+
+function minimumRequiredSteps(routine: Routine): RoutineStep[] {
+  const marked = routine.steps.filter((step) => step.minimumVersion || step.minimumCompleted);
+  return marked.length > 0 ? marked : routine.steps.filter((step) => !step.optional);
 }
 
 function completionSatisfied(routine: Routine, session: RoutineSession): boolean {
   const completed = new Set(session.completedStepIds);
-  const required = routine.steps.filter((step) => !step.optional && !step.minimumVersion);
+  const required = minimumRequiredSteps(routine);
   return routine.completionRule === 'any-child'
     ? required.length === 0 || required.some((step) => completed.has(step.id))
     : required.every((step) => completed.has(step.id));
@@ -146,6 +151,8 @@ export function startRoutine(routine: Routine, options: RoutineRuntimeOptions = 
   const now = options.now || new Date();
   const date = isoDate(now);
   const occurrence = getRoutineOccurrencesForDate(routine, date)[0] || { date, time: routine.schedule.startTime, occurrenceKey: `${routine.id}:${date}:manual` };
+  const existingActive = routine.activeSession && ['running', 'paused'].includes(routine.activeSession.status);
+  if (existingActive) return routine;
   return updateRuntime(routine, (next) => {
     const occurrenceRecord: RoutineOccurrence = {
       id: id('occurrence'), routineId: next.id, scheduledFor: `${occurrence.date}T${occurrence.time || '09:00'}`,
@@ -153,7 +160,7 @@ export function startRoutine(routine: Routine, options: RoutineRuntimeOptions = 
     };
     const session: RoutineSession = {
       id: id('session'), routineId: next.id, occurrenceId: occurrenceRecord.id, status: 'running', startedAt: now.toISOString(),
-      currentStepId: next.executionMode === 'sequential' ? childSteps(next, null)[0]?.id : getEligibleRoutineSteps(next)[0]?.id,
+      currentStepId: getEligibleRoutineSteps(next)[0]?.id,
       completedStepIds: [], temporaryStepIds: [], updatedAt: now.toISOString(),
     };
     next.occurrences = [occurrenceRecord, ...next.occurrences.filter((item) => item.status !== 'active')];
@@ -196,6 +203,9 @@ export function completeRoutineStep(routine: Routine, stepId?: string, options: 
     occurrence.completedStepIds = session.completedStepIds;
     next.history.unshift({ id: id('history'), routineId: next.id, occurrenceId: occurrence.id, stepId: step.id, event: 'completed', at: now.toISOString(), durationMinutes: step.durationTargetMinutes });
     if (next.executionMode === 'sequential') session.currentStepId = getEligibleRoutineSteps({ ...next, activeSession: session }, options)[0]?.id;
+    if ((step.minimumVersion || step.minimumCompleted) && completionSatisfied(next, session)) {
+      next.history.unshift({ id: id('history'), routineId: next.id, occurrenceId: occurrence.id, stepId: step.id, event: 'completed', at: now.toISOString(), reason: 'minimum-completed' });
+    }
     finishIfComplete(next, session, occurrence, now);
   }, options);
 }
@@ -249,11 +259,12 @@ export function startRoutineStepTimer(routine: Routine, stepId?: string, minutes
   });
 }
 
-export function addRoutineStepTime(routine: Routine, minutes: number, _options: RoutineRuntimeOptions = {}): Routine {
+export function addRoutineStepTime(routine: Routine, minutes: number, options: RoutineRuntimeOptions = {}): Routine {
+  const now = (options.now || new Date()).getTime();
   return updateRuntime(routine, (next) => {
     const target = next.activeSession?.stepTimerTargetAt;
     if (!target || !next.activeSession) return;
-    const base = Math.max(Date.now(), Date.parse(target));
+    const base = Math.max(now, Date.parse(target));
     next.activeSession.stepTimerTargetAt = new Date(base + Math.max(1, minutes) * 60_000).toISOString();
   });
 }

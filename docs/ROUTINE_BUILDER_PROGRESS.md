@@ -2,7 +2,7 @@
 
 ## Current stage
 
-**Stage 11 — New standalone GitHub Action — implementation complete**
+**Stage 12 — Final integration + release check — implementation complete**
 
 Stage 11 adds a second, independent Routine regression workflow. The existing project CI remains unchanged; the new workflow validates the established web lint, type-check, full test, and Android WebView bundle build commands on future `main` pushes, pull requests targeting `main`, and manual dispatch.
 
@@ -480,10 +480,63 @@ Routine data is included in full EVERYTHING backups through the existing backup 
 - Android Gradle tests remain unavailable in this workspace because no Android SDK or `local.properties` is configured. They remain in the pre-existing Android workflow rather than being silently skipped here.
 - Emulator-only notification, process-death, reboot, permissions, orientation, and 3D performance checks remain manual/device-CI work.
 
+## Stage 12 — final integration + release check
+
+### Completed work
+
+- Audited the final Routine Builder implementation against the end-to-end requirements and fixed concrete runtime gaps rather than treating UI presence as completion.
+- Minimum Version / Minimum Completed flags now define a persisted minimum completion set. Completing that set finishes the occurrence and records a `minimum-completed` history event; optional follow-up steps are not required for the minimum version.
+- Sequential routines now expose exactly one eligible next step even when explicit dependency edges are absent. Flexible routines continue to expose all eligible dependency/condition-approved steps.
+- Expired sessions are presented as finished and can be restarted safely instead of appearing as runnable sessions.
+- Step timer extension honors the runtime clock supplied by the engine, preserving deterministic recovery and test behavior.
+- Routine version snapshots now read the persisted pre-edit definition, so restoring a version actually returns to the state before the edit. The existing recoverable pre-restore snapshot path remains intact.
+- Runtime notification actions now propagate updated routine collections back through the application shell, keeping Dashboard and other consumers synchronized with native notification actions.
+- Added `web/src/test/routine_stage12.test.ts` covering minimum-version completion, sequential eligibility, pre-edit version history, and expired-session behavior.
+
+### Files changed in Stage 12
+
+- `web/src/services/routineEngine.ts`
+- `web/src/services/routines.ts`
+- `web/src/components/routines/RoutineModule.tsx`
+- `web/src/test/routine_stage12.test.ts`
+- `docs/ROUTINE_BUILDER_PROGRESS.md`
+- `app/src/main/assets/web/index.html` and regenerated WebView asset bundle from the verified production build
+
+### Architecture / migration decisions
+
+- No storage schema, backup format, Android database, or migration contract changed. Minimum completion is derived from existing per-step flags and is represented in existing session/history/occurrence fields.
+- The persisted routine aggregate remains the source of truth for app runtime, native notification recovery, analytics, version history, Trash, drafts, quarantine, and full backup/restore.
+- The standalone workflow remains independent at `.github/workflows/mindmesh-routine-regression.yml`; no existing workflow was replaced or linked.
+
+### Final verification
+
+- `npm --prefix web run lint` — **passed**.
+- `npm --prefix web run type-check` — **passed**.
+- Focused final/runtime regression tests — **passed: 17 tests**.
+- `npm --prefix web run test -- --run` — **passed: 25 test files, 260 tests**.
+- `npm --prefix web run build` — **passed**; Vite regenerated the Android WebView bundle. The existing main-bundle size advisory remains non-blocking.
+- `git diff --check` — **passed**.
+- `sh ./gradlew :app:testDebugUnitTest --stacktrace` — **blocked before compilation**: no Android SDK or `local.properties`/`ANDROID_HOME` is configured in this workspace.
+
+### Manual/device verification still required
+
+On a configured Android emulator or device, run the full matrix: notification permission enabled/disabled, scheduled start and action delivery with the app open/closed/process-killed, locked-screen timing, step timer recovery, reboot rescheduling, multiple simultaneous routines, backup export/import through Android file pickers, portrait/landscape and small/large displays, and 3D/Performance Mode frame-time checks. GitHub Actions should run both the standalone web workflow and the existing Android workflow after delivery.
+
+### Feature flags / limitations
+
+- No experimental Routine feature is exposed behind an unfinished flag.
+- Native alarms intentionally use `setAndAllowWhileIdle`; exact-alarm capability and battery optimization are diagnosed, not silently promised.
+- Advanced AI generation remains optional and approval-gated; core routine creation, execution, persistence, backup, and recovery work without AI.
+- Full Android/device validation is not claimable from this workspace until an SDK-backed CI/device run completes.
+
+### Release notes
+
+Routine Builder is integrated into MindMesh’s local-first storage and shared navigation with templates, nested/sequential/flexible execution, schedules, native notifications, runtime timers, history/analytics, links, full backup/restore, diagnostics/repair, version recovery, Trash, quarantine, graph/3D views, and standalone regression CI. This workspace has verified the web and persistence paths; Android/device release sign-off remains pending the environment noted above.
+
 ## Exact next stage
 
-**Stage 12 — release-readiness verification:** run the independent workflow and existing Android workflow on GitHub, validate the complete notification/device matrix on a configured emulator, and address any CI-only or accessibility findings without changing persistence compatibility.
+**Post-release operational verification:** run `.github/workflows/mindmesh-routine-regression.yml` and the existing Android workflow on GitHub, then complete the configured emulator/device matrix before publishing an Android release.
 
 ## Last good commit
 
-No stage commit was created in this workspace. Freebuff’s Changes panel owns commit delivery; review and commit only the intended Stage 11 files and earlier uncommitted Routine Builder files that belong to the product change.
+No stage commit was created in this workspace. Freebuff’s Changes panel owns commit delivery; review and commit the Stage 12 files plus the regenerated WebView assets that belong to this final integration pass.
