@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Home, RotateCcw, ZoomIn, ZoomOut, Crosshair } from 'lucide-react';
+import { Home, RotateCcw, ZoomIn, ZoomOut, Crosshair, HelpCircle, X } from 'lucide-react';
 import { Edge, Node, Position } from '@xyflow/react';
 import { MeshNodeData, AppearanceSettings } from '../../types';
 import { RootNode } from '../nodes/RootNode';
@@ -22,7 +22,6 @@ interface SpatialGraphProps {
 type Point3 = { x: number; y: number; z: number };
 export type SpatialCamera = { target: Point3; yaw: number; pitch: number; distance: number };
 type ProjectedPoint = Point3 & { screenX: number; screenY: number; scale: number; depth: number };
-type PointerMode = 'orbit' | 'pan';
 type NodeComponent = React.ComponentType<Record<string, unknown>>;
 
 const NODE_COMPONENTS: Record<string, NodeComponent> = {
@@ -31,6 +30,36 @@ const NODE_COMPONENTS: Record<string, NodeComponent> = {
   reminderNode: ReminderNode as unknown as NodeComponent,
   subtaskNode: SubtaskNode as unknown as NodeComponent,
 };
+
+/**
+ * On-canvas gesture guide. It is shown once on first run so the touch model is
+ * discoverable, then stays available from the HUD's help button.
+ */
+const GESTURE_HINT_STORAGE_KEY = 'mindmesh_spatial_gesture_hint_seen';
+
+const SPATIAL_GESTURES: Array<{ glyph: string; label: string; hint: string }> = [
+  { glyph: '\u2194', label: 'Drag empty space', hint: 'Pans the graph' },
+  { glyph: '\u2921', label: 'Pinch with two fingers', hint: 'Zooms in and out' },
+  { glyph: '\u21c4', label: 'Two-finger drag', hint: 'Pans while zooming' },
+  { glyph: '\u25c9', label: 'Tap a node', hint: 'Selects it' },
+  { glyph: '\u2725', label: 'Hold and drag a node', hint: 'Repositions it' },
+];
+
+function readGestureHintSeen(): boolean {
+  try {
+    return localStorage.getItem(GESTURE_HINT_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeGestureHintSeen(): void {
+  try {
+    localStorage.setItem(GESTURE_HINT_STORAGE_KEY, '1');
+  } catch {
+    // Non-fatal: the first-run hint simply reappears next session.
+  }
+}
 
 function depthForNode(node: Node<MeshNodeData>, index: number): number {
   const base = node.data.type === 'root' ? 0 : node.data.type === 'category' ? 105 : node.data.type === 'reminder' ? 235 : 350;
@@ -57,6 +86,47 @@ export function projectSpatialPoint(point: Point3, camera: SpatialCamera, width:
   const depth = Math.max(30, camera.distance - cameraZ);
   const scale = focal / depth;
   return { ...point, screenX: width / 2 + yawX * scale, screenY: height / 2 + pitchY * scale, scale, depth };
+}
+
+/**
+ * Exact inverse of `projectSpatialPoint` for a fixed world-z plane.
+ *
+ * Node dragging uses this so a grabbed node tracks the pointer in *world* space.
+ * The previous implementation divided raw screen-pixel deltas by the node's
+ * projected scale, which silently changed drag sensitivity as the node moved or
+ * the camera zoomed, and drifted whenever the camera was yawed or pitched.
+ *
+ * Returns null when the camera ray runs parallel to the plane (nothing sane to
+ * solve), so callers can simply skip the frame.
+ */
+export function unprojectSpatialPoint(
+  screenX: number,
+  screenY: number,
+  worldZ: number,
+  camera: SpatialCamera,
+  width: number,
+  height: number,
+  focal: number,
+): { x: number; y: number } | null {
+  const u = (screenX - width / 2) / focal;
+  const v = (screenY - height / 2) / focal;
+  const dz = worldZ - camera.target.z;
+  const cosYaw = Math.cos(camera.yaw);
+  const sinYaw = Math.sin(camera.yaw);
+  const cosPitch = Math.cos(camera.pitch);
+  const sinPitch = Math.sin(camera.pitch);
+  // Camera-space ray is X = u*t, Y = v*t, Zc = distance - t. Rotating that ray
+  // back into world space and pinning world z gives the single valid t.
+  const denom = -sinYaw * u - cosYaw * (sinPitch * v + cosPitch);
+  if (!Number.isFinite(denom) || Math.abs(denom) < 1e-6) return null;
+  const t = (dz - cosYaw * cosPitch * camera.distance) / denom;
+  if (!Number.isFinite(t)) return null;
+  const x1 = u * t;
+  const z1 = -sinPitch * v * t + cosPitch * (camera.distance - t);
+  const dx = cosYaw * x1 + sinYaw * z1;
+  const dy = (cosPitch * v - sinPitch) * t + sinPitch * camera.distance;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null;
+  return { x: camera.target.x + dx, y: camera.target.y + dy };
 }
 
 /** Only safety limits remain: no target or orbit-area restriction is imposed. */
@@ -114,10 +184,66 @@ export function resolveSecondaryNodeVisibility(
   };
 }
 
+/**
+ * The interaction state machine. Exactly one mode is active at a time so a
+ * single gesture can never move a node, pan the camera and select another node
+ * simultaneously. Gesture intent is decided by where the pointer *started*.
+ */
+export type InteractionMode = 'IDLE' | 'NODE_PENDING' | 'NODE_DRAG' | 'CANVAS_PAN' | 'PINCH_ZOOM';
+
+/** Screen pixels a pointer must travel before a node press becomes a drag. */
+export const NODE_DRAG_THRESHOLD = 5;
+
+type CanvasPointerMode = 'pan' | 'orbit';
+type CanvasPointer = { x: number; y: number; mode: CanvasPointerMode };
+type Rect = { left: number; top: number; width: number; height: number };
+
+interface InteractionState {
+  mode: InteractionMode;
+  /** Pointer that owns the node drag. Other pointers are ignored until it ends. */
+  pointerId: number | null;
+  nodeId: string | null;
+  startClientX: number;
+  startClientY: number;
+  /** World z of the fixed drag plane; never recomputed mid-drag. */
+  planeZ: number;
+  /** node world position - initial world intersection, so the node never jumps. */
+  dragOffset: { x: number; y: number };
+  /** Latest live world position, committed only on pointer-up. */
+  position: { x: number; y: number } | null;
+  rect: Rect;
+  focal: number;
+  camera: SpatialCamera;
+}
+
+function createIdleInteraction(): InteractionState {
+  return {
+    mode: 'IDLE',
+    pointerId: null,
+    nodeId: null,
+    startClientX: 0,
+    startClientY: 0,
+    planeZ: 0,
+    dragOffset: { x: 0, y: 0 },
+    position: null,
+    rect: { left: 0, top: 0, width: 1, height: 1 },
+    focal: 260,
+    camera: defaultCamera(),
+  };
+}
+
+/** Pointer capture is best-effort: a missing/throwing implementation is fine. */
+function capturePointer(element: Element | null, pointerId: number): void {
+  try {
+    (element as HTMLElement | null)?.setPointerCapture?.(pointerId);
+  } catch {
+    // Capture is an optimisation; the window-level cleanup still ends gestures.
+  }
+}
+
 export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appearance, onEmptyClick, onNodePositionChange, focusNodeId, selectedNodeId }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
-  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
-  const pointerModesRef = useRef(new Map<number, PointerMode>());
+  const pointersRef = useRef(new Map<number, CanvasPointer>());
   const cameraRef = useRef<SpatialCamera>(defaultCamera());
   const animationRef = useRef<number>(0);
   const publishFrameRef = useRef<number>(0);
@@ -127,10 +253,16 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
   const [camera, setCamera] = useState<SpatialCamera>(defaultCamera);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
+  // First-run: open automatically until the user has dismissed the gesture guide.
+  const [legendOpen, setLegendOpen] = useState(() => !readGestureHintSeen());
   const [hiddenSecondaryNodes, setHiddenSecondaryNodes] = useState<SecondaryNodeVisibility>({ reminders: false, subtasks: false });
   const [draggedPositions, setDraggedPositions] = useState<Record<string, { x: number; y: number }>>({});
-  const nodeDragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean; active: boolean; timer?: number } | null>(null);
-  const suppressNodeClickRef = useRef(false);
+  // The single source of truth for node/canvas gesture ownership.
+  const interactionRef = useRef<InteractionState>(createIdleInteraction());
+  // A completed drag must never be delivered as a click/select on release.
+  const justDraggedRef = useRef<{ nodeId: string; at: number } | null>(null);
+  // A canvas pan (touch) must not be mistaken for an empty-space tap afterwards.
+  const canvasMovedRef = useRef(false);
   // Latest world points, readable from effects without re-running them whenever
   // a reminder or node position changes (which must never move the camera).
   const nodePointsRef = useRef<Map<string, Point3>>(new Map());
@@ -278,13 +410,6 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
     return () => window.removeEventListener('mindmesh-spatial-home', handleHome);
   }, [resetCamera]);
 
-  useEffect(() => () => {
-    cancelAnimationFrame(animationRef.current);
-    cancelAnimationFrame(publishFrameRef.current);
-    pointersRef.current.clear();
-    pointerModesRef.current.clear();
-  }, []);
-
   const beginTwoPointerGesture = () => {
     const values = Array.from(pointersRef.current.values());
     if (values.length < 2) return;
@@ -294,23 +419,164 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
     gestureRef.current = { centerX, centerY, distance };
   };
 
+  const readViewportRect = useCallback((): Rect => {
+    const element = viewportRef.current;
+    if (!element) return { left: 0, top: 0, width: 1, height: 1 };
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+  }, []);
+
+  // ---- Node drag (owns its pointer exclusively) ---------------------------
+
+  const beginNodeDrag = useCallback((event: React.PointerEvent<HTMLDivElement>, nodeId: string) => {
+    if (interactionRef.current.mode !== 'IDLE') return;
+    const point = nodePointsRef.current.get(nodeId);
+    if (!point) return;
+    const rect = readViewportRect();
+    const dragFocal = Math.max(260, Math.min(rect.width, rect.height) * 1.05);
+    // Snapshot the camera: it is frozen for the whole gesture, so the plane and
+    // the screen-to-world mapping stay stable.
+    const cameraSnapshot = { ...cameraRef.current, target: { ...cameraRef.current.target } };
+    const world = unprojectSpatialPoint(
+      event.clientX - rect.left,
+      event.clientY - rect.top,
+      point.z,
+      cameraSnapshot,
+      rect.width,
+      rect.height,
+      dragFocal,
+    );
+    if (!world) return;
+    interactionRef.current = {
+      mode: 'NODE_PENDING',
+      pointerId: event.pointerId,
+      nodeId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      planeZ: point.z,
+      // Grabbing a node's edge must not teleport its centre under the finger.
+      dragOffset: { x: point.x - world.x, y: point.y - world.y },
+      position: null,
+      rect,
+      focal: dragFocal,
+      camera: cameraSnapshot,
+    };
+  }, [readViewportRect]);
+
+  const moveNodeDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const interaction = interactionRef.current;
+    // Only the pointer that started the drag may move the node. A second finger
+    // is ignored so the node can never jump to it.
+    if (interaction.pointerId === null || interaction.pointerId !== event.pointerId) return;
+
+    if (interaction.mode === 'NODE_PENDING') {
+      const travelled = Math.hypot(event.clientX - interaction.startClientX, event.clientY - interaction.startClientY);
+      if (travelled < NODE_DRAG_THRESHOLD) return;
+      interaction.mode = 'NODE_DRAG';
+    }
+    if (interaction.mode !== 'NODE_DRAG' || !interaction.nodeId) return;
+
+    const world = unprojectSpatialPoint(
+      event.clientX - interaction.rect.left,
+      event.clientY - interaction.rect.top,
+      interaction.planeZ,
+      interaction.camera,
+      interaction.rect.width,
+      interaction.rect.height,
+      interaction.focal,
+    );
+    if (!world) return;
+    const position = { x: world.x + interaction.dragOffset.x, y: world.y + interaction.dragOffset.y };
+    interaction.position = position;
+    const nodeId = interaction.nodeId;
+    setDraggedPositions((previous) => ({ ...previous, [nodeId]: position }));
+  }, []);
+
+  const endNodeDrag = useCallback((pointerId?: number) => {
+    const interaction = interactionRef.current;
+    if (interaction.mode !== 'NODE_PENDING' && interaction.mode !== 'NODE_DRAG') return;
+    if (pointerId !== undefined && interaction.pointerId !== null && pointerId !== interaction.pointerId) return;
+
+    const nodeId = interaction.nodeId;
+    const position = interaction.position;
+    const dragged = interaction.mode === 'NODE_DRAG' && position !== null;
+    interactionRef.current = createIdleInteraction();
+    canvasMovedRef.current = false;
+
+    if (!nodeId) return;
+    if (dragged && position) {
+      // Commit once, on release: no per-frame persistence writes.
+      justDraggedRef.current = { nodeId, at: Date.now() };
+      onNodePositionChange?.(nodeId, Math.round(position.x), Math.round(position.y));
+    }
+    setDraggedPositions((previous) => {
+      if (!(nodeId in previous)) return previous;
+      const next = { ...previous };
+      delete next[nodeId];
+      return next;
+    });
+  }, [onNodePositionChange]);
+
+  // Safety net: an interrupted gesture (pointer released off-element, browser
+  // touch cancel, window blur) must never leave the camera permanently frozen.
+  useEffect(() => {
+    const finish = (event: PointerEvent) => endNodeDrag(event.pointerId);
+    const cancel = () => endNodeDrag();
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    window.addEventListener('blur', cancel);
+    return () => {
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      window.removeEventListener('blur', cancel);
+    };
+  }, [endNodeDrag]);
+
+  useEffect(() => () => {
+    cancelAnimationFrame(animationRef.current);
+    cancelAnimationFrame(publishFrameRef.current);
+    pointersRef.current.clear();
+    interactionRef.current = createIdleInteraction();
+  }, []);
+
+  // ---- Canvas gestures (pan / pinch-zoom only on touch) -------------------
+
+  const closeLegend = useCallback(() => {
+    setLegendOpen(false);
+    writeGestureHintSeen();
+  }, []);
+
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.target !== event.currentTarget && (event.button === 0 || event.pointerType === 'touch')) return;
+    // A node gesture owns the interaction: the camera must not react to any
+    // pointer until it finishes.
+    if (interactionRef.current.mode === 'NODE_PENDING' || interactionRef.current.mode === 'NODE_DRAG') return;
+    // Only the empty canvas starts a camera gesture; nodes, edges and HUD stop here.
+    if (event.target !== event.currentTarget) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    pointerModesRef.current.set(event.pointerId, event.button === 1 || event.button === 2 ? 'pan' : 'orbit');
+    capturePointer(event.currentTarget, event.pointerId);
+
+    // Touch never orbits: one finger pans, two fingers pinch+pan. A mouse keeps
+    // the desktop behaviour (left drag orbits, middle/right drag pans).
+    const mode: CanvasPointerMode = event.pointerType === 'touch' || event.button === 1 || event.button === 2 ? 'pan' : 'orbit';
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY, mode });
+    if (pointersRef.current.size === 1) canvasMovedRef.current = false;
     if (pointersRef.current.size >= 2) beginTwoPointerGesture();
     setIsInteracting(true);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Freeze the camera for the duration of any node gesture.
+    if (interactionRef.current.mode === 'NODE_PENDING' || interactionRef.current.mode === 'NODE_DRAG') return;
     const pointers = pointersRef.current;
-    const previous = pointers.get(event.pointerId);
-    if (!previous) return;
-    pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const dx = event.clientX - previous.x;
-    const dy = event.clientY - previous.y;
+    const entry = pointers.get(event.pointerId);
+    if (!entry) return;
+    const previousX = entry.x;
+    const previousY = entry.y;
+    entry.x = event.clientX;
+    entry.y = event.clientY;
+    const dx = event.clientX - previousX;
+    const dy = event.clientY - previousY;
+    if (dx !== 0 || dy !== 0) canvasMovedRef.current = true;
 
     if (pointers.size >= 2) {
       const values = Array.from(pointers.values());
@@ -335,14 +601,15 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
       return;
     }
 
-    const mode = pointerModesRef.current.get(event.pointerId) ?? 'orbit';
-    if (mode === 'pan') {
+    if (entry.mode === 'pan') {
       const panScale = Math.max(0.7, cameraRef.current.distance / focal);
       updateCamera((current) => ({ ...current, target: { ...current.target, x: current.target.x - dx * panScale, y: current.target.y - dy * panScale } }));
       return;
     }
 
-    if (appearance.threeD.graphRotation) {
+    // Orbit is intentionally desktop-only (mouse/pen). Touch can never reach here
+    // because touch pointers are registered as 'pan'.
+    if (entry.mode === 'orbit' && appearance.threeD.graphRotation) {
       const direction = appearance.threeD.invertRotation ? -1 : 1;
       const sensitivity = 0.006 * appearance.threeD.cameraSensitivity;
       updateCamera((current) => ({ ...current, yaw: current.yaw + dx * sensitivity * direction, pitch: current.pitch + dy * sensitivity * direction }));
@@ -351,7 +618,6 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
 
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
     pointersRef.current.delete(event.pointerId);
-    pointerModesRef.current.delete(event.pointerId);
     if (pointersRef.current.size < 2) gestureRef.current = null;
     if (pointersRef.current.size === 0) setIsInteracting(false);
   };
@@ -386,6 +652,8 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
 
   const renderedNodes = nodes.filter((node) => visibleNodeIds.has(node.id)).sort((a, b) => (projected.get(b.id)?.depth ?? 0) - (projected.get(a.id)?.depth ?? 0));
 
+  const activeDrag = interactionRef.current;
+
   return (
     <div
       ref={viewportRef}
@@ -396,19 +664,22 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
       data-camera-pitch={camera.pitch}
       data-camera-distance={camera.distance}
       data-camera-target-x={camera.target.x}
+      data-interaction-mode={activeDrag.mode}
       data-reminders-hidden={hiddenSecondaryNodes.reminders}
       data-subtasks-hidden={hiddenSecondaryNodes.subtasks}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
+      onLostPointerCapture={handlePointerUp}
       onContextMenu={(event) => event.preventDefault()}
       onWheel={handleWheel}
       onClick={(event) => {
-        if (event.target === event.currentTarget) {
-          setSelectedId(null);
-          onEmptyClick?.();
-        }
+        if (event.target !== event.currentTarget) return;
+        // A pan is not a tap: it must not clear the current selection.
+        if (canvasMovedRef.current) { canvasMovedRef.current = false; return; }
+        setSelectedId(null);
+        onEmptyClick?.();
       }}
       style={{ '--mm-spatial-focal': `${focal}px` } as React.CSSProperties}
     >
@@ -439,48 +710,42 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
             data-node-id={node.id}
             data-depth={Math.round(point.z)}
             onPointerDown={(event) => {
+              // Another node drag or a canvas gesture owns the interaction already.
+              if (interactionRef.current.mode !== 'IDLE') return;
               event.stopPropagation();
               event.preventDefault();
-              event.currentTarget.setPointerCapture?.(event.pointerId);
-              const isTouch = event.pointerType === 'touch';
-              const drag: NonNullable<typeof nodeDragRef.current> = { id: node.id, startX: event.clientX, startY: event.clientY, originX: node.position.x, originY: node.position.y, moved: false, active: !isTouch };
-              nodeDragRef.current = drag;
-              if (isTouch) drag.timer = window.setTimeout(() => { if (nodeDragRef.current === drag) drag.active = true; }, 280);
+              capturePointer(event.currentTarget, event.pointerId);
+              beginNodeDrag(event, node.id);
             }}
             onPointerMove={(event) => {
-              const drag = nodeDragRef.current;
-              if (!drag || drag.id !== node.id) return;
+              const interaction = interactionRef.current;
+              if (interaction.pointerId === null || interaction.pointerId !== event.pointerId) return;
               event.stopPropagation();
-              const point = projected.get(node.id);
-              if (!point || !drag.active) return;
-              const dx = event.clientX - drag.startX;
-              const dy = event.clientY - drag.startY;
-              if (Math.hypot(dx, dy) < 4 && !drag.moved) return;
-              drag.moved = true;
-              setDraggedPositions((previous) => ({ ...previous, [node.id]: { x: drag.originX + dx / Math.max(point.scale, 0.001), y: drag.originY + dy / Math.max(point.scale, 0.001) } }));
+              moveNodeDrag(event);
             }}
             onPointerUp={(event) => {
-              const drag = nodeDragRef.current;
-              if (!drag || drag.id !== node.id) return;
+              const interaction = interactionRef.current;
+              if (interaction.pointerId === null || interaction.pointerId !== event.pointerId) return;
               event.stopPropagation();
-              if (drag.timer) window.clearTimeout(drag.timer);
-              if (drag.moved) {
-                suppressNodeClickRef.current = true;
-                const position = draggedPositions[node.id];
-                if (position) onNodePositionChange?.(node.id, position.x, position.y);
-                setDraggedPositions((previous) => { const next = { ...previous }; delete next[node.id]; return next; });
-              }
-              nodeDragRef.current = null;
+              endNodeDrag(event.pointerId);
             }}
             onPointerCancel={(event) => {
+              const interaction = interactionRef.current;
+              if (interaction.pointerId === null || interaction.pointerId !== event.pointerId) return;
               event.stopPropagation();
-              const drag = nodeDragRef.current;
-              if (drag?.timer) window.clearTimeout(drag.timer);
-              nodeDragRef.current = null;
-              setDraggedPositions((previous) => { const next = { ...previous }; delete next[node.id]; return next; });
+              endNodeDrag(event.pointerId);
+            }}
+            onLostPointerCapture={(event) => {
+              const interaction = interactionRef.current;
+              if (interaction.pointerId === null || interaction.pointerId !== event.pointerId) return;
+              endNodeDrag(event.pointerId);
             }}
             onClick={() => {
-              if (suppressNodeClickRef.current) { suppressNodeClickRef.current = false; return; }
+              const justDragged = justDraggedRef.current;
+              if (justDragged && justDragged.nodeId === node.id && Date.now() - justDragged.at < 400) {
+                justDraggedRef.current = null;
+                return;
+              }
               setSelectedId(node.id);
               node.data.onNodeClick?.(node.id, node.data.type);
             }}
@@ -490,10 +755,31 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
             }}
             style={{ left: point.screenX, top: point.screenY, zIndex: Math.round(2000 - point.depth), opacity: isDimmed ? 0.28 : Math.max(0.58, Math.min(1, 1.15 - point.depth / 2100)), filter: point.depth > 1250 ? 'saturate(0.72)' : undefined, transform: `translate(-50%, -50%) scale(${visibleScale})` }}
           >
-            <Component id={node.id} type={node.type} data={node.data} selected={isSelected} dragging={Boolean(nodeDragRef.current?.id === node.id && nodeDragRef.current.active)} zIndex={node.zIndex} xPos={node.position.x} yPos={node.position.y} sourcePosition={Position.Bottom} targetPosition={Position.Top} isConnectable={false} />
+            <Component id={node.id} type={node.type} data={node.data} selected={isSelected} dragging={activeDrag.mode === 'NODE_DRAG' && activeDrag.nodeId === node.id} zIndex={node.zIndex} xPos={node.position.x} yPos={node.position.y} sourcePosition={Position.Bottom} targetPosition={Position.Top} isConnectable={false} />
           </div>
         );
       })}
+
+      {legendOpen && (
+        <div className="mm-spatial-legend" role="dialog" aria-label="Gesture guide" data-testid="spatial-gesture-legend">
+          <div className="mm-spatial-legend-head">
+            <span>Gestures</span>
+            <button type="button" onClick={closeLegend} aria-label="Close gesture guide" title="Close"><X size={13} /></button>
+          </div>
+          <ul>
+            {SPATIAL_GESTURES.map((gesture) => (
+              <li key={gesture.label}>
+                <span className="mm-spatial-legend-glyph" aria-hidden="true">{gesture.glyph}</span>
+                <span className="mm-spatial-legend-copy">
+                  <strong>{gesture.label}</strong>
+                  <small>{gesture.hint}</small>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="mm-spatial-legend-foot">Desktop: left-drag orbits · right-drag pans · scroll to dolly</div>
+        </div>
+      )}
 
       <div className="mm-spatial-hud" aria-label="3D graph controls">
         <div className="mm-spatial-breadcrumb">
@@ -507,8 +793,9 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
           <button type="button" onClick={() => zoom(180)} aria-label="Zoom out" title="Zoom out"><ZoomOut size={15} /></button>
           {selectedId && <button type="button" onClick={() => focusNode(selectedId)} aria-label="Focus selected node" title="Focus selected node"><Crosshair size={14} /></button>}
           <button type="button" onClick={resetCamera} aria-label="Reset camera" title="Reset camera"><RotateCcw size={14} /></button>
+          <button type="button" onClick={() => setLegendOpen((open) => !open)} aria-label="Toggle gesture guide" aria-pressed={legendOpen} title="Gesture guide"><HelpCircle size={15} /></button>
         </div>
-        <div className="mm-spatial-help">Empty drag: orbit · right/middle drag: pan · two fingers: pan/pinch · wheel: dolly</div>
+        <div className="mm-spatial-help">Drag empty space: pan · two fingers: pinch &amp; pan · wheel: dolly</div>
       </div>
     </div>
   );

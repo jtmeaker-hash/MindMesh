@@ -210,14 +210,103 @@ html, body, #root {
   pointer-events: none;
 }
 
+.mm-spatial-legend {
+  position: absolute;
+  z-index: 4100;
+  left: 50%;
+  bottom: 60px;
+  transform: translateX(-50%);
+  width: min(340px, calc(100% - 24px));
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(7, 12, 27, 0.9);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  pointer-events: auto;
+  animation: mm-spatial-legend-in 160ms ease-out;
+}
+
+@keyframes mm-spatial-legend-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.mm-spatial-legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.mm-spatial-legend-head button {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  color: #cbd5e1;
+  background: transparent;
+  cursor: pointer;
+}
+.mm-spatial-legend-head button:hover,
+.mm-spatial-legend-head button:focus-visible { background: rgba(99, 102, 241, 0.32); color: #fff; }
+
+.mm-spatial-legend ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.mm-spatial-legend li { display: flex; align-items: center; gap: 10px; }
+
+.mm-spatial-legend-glyph {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(129, 140, 248, 0.16);
+  color: var(--mm-accent, #818cf8);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.mm-spatial-legend-copy { display: flex; flex-direction: column; min-width: 0; }
+.mm-spatial-legend-copy strong { font-size: 11.5px; font-weight: 700; color: #e2e8f0; }
+.mm-spatial-legend-copy small { font-size: 10px; color: #94a3b8; }
+
+.mm-spatial-legend-foot {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  font-size: 9.5px;
+  color: #64748b;
+  text-align: center;
+}
+
 @media (max-width: 760px) {
   .mm-spatial-hud { left: 8px; right: 8px; bottom: 8px; flex-wrap: wrap; }
   .mm-spatial-help { width: 100%; margin-left: 0; text-align: center; }
+  .mm-spatial-legend { bottom: 92px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .mm-spatial-edge--active { animation: none; }
   .mm-spatial-node { transition: none; }
+  .mm-spatial-legend { animation: none; }
 }
 
 .routine-module {

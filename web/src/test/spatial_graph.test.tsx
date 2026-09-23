@@ -3,9 +3,11 @@ import { fireEvent, render, waitFor } from '@testing-library/react';
 import { getDefaultAppearance } from '../services/appearance';
 import {
   clampSpatialCamera,
+  projectSpatialPoint,
   resolveSecondaryNodeVisibility,
   SpatialGraph,
   SpatialCamera,
+  unprojectSpatialPoint,
 } from '../components/graph/SpatialGraph';
 import { MeshNodeData } from '../types';
 import { Node, ReactFlowProvider } from '@xyflow/react';
@@ -193,6 +195,167 @@ describe('SpatialGraph free camera', () => {
 
     expect(onNodeClick).toHaveBeenCalledWith('root', 'root');
     expect(graph.getAttribute('data-camera-distance')).toBe(distance);
+  });
+});
+
+describe('screen-to-world node dragging', () => {
+  it('unprojects a screen point back onto its own world plane', () => {
+    const cam = camera({ yaw: 0.7, pitch: 0.35, distance: 1400, target: { x: 120, y: -60, z: 40 } });
+    const point = { x: 500, y: -220, z: 90 };
+    const width = 800;
+    const height = 600;
+    const f = 700;
+
+    const projected = projectSpatialPoint(point, cam, width, height, f);
+    const back = unprojectSpatialPoint(projected.screenX, projected.screenY, point.z, cam, width, height, f);
+
+    expect(back).not.toBeNull();
+    expect(back!.x).toBeCloseTo(point.x, 3);
+    expect(back!.y).toBeCloseTo(point.y, 3);
+  });
+
+  it('keeps world coordinates unchanged while the camera zooms the same screen point', () => {
+    const width = 900;
+    const height = 700;
+    const f = 650;
+    const worldZ = 120;
+    // The same pixel maps to a different world point as the camera dollies, which
+    // is exactly why screen-pixel deltas must never be applied as world deltas.
+    const near = camera({ distance: 900, target: { x: 50, y: 20, z: 0 } });
+    const far = camera({ distance: 2600, target: { x: 50, y: 20, z: 0 } });
+    const a = unprojectSpatialPoint(500, 350, worldZ, near, width, height, f);
+    const b = unprojectSpatialPoint(500, 350, worldZ, far, width, height, f);
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(Math.abs(a!.x - b!.x)).toBeGreaterThan(1);
+  });
+
+  it('drags a node without moving the camera and ignores the post-drag click', () => {
+    const onNodePositionChange = vi.fn();
+    const onNodeClick = vi.fn();
+    const node = { ...root, data: { ...root.data, onNodeClick } };
+    const { getByTestId, container } = render(
+      <ReactFlowProvider>
+        <SpatialGraph
+          nodes={[node]}
+          edges={[]}
+          appearance={getDefaultAppearance()}
+          onNodePositionChange={onNodePositionChange}
+          onEmptyClick={vi.fn()}
+        />
+      </ReactFlowProvider>
+    );
+    const graph = getByTestId('spatial-graph');
+    const element = container.querySelector('[data-node-id="root"]') as HTMLElement;
+    const distanceBefore = graph.getAttribute('data-camera-distance');
+
+    fireEvent.pointerDown(element, { pointerId: 9, pointerType: 'touch', button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(element, { pointerId: 9, pointerType: 'touch', buttons: 1, clientX: 160, clientY: 130 });
+    fireEvent.pointerUp(element, { pointerId: 9, pointerType: 'touch', clientX: 160, clientY: 130 });
+
+    expect(onNodePositionChange).toHaveBeenCalledTimes(1);
+    expect(onNodePositionChange.mock.calls[0][0]).toBe('root');
+    // The camera must stay exactly where it was while a node is being positioned.
+    expect(graph.getAttribute('data-camera-distance')).toBe(distanceBefore);
+    expect(Number(graph.getAttribute('data-camera-yaw'))).toBe(0);
+
+    // Releasing a dragged node must never be read as a select/click.
+    fireEvent.click(element);
+    expect(onNodeClick).not.toHaveBeenCalled();
+    // ...but a genuine tap still navigates.
+    fireEvent.click(element);
+    expect(onNodeClick).toHaveBeenCalledWith('root', 'root');
+  });
+
+  it('treats a touch that never passes the threshold as a tap, not a drag', () => {
+    const onNodePositionChange = vi.fn();
+    const onNodeClick = vi.fn();
+    const node = { ...root, data: { ...root.data, onNodeClick } };
+    const { getByTestId, container } = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={[node]} edges={[]} appearance={getDefaultAppearance()} onNodePositionChange={onNodePositionChange} onEmptyClick={vi.fn()} />
+      </ReactFlowProvider>
+    );
+    const graph = getByTestId('spatial-graph');
+    const element = container.querySelector('[data-node-id="root"]') as HTMLElement;
+    const yawBefore = graph.getAttribute('data-camera-yaw');
+
+    fireEvent.pointerDown(element, { pointerId: 11, pointerType: 'touch', button: 0, clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(element, { pointerId: 11, pointerType: 'touch', buttons: 1, clientX: 202, clientY: 201 });
+    fireEvent.pointerUp(element, { pointerId: 11, pointerType: 'touch', clientX: 202, clientY: 201 });
+
+    expect(onNodePositionChange).not.toHaveBeenCalled();
+    expect(graph.getAttribute('data-camera-yaw')).toBe(yawBefore);
+    fireEvent.click(element);
+    expect(onNodeClick).toHaveBeenCalledWith('root', 'root');
+  });
+});
+
+describe('touch camera controls', () => {
+  it('pans on a one-finger touch drag instead of orbiting', async () => {
+    const { getByTestId } = renderGraph();
+    const graph = getByTestId('spatial-graph');
+
+    fireEvent.pointerDown(graph, { pointerId: 3, pointerType: 'touch', button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(graph, { pointerId: 3, pointerType: 'touch', buttons: 1, clientX: 200, clientY: 160 });
+    fireEvent.pointerUp(graph, { pointerId: 3, pointerType: 'touch', clientX: 200, clientY: 160 });
+
+    await waitFor(() => expect(Number(graph.getAttribute('data-camera-target-x'))).not.toBe(0));
+    // Touch must never rotate the graph.
+    expect(Number(graph.getAttribute('data-camera-yaw'))).toBe(0);
+    expect(Number(graph.getAttribute('data-camera-pitch'))).toBeCloseTo(0.04, 5);
+  });
+
+  it('stops the camera immediately when the touch is released', async () => {
+    const { getByTestId } = renderGraph();
+    const graph = getByTestId('spatial-graph');
+
+    fireEvent.pointerDown(graph, { pointerId: 4, pointerType: 'touch', button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(graph, { pointerId: 4, pointerType: 'touch', buttons: 1, clientX: 240, clientY: 140 });
+    fireEvent.pointerUp(graph, { pointerId: 4, pointerType: 'touch', clientX: 240, clientY: 140 });
+    await waitFor(() => expect(Number(graph.getAttribute('data-camera-target-x'))).not.toBe(0));
+    const settled = graph.getAttribute('data-camera-target-x');
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(graph.getAttribute('data-camera-target-x')).toBe(settled);
+  });
+});
+
+describe('on-canvas gesture legend', () => {
+  it('introduces the pan/pinch gestures on first run', () => {
+    localStorage.clear();
+    const { getByTestId } = renderGraph();
+    const legend = getByTestId('spatial-gesture-legend');
+    expect(legend.textContent).toContain('Drag empty space');
+    expect(legend.textContent).toContain('Pinch with two fingers');
+  });
+
+  it('stays dismissed, records that choice, and reopens from the HUD', () => {
+    localStorage.clear();
+    const { getByTestId, queryByTestId, getByLabelText } = renderGraph();
+    expect(queryByTestId('spatial-gesture-legend')).not.toBeNull();
+
+    fireEvent.click(getByLabelText('Close gesture guide'));
+    expect(queryByTestId('spatial-gesture-legend')).toBeNull();
+    expect(localStorage.getItem('mindmesh_spatial_gesture_hint_seen')).toBe('1');
+
+    fireEvent.click(getByLabelText('Toggle gesture guide'));
+    expect(queryByTestId('spatial-gesture-legend')).not.toBeNull();
+    expect(getByTestId('spatial-gesture-legend')).not.toBeNull();
+  });
+
+  it('does not pan the camera when the guide itself is touched', () => {
+    localStorage.clear();
+    const { getByTestId } = renderGraph();
+    const graph = getByTestId('spatial-graph');
+    const legend = getByTestId('spatial-gesture-legend');
+    const targetBefore = graph.getAttribute('data-camera-target-x');
+
+    fireEvent.pointerDown(legend, { pointerId: 21, pointerType: 'touch', button: 0, clientX: 50, clientY: 50 });
+    fireEvent.pointerMove(legend, { pointerId: 21, pointerType: 'touch', buttons: 1, clientX: 120, clientY: 90 });
+    fireEvent.pointerUp(legend, { pointerId: 21, pointerType: 'touch', clientX: 120, clientY: 90 });
+
+    expect(graph.getAttribute('data-camera-target-x')).toBe(targetBefore);
   });
 });
 
