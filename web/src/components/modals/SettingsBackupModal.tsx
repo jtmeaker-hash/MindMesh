@@ -25,6 +25,7 @@ import {
 } from '../../services/backup';
 import { resetMindMeshEntirely } from '../../services/storage';
 import { logger } from '../../services/logger';
+import { SmartAssistancePanel } from './SmartAssistancePanel';
 
 function formatBytes(bytes: number): string {
   if (!bytes) return '0 B';
@@ -46,7 +47,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   onRestoreComplete,
   onResetComplete,
 }) => {
-  const [activeTab, setActiveTab] = useState<'backup' | 'restore' | 'reset'>('backup');
+  const [activeTab, setActiveTab] = useState<'backup' | 'restore' | 'smart' | 'reset'>('backup');
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState<BackupExportResult | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -322,6 +323,25 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
 
           <button
             type="button"
+            onClick={() => setActiveTab('smart')}
+            style={{
+              flex: 1,
+              padding: '8px 12px',
+              borderRadius: 10,
+              border: 'none',
+              backgroundColor: activeTab === 'smart' ? '#6366f1' : 'transparent',
+              color: activeTab === 'smart' ? '#ffffff' : '#94a3b8',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            Smart
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('reset')}
             style={{
               flex: 1,
@@ -365,6 +385,7 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                 <li>Direct debit bills, categories & notification rules</li>
                 <li>Pay schedule, hourly penalty rates, tips & shifts</li>
                 <li>Appearance: theme, node & connection colours, background, code rain</li>
+                <li>Smart Assistance settings & per-feature permissions</li>
                 <li>User settings & completion statistics</li>
               </ul>
             </div>
@@ -750,7 +771,10 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
           </div>
         )}
 
-        {/* TAB 3: RESET MINDMESH */}
+        {/* TAB 3: SMART ASSISTANCE */}
+        {activeTab === 'smart' && <SmartAssistancePanel />}
+
+        {/* TAB 4: RESET MINDMESH */}
         {activeTab === 'reset' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div

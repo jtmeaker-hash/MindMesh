@@ -1,6 +1,13 @@
 import { Category, Reminder, RecurrenceRule } from '../types';
+import { Contact } from '../types/contact';
 import { formatRecurrenceLabel } from './recurrence';
 import { createReminderProposal, parseDateTime, parseRecurrence } from './smartEngineParsing';
+import {
+  detectRepeatedTaskPattern,
+  findSimilarCompletedReminders,
+  suggestCategoryFromHistory,
+} from './historyIntelligence';
+import { findContactMentions } from './contactIntelligence';
 import { Ambiguity, Confidence, CreateCategoryProposal, CreateReminderProposal, CreateSubcategoryProposal, EditReminderProposal, MissingField, SmartEngineField } from '../types/smartEngine';
 
 export interface ReminderSummary {
@@ -141,22 +148,112 @@ export function suggestSubtasks(input: string): SubtaskSuggestion[] {
 
 function field<T>(value: T | undefined, confidence: Confidence, ambiguities?: Ambiguity[]): SmartEngineField<T> { return { value, confidence, ambiguities }; }
 
-export function createIntelligentReminderProposal(input: string, categories: readonly Category[] = [], referenceDate: Date = new Date()): CreateReminderProposal {
+/**
+ * Optional local context. Completed history and contacts are only consulted when
+ * the matching Smart Assistance permission is enabled, and neither is ever written.
+ */
+export interface ReminderProposalContext {
+  completedReminders?: readonly Reminder[];
+  contacts?: readonly Contact[];
+  useHistory?: boolean;
+  useContactContext?: boolean;
+}
+
+export function createIntelligentReminderProposal(
+  input: string,
+  categories: readonly Category[] = [],
+  referenceDate: Date = new Date(),
+  context: ReminderProposalContext = {}
+): CreateReminderProposal {
   const base = createReminderProposal(input, referenceDate);
   const title = base.fields.title.value as string | undefined;
-  const categorySuggestion = suggestCategory(input, categories);
-  const category = categorySuggestion.category;
+  const directSuggestion = suggestCategory(input, categories);
+  const ambiguities = [...base.ambiguities];
+
+  // Existing user categories and domain keywords always win; completed history is
+  // only a fallback and is clearly labelled as coming from past reminders.
+  const historySuggestion =
+    !directSuggestion.category && context.useHistory && title
+      ? suggestCategoryFromHistory(title, context.completedReminders ?? [], categories)
+      : undefined;
+  const directSuggestedCategory = directSuggestion.category
+    ?? (historySuggestion ? categories.find((item) => item.id === historySuggestion.categoryId) : undefined);
+  const categoryConfidence: Confidence = directSuggestion.category
+    ? directSuggestion.confidence
+    : historySuggestion
+      ? historySuggestion.confidence
+      : UNKNOWN;
+
+  const similarCompleted = context.useHistory && title
+    ? findSimilarCompletedReminders(title, context.completedReminders ?? [], { maxResults: 3 })
+    : [];
+  const repeatedPattern = context.useHistory && title
+    ? detectRepeatedTaskPattern(title, context.completedReminders ?? [])
+    : undefined;
+
+  // Contact mentions are context only: no contact is created, linked or changed here.
+  const contactMentions = context.useContactContext && context.contacts?.length
+    ? findContactMentions(input, context.contacts)
+    : [];
+  const bestContact = contactMentions.find((mention) => mention.best)?.best;
+  const contactAmbiguity = contactMentions.length > 1
+    ? {
+        field: 'linkedContactId',
+        message: 'More than one contact is mentioned; choose the intended contact before linking.',
+        options: contactMentions.map((mention) => mention.best?.name).filter((name): name is string => Boolean(name)),
+      }
+    : undefined;
+
   const subtasks = title ? suggestSubtasks(input) : [];
   const fields = {
     ...base.fields,
-    categoryId: field(category?.id, categorySuggestion.confidence),
-    categoryName: field(category?.name, categorySuggestion.confidence),
+    categoryId: field(directSuggestedCategory?.id, categoryConfidence),
+    categoryName: field(directSuggestedCategory?.name, categoryConfidence),
     suggestedSubtasks: field(subtasks.map((item) => item.title), subtasks.length ? KEYWORD : UNKNOWN),
+    categorySource: field(
+      directSuggestion.category ? 'existing-category' : historySuggestion ? 'completed-history' : undefined,
+      categoryConfidence
+    ),
+    historyContext: field(
+      similarCompleted.length
+        ? {
+            similarCompletedTitles: similarCompleted.map((entry) => entry.title),
+            completedMatches: similarCompleted.length,
+          }
+        : undefined,
+      similarCompleted.length ? KEYWORD : UNKNOWN
+    ),
+    repeatedTaskPattern: field(repeatedPattern, repeatedPattern ? { score: 0.8, reason: 'derived' } : UNKNOWN),
+    suggestedContactId: field(bestContact?.contactId, bestContact ? { score: bestContact.score, reason: 'derived' } : UNKNOWN),
+    suggestedContactName: field(bestContact?.name, bestContact ? { score: bestContact.score, reason: 'derived' } : UNKNOWN),
   };
-  const ambiguities = [...base.ambiguities];
-  if (categorySuggestion.confidence.reason === 'ambiguous') ambiguities.push({ field: 'categoryId', message: categorySuggestion.reason, options: categorySuggestion.alternatives.map((item) => item.name) });
-  const preview = `${base.preview}${category ? ` · ${category.name}` : ''}${subtasks.length ? ` · ${subtasks.length} optional subtask suggestions` : ''}`;
-  return { ...base, fields, preview, ambiguities, confidence: confidenceFor(Math.min(base.confidence.score, categorySuggestion.category ? categorySuggestion.confidence.score : base.confidence.score), ambiguities.length ? 'ambiguous' : base.confidence.reason), id: `smart-reminder-${stableHash(input)}` };
+
+  if (categoryConfidence.reason === 'ambiguous' && (directSuggestion.alternatives.length || historySuggestion?.alternatives.length)) {
+    ambiguities.push({
+      field: 'categoryId',
+      message: directSuggestion.category ? directSuggestion.reason : historySuggestion?.reason ?? 'More than one category matches.',
+      options: (directSuggestion.alternatives.length ? directSuggestion.alternatives.map((item) => item.name) : historySuggestion?.alternatives ?? []),
+    });
+  }
+  if (contactAmbiguity) ambiguities.push(contactAmbiguity);
+
+  const previewParts = [base.preview];
+  if (directSuggestedCategory) previewParts.push(directSuggestedCategory.name);
+  if (subtasks.length) previewParts.push(`${subtasks.length} optional subtask suggestions`);
+  if (similarCompleted.length) previewParts.push(`${similarCompleted.length} similar completed reminder${similarCompleted.length === 1 ? '' : 's'}`);
+  if (bestContact) previewParts.push(`contact ${bestContact.name}`);
+
+  return {
+    ...base,
+    fields,
+    preview: previewParts.filter(Boolean).join(' · '),
+    ambiguities,
+    confidence: confidenceFor(
+      Math.min(base.confidence.score, directSuggestedCategory ? categoryConfidence.score : base.confidence.score),
+      ambiguities.length ? 'ambiguous' : base.confidence.reason
+    ),
+    id: `smart-reminder-${stableHash(input)}`,
+  };
 }
 
 export function createEditReminderProposal(input: string, reminders: readonly Reminder[], referenceDate: Date = new Date()): EditReminderProposal {
