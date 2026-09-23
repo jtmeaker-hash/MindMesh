@@ -66,6 +66,66 @@ describe('SpatialGraph free camera', () => {
     expect(Number(graph.getAttribute('data-camera-target-x'))).not.toBe(0);
   });
 
+  it('travels to a distant node when the app focuses it, and keeps the camera there', async () => {
+    const far: Node<MeshNodeData> = {
+      id: 'rem-1', type: 'reminderNode', position: { x: 1200, y: -800 }, data: {
+        id: 'rem-1', label: 'Rego Reminder', type: 'reminder',
+      },
+    };
+    const { getByTestId, rerender } = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={[root, far]} edges={[]} appearance={getDefaultAppearance()} />
+      </ReactFlowProvider>
+    );
+    const graph = getByTestId('spatial-graph');
+
+    rerender(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={[root, far]} edges={[]} appearance={getDefaultAppearance()} focusNodeId="rem-1" />
+      </ReactFlowProvider>
+    );
+
+    // Wait for the focus animation to actually finish settling on the node.
+    await waitFor(() => expect(Number(graph.getAttribute('data-camera-target-x'))).toBe(1200), { timeout: 3000 });
+    const settled = graph.getAttribute('data-camera-target-x');
+
+    // A normal data update must not re-run the focus trip or reset the camera.
+    rerender(
+      <ReactFlowProvider>
+        <SpatialGraph
+          nodes={[{ ...root }, { ...far, data: { ...far.data, label: 'Rego paid' } }]}
+          edges={[]}
+          appearance={getDefaultAppearance()}
+          focusNodeId="rem-1"
+        />
+      </ReactFlowProvider>
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(graph.getAttribute('data-camera-target-x')).toBe(settled);
+  });
+
+  it('stays freely orbitable after focusing a node', async () => {
+    const far: Node<MeshNodeData> = {
+      id: 'rem-1', type: 'reminderNode', position: { x: 1200, y: -800 }, data: {
+        id: 'rem-1', label: 'Rego Reminder', type: 'reminder',
+      },
+    };
+    const { getByTestId } = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={[root, far]} edges={[]} appearance={getDefaultAppearance()} focusNodeId="rem-1" />
+      </ReactFlowProvider>
+    );
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(Number(graph.getAttribute('data-camera-target-x'))).toBe(1200), { timeout: 3000 });
+    const yawBefore = Number(graph.getAttribute('data-camera-yaw'));
+
+    fireEvent.pointerDown(graph, { pointerId: 7, pointerType: 'mouse', button: 0, clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(graph, { pointerId: 7, pointerType: 'mouse', buttons: 1, clientX: 340, clientY: 260 });
+    fireEvent.pointerUp(graph, { pointerId: 7, pointerType: 'mouse', clientX: 340, clientY: 260 });
+
+    await waitFor(() => expect(Number(graph.getAttribute('data-camera-yaw'))).not.toBe(yawBefore));
+  });
+
   it('does not focus or move the camera just because a node is selected', () => {
     const onNodeClick = vi.fn();
     const node = { ...root, data: { ...root.data, onNodeClick } };

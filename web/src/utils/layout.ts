@@ -114,8 +114,9 @@ export function generateActiveMesh(
     return { nodes, edges };
   }
 
-  // Radial radius for categories
-  const catRadius = numCategories > 4 ? 260 : 220;
+  // Radial radius for categories. The graph world is unbounded, so busy graphs
+  // push categories further out instead of squeezing them into one small ring.
+  const catRadius = 340 + Math.min(700, numCategories * 18);
 
   categories.forEach((category, i) => {
     // Angle evenly spaced starting from top (-PI/2)
@@ -187,8 +188,8 @@ export function generateActiveMesh(
       catReminders.forEach((reminder, j) => {
         const remAngle = numReminders === 1 ? effectiveCatAngle : startAngle + j * angleStep;
         // Stagger distance slightly for an organic, breathing spiderweb feel
-        const stagger = (j % 2 === 1 ? 30 : 0) + (j % 3 === 2 ? -20 : 0);
-        const remDistance = (isFocused ? 240 : 210) + stagger;
+        const stagger = (j % 2 === 1 ? 34 : 0) + (j % 3 === 2 ? -22 : 0);
+        const remDistance = (isFocused ? 400 : 340) + stagger;
 
         const autoRemX = Math.round(catX + remDistance * Math.cos(remAngle));
         const autoRemY = Math.round(catY + remDistance * Math.sin(remAngle));
@@ -265,7 +266,7 @@ export function generateActiveMesh(
 
           reminder.subtasks.forEach((subtask, k) => {
             const subAngle = numSubtasks === 1 ? effectiveRemAngle : subStartAngle + k * subAngleStep;
-            const subDist = 135 + (k % 2 === 1 ? 25 : 0);
+            const subDist = 180 + (k % 2 === 1 ? 30 : 0);
 
             const autoSubX = Math.round(remX + subDist * Math.cos(subAngle));
             const autoSubY = Math.round(remY + subDist * Math.sin(subAngle));
@@ -390,7 +391,7 @@ export function generateCompletedOverviewMesh(
     return { nodes, edges };
   }
 
-  const catRadius = 240;
+  const catRadius = 360 + Math.min(700, numCategories * 18);
 
   categories.forEach((category, i) => {
     const autoCatAngle = (2 * Math.PI * i) / numCategories - Math.PI / 2;
@@ -513,7 +514,7 @@ export function generateCompletedCategoryMesh(
     return { nodes, edges };
   }
 
-  const remRadius = numReminders > 4 ? 260 : 220;
+  const remRadius = 360 + Math.min(720, numReminders * 26);
 
   completedCatReminders.forEach((reminder, j) => {
     const autoAngle = (2 * Math.PI * j) / numReminders - Math.PI / 2;
@@ -588,7 +589,7 @@ export function generateCompletedCategoryMesh(
 
       reminder.subtasks.forEach((subtask, k) => {
         const subAngle = numSubtasks === 1 ? effectiveRemAngle : subStartAngle + k * subStep;
-        const subDist = 130;
+        const subDist = 180;
         const autoSubX = Math.round(remX + subDist * Math.cos(subAngle));
         const autoSubY = Math.round(remY + subDist * Math.sin(subAngle));
 

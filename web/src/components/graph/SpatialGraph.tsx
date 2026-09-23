@@ -13,6 +13,10 @@ interface SpatialGraphProps {
   appearance: AppearanceSettings;
   onEmptyClick?: () => void;
   onNodePositionChange?: (nodeId: string, x: number, y: number) => void;
+  /** Node the user has navigated to. Changing it animates the camera toward it. */
+  focusNodeId?: string | null;
+  /** Keeps the graph's highlight in sync with the app's selection state. */
+  selectedNodeId?: string | null;
 }
 
 type Point3 = { x: number; y: number; z: number };
@@ -74,7 +78,7 @@ function defaultCamera(): SpatialCamera {
   return { target: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0.04, distance: 1180 };
 }
 
-export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appearance, onEmptyClick, onNodePositionChange }) => {
+export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appearance, onEmptyClick, onNodePositionChange, focusNodeId, selectedNodeId }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
   const pointerModesRef = useRef(new Map<number, PointerMode>());
@@ -90,6 +94,11 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
   const [draggedPositions, setDraggedPositions] = useState<Record<string, { x: number; y: number }>>({});
   const nodeDragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean; active: boolean; timer?: number } | null>(null);
   const suppressNodeClickRef = useRef(false);
+  // Latest world points, readable from effects without re-running them whenever
+  // a reminder or node position changes (which must never move the camera).
+  const nodePointsRef = useRef<Map<string, Point3>>(new Map());
+  const nodesRef = useRef<Node<MeshNodeData>[]>([]);
+  const focusNodeRef = useRef<(nodeId: string) => void>(() => undefined);
 
   const focal = Math.max(260, Math.min(size.width, size.height) * 1.05);
   const nodePoints = useMemo(() => {
@@ -100,6 +109,9 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
     });
     return map;
   }, [draggedPositions, nodes]);
+
+  nodePointsRef.current = nodePoints;
+  nodesRef.current = nodes;
 
   const projected = useMemo(() => {
     const result = new Map<string, ProjectedPoint>();
@@ -138,17 +150,23 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
       target: { x: (minX + maxX) / 2, y: (minY + maxY) / 2, z: (minZ + maxZ) / 2 },
       yaw: 0,
       pitch: 0.04,
-      distance: span * 1.35 + 420,
+      // Overview only, and deliberately capped: a big world should be explored by
+      // travelling through it, not shrunk until every node is a speck.
+      distance: Math.max(900, Math.min(3200, span * 1.05 + 480)),
     });
   }, [nodes]);
 
   const animateCamera = useCallback((next: SpatialCamera) => {
     cancelAnimationFrame(animationRef.current);
     const from = { ...cameraRef.current, target: { ...cameraRef.current.target } };
-    const started = performance.now();
     const duration = appearance.threeD.animationIntensity === 0 ? 0 : 460;
+    // The animation clock is anchored to the first animation frame rather than
+    // performance.now(), so the interpolation can never receive a timestamp that
+    // predates the start (which would overshoot to absurd coordinates).
+    let startedAt: number | null = null;
     const tick = (now: number) => {
-      const progress = duration === 0 ? 1 : Math.min(1, (now - started) / duration);
+      if (startedAt === null) startedAt = now;
+      const progress = duration === 0 ? 1 : Math.min(1, Math.max(0, (now - startedAt) / duration));
       const eased = 1 - Math.pow(1 - progress, 3);
       cameraRef.current = clampSpatialCamera({
         target: {
@@ -169,12 +187,30 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
   const resetCamera = useCallback(() => animateCamera(cameraForOverview()), [animateCamera, cameraForOverview]);
 
   const focusNode = useCallback((nodeId: string) => {
-    const point = nodePoints.get(nodeId);
+    const point = nodePointsRef.current.get(nodeId);
     if (!point) return;
-    const node = nodes.find((entry) => entry.id === nodeId);
-    const distance = node?.data.type === 'root' ? 1180 : node?.data.type === 'category' ? 820 : node?.data.type === 'reminder' ? 640 : 520;
+    const node = nodesRef.current.find((entry) => entry.id === nodeId);
+    const distance = node?.data.type === 'root' ? 1180 : node?.data.type === 'category' ? 860 : node?.data.type === 'reminder' ? 680 : 540;
+    // Focus is a one-off camera trip. The target becomes the new orbit centre and
+    // free exploration resumes the moment the animation finishes.
     animateCamera(clampSpatialCamera({ target: { ...point, z: point.z * 0.7 }, yaw: cameraRef.current.yaw, pitch: 0.18, distance }));
-  }, [animateCamera, nodePoints, nodes]);
+  }, [animateCamera]);
+
+  focusNodeRef.current = focusNode;
+
+  // Navigation focus: only runs when the app selects a *new* node, so selecting
+  // the already-focused node (or ordinary data/position updates) never moves the
+  // camera. The graph generates the focus helper itself so this cannot loop.
+  useEffect(() => {
+    if (!focusNodeId) return;
+    focusNodeRef.current(focusNodeId);
+  }, [focusNodeId]);
+
+  // Keep the highlight aligned with the app-level selection without hijacking
+  // the camera; SpatialGraph still owns the highlight for standalone use.
+  useEffect(() => {
+    setSelectedId(selectedNodeId ?? null);
+  }, [selectedNodeId]);
 
   useEffect(() => {
     const element = viewportRef.current;
@@ -399,6 +435,10 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
               if (suppressNodeClickRef.current) { suppressNodeClickRef.current = false; return; }
               setSelectedId(node.id);
               node.data.onNodeClick?.(node.id, node.data.type);
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
             }}
             style={{ left: point.screenX, top: point.screenY, zIndex: Math.round(2000 - point.depth), opacity: isDimmed ? 0.28 : Math.max(0.58, Math.min(1, 1.15 - point.depth / 2100)), filter: point.depth > 1250 ? 'saturate(0.72)' : undefined, transform: `translate(-50%, -50%) scale(${visibleScale})` }}
           >

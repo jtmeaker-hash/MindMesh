@@ -14,9 +14,78 @@ type Callbacks = {
   onReminderCompleteToggle?: (reminderId: string) => void;
 };
 
+/**
+ * MindMesh graphs are laid out in an unbounded world coordinate space, not in
+ * screen space. The camera travels around the world, so the layout engine never
+ * reads the viewport size and never clamps nodes to a fixed box.
+ *
+ * Spacing is hierarchical and proportional to the size of each branch: a
+ * category holding fifteen reminders receives far more angular room and a
+ * larger radius than one holding three.
+ */
+const NODE_SIZES = {
+  root: { width: 104, height: 104 },
+  category: { width: 78, height: 78 },
+  reminder: { width: 165, height: 100 },
+  subtask: { width: 130, height: 42 },
+} as const;
+
+/** Minimum empty gap kept between the edges of two neighbouring nodes. */
+const SPACING = {
+  root: 56,
+  category: 96,
+  reminder: 72,
+  subtask: 42,
+} as const;
+
+const CATEGORY_BASE_RADIUS = 340;
+const CATEGORY_WEIGHT_RADIUS = 36;
+const CATEGORY_MAX_WEIGHT_RADIUS = 1150;
+const NESTED_CATEGORY_MIN_DISTANCE = 260;
+const REMINDER_BASE_DISTANCE = 290;
+const REMINDER_WEIGHT_DISTANCE = 26;
+const REMINDER_MAX_WEIGHT_DISTANCE = 820;
+const SUBTASK_DISTANCE = 170;
+
+type Size = { width: number; height: number };
+type Point = { x: number; y: number };
+
 function themeFor(appearance: AppearanceSettings, accent: string, completed = false) {
   const theme = resolveNodeTheme(appearance, accent);
   return { ...theme, glow: withAlpha(accent, completed ? 0.22 : 0.35), hover: appearance.nodeColors.hover };
+}
+
+/** Total rendered descendants (reminders, their subtasks and nested categories). */
+function subtreeNodeCount(categories: Category[], reminders: Reminder[], categoryId: string): number {
+  const own = reminders.filter((reminder) => reminder.categoryId === categoryId);
+  let count = own.length + own.reduce((sum, reminder) => sum + reminder.subtasks.length, 0);
+  for (const child of getChildCategories(categories, categoryId)) {
+    count += subtreeNodeCount(categories, reminders, child.id);
+  }
+  return count;
+}
+
+/**
+ * Distributes angular space in proportion to branch weight so large branches
+ * never share almost identical angles with their neighbours.
+ */
+function allocateAngles(weights: number[], startAngle: number, span = Math.PI * 2) {
+  const total = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  let cursor = startAngle;
+  return weights.map((weight) => {
+    const share = (span * Math.max(weight, 1)) / total;
+    const angle = cursor + share / 2;
+    cursor += share;
+    return { angle, share };
+  });
+}
+
+function categoryRadius(weight: number): number {
+  return CATEGORY_BASE_RADIUS + Math.min(CATEGORY_MAX_WEIGHT_RADIUS, CATEGORY_WEIGHT_RADIUS * Math.sqrt(Math.max(weight, 1)));
+}
+
+function reminderDistance(count: number): number {
+  return Math.min(REMINDER_MAX_WEIGHT_DISTANCE, REMINDER_BASE_DISTANCE + count * REMINDER_WEIGHT_DISTANCE);
 }
 
 export function generateNestedActiveMesh(
@@ -30,16 +99,39 @@ export function generateNestedActiveMesh(
   const activeReminders = reminders.filter((reminder) => !reminder.completed);
   const customNodes = appearance.nodeColorMode === 'custom';
   const customLines = appearance.connectionColorMode === 'custom';
-  const occupied: Array<{ position: { x: number; y: number }; size: { width: number; height: number } }> = [];
-  const place = (ideal: { x: number; y: number }, manual: { x: number; y: number; manuallyPositioned?: boolean } | undefined, size: { width: number; height: number }) => {
-    const position = manual?.manuallyPositioned ? { x: manual.x, y: manual.y } : findAvailablePosition(ideal, occupied, size);
+  const occupied: Array<{ position: Point; size: Size }> = [];
+
+  // Reserve every manually positioned node up-front so automatic placement can
+  // route around it regardless of the order branches are generated in.
+  const visibleIds = new Set<string>(['root']);
+  categories.forEach((category) => visibleIds.add(category.id));
+  activeReminders.forEach((reminder) => {
+    visibleIds.add(reminder.id);
+    reminder.subtasks.forEach((subtask) => visibleIds.add(subtask.id));
+  });
+  for (const [id, position] of Object.entries(manualPositions)) {
+    if (position?.manuallyPositioned && visibleIds.has(id)) {
+      occupied.push({ position: { x: position.x, y: position.y }, size: NODE_SIZES.reminder });
+    }
+  }
+
+  const place = (
+    ideal: Point,
+    manual: { x: number; y: number; manuallyPositioned?: boolean } | undefined,
+    size: Size,
+    spacing: number,
+  ): Point => {
+    if (manual?.manuallyPositioned) return { x: manual.x, y: manual.y };
+    const position = findAvailablePosition(ideal, occupied, size, spacing);
     occupied.push({ position, size });
     return position;
   };
+
   const rootPosition = place(
-    manualPositions.root?.manuallyPositioned ? manualPositions.root : { x: 0, y: 0 },
+    { x: 0, y: 0 },
     manualPositions.root,
-    { width: 104, height: 104 },
+    NODE_SIZES.root,
+    SPACING.root,
   );
   const rootTheme = themeFor(appearance, accentForNodeType(appearance, 'root'));
 
@@ -51,19 +143,23 @@ export function generateNestedActiveMesh(
   }});
 
   const renderSubtasks = (reminder: Reminder, x: number, y: number, color: string, parentAngle: number) => {
+    const count = reminder.subtasks.length;
+    const span = Math.min(Math.PI * 0.95, Math.max(0.4, count * 0.4));
+    const startAngle = parentAngle - span / 2;
+    const step = count <= 1 ? 0 : span / (count - 1);
+
     reminder.subtasks.forEach((subtask, index) => {
-      const angle = parentAngle - 0.45 + (reminder.subtasks.length === 1 ? 0.45 : index * 0.9 / (reminder.subtasks.length - 1));
-      const distance = 125 + (index % 2) * 24;
+      const angle = count === 1 ? parentAngle : startAngle + index * step;
+      const distance = SUBTASK_DISTANCE + (index % 2) * 26;
       const manual = manualPositions[subtask.id];
       const subPosition = place(
         { x: Math.round(x + distance * Math.cos(angle)), y: Math.round(y + distance * Math.sin(angle)) },
         manual,
-        { width: 130, height: 42 },
+        NODE_SIZES.subtask,
+        SPACING.subtask,
       );
-      const subX = subPosition.x;
-      const subY = subPosition.y;
       const subTheme = themeFor(appearance, customNodes ? accentForNodeType(appearance, 'subtask') : color, subtask.completed);
-      nodes.push({ id: subtask.id, type: 'subtaskNode', position: { x: subX, y: subY }, zIndex: 1, data: {
+      nodes.push({ id: subtask.id, type: 'subtaskNode', position: { x: subPosition.x, y: subPosition.y }, zIndex: 1, data: {
         id: subtask.id, label: subtask.title, type: 'subtask', color: subTheme.accent, accentColor: subTheme.accent,
         surfaceColor: subTheme.surface, surfaceAltColor: subTheme.surfaceAlt, textColor: subTheme.text,
         mutedTextColor: subTheme.mutedText, borderColor: subTheme.border, glowColor: subTheme.glow, hoverColor: subTheme.hover,
@@ -76,16 +172,23 @@ export function generateNestedActiveMesh(
     });
   };
 
-  const renderCategory = (category: Category, parentX: number, parentY: number, branchIndex: number, depth: number, parentId: string) => {
+  const renderCategory = (
+    category: Category,
+    parentX: number,
+    parentY: number,
+    angle: number,
+    share: number,
+    distance: number,
+    depth: number,
+    parentId: string,
+  ) => {
     const children = getChildCategories(categories, category.id);
-    const siblingCount = getChildCategories(categories, category.parentCategoryId ?? null).length;
-    const angle = (2 * Math.PI * branchIndex) / Math.max(siblingCount, 1) - Math.PI / 2;
-    const distance = depth === 0 ? 230 : 190;
     const manual = manualPositions[category.id];
     const categoryPosition = place(
       { x: Math.round(parentX + distance * Math.cos(angle)), y: Math.round(parentY + distance * Math.sin(angle)) },
       manual,
-      { width: 78, height: 78 },
+      NODE_SIZES.category,
+      SPACING.category,
     );
     const x = categoryPosition.x;
     const y = categoryPosition.y;
@@ -105,14 +208,21 @@ export function generateNestedActiveMesh(
       stroke: customLines ? appearance.connectionColors.branch : category.color, strokeWidth: focused ? 3.5 : 2.2, strokeOpacity: focused ? 0.95 : 0.6,
     }});
 
+    // Reminders fan outward through the category's angular wedge.
+    const reminderCount = branchReminders.length;
+    const fanSpan = reminderCount <= 1 ? 0 : Math.min(Math.PI * 1.2, Math.max(0.55, reminderCount * 0.42));
+    const startAngle = angle - fanSpan / 2;
+    const step = reminderCount <= 1 ? 0 : fanSpan / (reminderCount - 1);
+    const baseDistance = reminderDistance(reminderCount) + (focused ? 40 : 0);
+
     branchReminders.forEach((reminder, index) => {
-      const reminderAngle = angle - 0.65 + (branchReminders.length === 1 ? 0.65 : index * 1.3 / (branchReminders.length - 1));
-      const reminderDistance = focused ? 225 : 190;
-      const reminderManual = manualPositions[reminder.id];
+      const reminderAngle = reminderCount === 1 ? angle : startAngle + index * step;
+      const manualReminder = manualPositions[reminder.id];
       const reminderPosition = place(
-        { x: Math.round(x + reminderDistance * Math.cos(reminderAngle)), y: Math.round(y + reminderDistance * Math.sin(reminderAngle)) },
-        reminderManual,
-        { width: 165, height: 100 },
+        { x: Math.round(x + baseDistance * Math.cos(reminderAngle)), y: Math.round(y + baseDistance * Math.sin(reminderAngle)) },
+        manualReminder,
+        NODE_SIZES.reminder,
+        SPACING.reminder,
       );
       const reminderX = reminderPosition.x;
       const reminderY = reminderPosition.y;
@@ -134,10 +244,27 @@ export function generateNestedActiveMesh(
       }});
       renderSubtasks(reminder, reminderX, reminderY, category.color, reminderAngle);
     });
-    children.forEach((child, index) => renderCategory(child, x, y, index, depth + 1, category.id));
+
+    // Nested categories split the parent's wedge by their own weight.
+    const childWeights = children.map((child) => Math.max(1, subtreeNodeCount(categories, activeReminders, child.id)));
+    const childPlan = allocateAngles(childWeights, angle - share / 2, share);
+    children.forEach((child, index) => {
+      const childShare = childPlan[index]?.share ?? share / Math.max(children.length, 1);
+      const childAngle = childPlan[index]?.angle ?? angle;
+      const childDistance = Math.max(NESTED_CATEGORY_MIN_DISTANCE, distance * 0.78);
+      renderCategory(child, x, y, childAngle, childShare, childDistance, depth + 1, category.id);
+    });
   };
 
-  getChildCategories(categories, null).forEach((category, index) => renderCategory(category, rootPosition.x, rootPosition.y, index, 0, 'root'));
+  const rootCategories = getChildCategories(categories, null);
+  const rootWeights = rootCategories.map((category) => Math.max(1, subtreeNodeCount(categories, activeReminders, category.id)));
+  const rootPlan = allocateAngles(rootWeights, -Math.PI / 2);
+  rootCategories.forEach((category, index) => {
+    const share = rootPlan[index]?.share ?? (Math.PI * 2) / Math.max(rootCategories.length, 1);
+    const angle = rootPlan[index]?.angle ?? -Math.PI / 2;
+    renderCategory(category, rootPosition.x, rootPosition.y, angle, share, categoryRadius(rootWeights[index]), 0, 'root');
+  });
+
   return { nodes, edges };
 }
 
@@ -149,8 +276,28 @@ export function generateNestedCompletedOverviewMesh(
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
   const completed = reminders.filter((reminder) => reminder.completed);
+  const occupied: Array<{ position: Point; size: Size }> = [];
+
+  for (const position of Object.values(manualPositions)) {
+    if (position?.manuallyPositioned) {
+      occupied.push({ position: { x: position.x, y: position.y }, size: NODE_SIZES.category });
+    }
+  }
+
+  const place = (
+    ideal: Point,
+    manual: { x: number; y: number; manuallyPositioned?: boolean } | undefined,
+    size: Size,
+    spacing: number,
+  ): Point => {
+    if (manual?.manuallyPositioned) return { x: manual.x, y: manual.y };
+    const position = findAvailablePosition(ideal, occupied, size, spacing);
+    occupied.push({ position, size });
+    return position;
+  };
+
   const root = manualPositions['completed-root'];
-  const rootPosition = root?.manuallyPositioned ? root : { x: 0, y: 0 };
+  const rootPosition = place({ x: 0, y: 0 }, root, NODE_SIZES.root, SPACING.root);
   const rootTheme = themeFor(appearance, accentForNodeType(appearance, 'root'), true);
   nodes.push({ id: 'completed-root', type: 'rootNode', position: rootPosition, zIndex: 20, data: {
     id: 'completed-root', label: 'Completed', type: 'root', isCompletedView: true, count: completed.length,
@@ -158,13 +305,17 @@ export function generateNestedCompletedOverviewMesh(
     textColor: rootTheme.text, mutedTextColor: rootTheme.mutedText, borderColor: rootTheme.border, glowColor: rootTheme.glow,
     hoverColor: rootTheme.hover, onNodeClick: callbacks.onNodeClick,
   }});
+
   const countFor = (id: string): number => completed.filter((reminder) => reminder.categoryId === id).length + getChildCategories(categories, id).reduce((sum, child) => sum + countFor(child.id), 0);
-  const visit = (category: Category, parentId: string, parentX: number, parentY: number, index: number, depth: number) => {
-    const siblings = getChildCategories(categories, category.parentCategoryId ?? null).length;
-    const angle = (2 * Math.PI * index) / Math.max(siblings, 1) - Math.PI / 2;
-    const distance = depth === 0 ? 240 : 190;
+
+  const visit = (category: Category, parentId: string, parentX: number, parentY: number, angle: number, share: number, distance: number, depth: number) => {
     const manual = manualPositions[category.id];
-    const position = manual?.manuallyPositioned ? manual : { x: Math.round(parentX + distance * Math.cos(angle)), y: Math.round(parentY + distance * Math.sin(angle)) };
+    const position = place(
+      { x: Math.round(parentX + distance * Math.cos(angle)), y: Math.round(parentY + distance * Math.sin(angle)) },
+      manual,
+      NODE_SIZES.category,
+      SPACING.category,
+    );
     const theme = themeFor(appearance, category.color, true);
     nodes.push({ id: category.id, type: 'categoryNode', position, zIndex: 10 - depth, data: {
       id: category.id, label: category.name, type: 'category', isCompletedView: true, completedCount: countFor(category.id),
@@ -173,8 +324,25 @@ export function generateNestedCompletedOverviewMesh(
       onNodeClick: callbacks.onNodeClick,
     }});
     edges.push({ id: `edge-completed-${parentId}-${category.id}`, source: parentId, target: category.id, style: { stroke: category.color, strokeWidth: 2, strokeOpacity: countFor(category.id) > 0 ? 0.7 : 0.3 } });
-    getChildCategories(categories, category.id).forEach((child, childIndex) => visit(child, category.id, position.x, position.y, childIndex, depth + 1));
+
+    const childCategories = getChildCategories(categories, category.id);
+    const childWeights = childCategories.map((child) => Math.max(1, 1 + countFor(child.id)));
+    const childPlan = allocateAngles(childWeights, angle - share / 2, share);
+    childCategories.forEach((child, childIndex) => {
+      const childShare = childPlan[childIndex]?.share ?? share / Math.max(childCategories.length, 1);
+      const childAngle = childPlan[childIndex]?.angle ?? angle;
+      visit(child, category.id, position.x, position.y, childAngle, childShare, Math.max(NESTED_CATEGORY_MIN_DISTANCE, distance * 0.8), depth + 1);
+    });
   };
-  getChildCategories(categories, null).forEach((category, index) => visit(category, 'completed-root', rootPosition.x, rootPosition.y, index, 0));
+
+  const rootCategories = getChildCategories(categories, null);
+  const weights = rootCategories.map((category) => Math.max(1, 1 + countFor(category.id)));
+  const plan = allocateAngles(weights, -Math.PI / 2);
+  rootCategories.forEach((category, index) => {
+    const share = plan[index]?.share ?? (Math.PI * 2) / Math.max(rootCategories.length, 1);
+    const angle = plan[index]?.angle ?? -Math.PI / 2;
+    visit(category, 'completed-root', rootPosition.x, rootPosition.y, angle, share, categoryRadius(weights[index]), 0);
+  });
+
   return { nodes, edges };
 }

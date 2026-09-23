@@ -88,6 +88,7 @@ import { normalizeCategories, validateCategoryParent, getCategoryDescendantIds, 
 import { handleReminderCompletion } from './services/recurrence';
 import { upsertReminder } from './services/reminders';
 import { commitNodePosition, resetNodePosition } from './services/nodePositions';
+import { didNodeDrag, focusZoomForNodeType, nodeCentre, resolveNodeTap } from './services/graphNavigation';
 
 import { RootNode } from './components/nodes/RootNode';
 import { CategoryNode } from './components/nodes/CategoryNode';
@@ -141,6 +142,9 @@ function MindMeshFlow() {
   const [viewMode, setViewMode] = useState<ViewMode>('active');
   const [focusedCategoryId, setFocusedCategoryId] = useState<string | null>(null);
   const [selectedCompletedCategory, setSelectedCompletedCategory] = useState<Category | null>(null);
+  // Node the user has navigated to. First tap focuses the camera on it; a second
+  // tap on the same node opens its existing options (see handleNodeClick).
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string | null>(null);
 
   // Modals state
   const [reminderModalOpen, setReminderModalOpen] = useState(false);
@@ -167,14 +171,20 @@ function MindMeshFlow() {
   // React Flow graph state
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<MeshNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const { fitView } = useReactFlow();
+  const { fitView, setCenter } = useReactFlow();
 
   // Drag tracking refs
   const dragStartPosRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  // A drag must never be mistaken for a navigation tap (which would move the
+  // camera or open a node's options). Consumed by handleNodeClick.
+  const nodeDragMovedRef = useRef(false);
   const isInitialMount = useRef(true);
   const prevViewModeRef = useRef(viewMode);
-  const prevFocusedCatRef = useRef(focusedCategoryId);
   const prevCompletedCatRef = useRef(selectedCompletedCategory?.id);
+  // Read inside stable callbacks so node changes never re-create handleNodeClick
+  // (which would re-trigger the layout effect and fight the camera).
+  const nodesRef = useRef<Node<MeshNodeData>[]>([]);
+  const selectedGraphNodeIdRef = useRef<string | null>(null);
   const graphViewportRef = useRef<HTMLDivElement>(null);
   const lastGraphViewportSizeRef = useRef<{ width: number; height: number } | null>(null);
 
@@ -377,12 +387,50 @@ function MindMeshFlow() {
     };
   }, [appearance.threeD.level, fitView, mainNavTab]);
 
-  // Handle node interaction
+  // Keep the selection ref aligned with state for resets/restores/background taps.
+  useEffect(() => {
+    selectedGraphNodeIdRef.current = selectedGraphNodeId;
+  }, [selectedGraphNodeId]);
+
+  // Navigates the camera toward a node. Purely a view change: node coordinates
+  // and manual positions are never touched. In 3D mode SpatialGraph reacts to
+  // the selectedGraphNodeId prop and animates its own camera instead.
+  const focusGraphNode = useCallback(
+    (nodeId: string) => {
+      if (appearance.threeD.level !== 'off') return;
+      const node = nodesRef.current.find((entry) => entry.id === nodeId);
+      if (!node) return;
+      const centre = nodeCentre(node.position, node.measured ?? undefined);
+      setCenter(centre.x, centre.y, { zoom: focusZoomForNodeType(node.data.type), duration: 520 });
+    },
+    [appearance.threeD.level, setCenter]
+  );
+
+  // Handle node interaction: tap once to travel to a node, tap the same node
+  // again to open its existing options. Tapping a different node only moves the
+  // focus. Dragging never reaches here (surfaces suppress the post-drag click).
   const handleNodeClick = useCallback(
     (nodeId: string, type: string) => {
+      if (nodeDragMovedRef.current) {
+        nodeDragMovedRef.current = false;
+        return;
+      }
+      const alreadyFocused = resolveNodeTap(selectedGraphNodeIdRef.current, nodeId) === 'open';
+      selectedGraphNodeIdRef.current = nodeId;
+      setSelectedGraphNodeId(nodeId);
+
+      if (!alreadyFocused) {
+        focusGraphNode(nodeId);
+        return;
+      }
+
       if (type === 'root') {
         setFocusedCategoryId(null);
-        fitView({ padding: 0.2, duration: 400 });
+        if (appearance.threeD.level === 'off') {
+          fitView({ padding: 0.2, duration: 400 });
+        } else {
+          window.dispatchEvent(new Event('mindmesh-spatial-home'));
+        }
         return;
       }
 
@@ -394,7 +442,7 @@ function MindMeshFlow() {
           // Open completed category detail mesh
           setSelectedCompletedCategory(cat);
         } else {
-          // Active view: toggle focus & open category actions
+          // Active view: focus the branch & open category actions
           setFocusedCategoryId((prev) => (prev === nodeId ? null : nodeId));
           setCategoryActionsCategory(cat);
         }
@@ -410,7 +458,7 @@ function MindMeshFlow() {
         return;
       }
     },
-    [categories, reminders, viewMode, fitView]
+    [appearance.threeD.level, categories, reminders, viewMode, fitView, focusGraphNode]
   );
 
   // Subtask toggle
@@ -463,6 +511,11 @@ function MindMeshFlow() {
     (_: unknown, node: Node) => {
       // XYFlow reports world coordinates here, already accounting for its
       // viewport transform. Persist only once, after the gesture completes.
+      const start = dragStartPosRef.current;
+      if (start && didNodeDrag(start, node.position)) {
+        nodeDragMovedRef.current = true;
+        window.setTimeout(() => { nodeDragMovedRef.current = false; }, 350);
+      }
       setNodePositions((prev) => {
         const next = commitNodePosition(prev, node.id, node.position.x, node.position.y);
         saveNodePositions(next);
@@ -540,20 +593,21 @@ function MindMeshFlow() {
       }
     }
 
+    nodesRef.current = graph.nodes;
     setNodes(graph.nodes);
     setEdges(graph.edges);
 
-    // Only auto fit view on screen transitions, not while dragging or making minor node updates
+    // Only auto fit view on genuine screen transitions (first mount, active vs
+    // completed, or entering a completed category). Focusing a branch, moving a
+    // node or any data update must NOT refit or re-centre the camera.
     const shouldFit =
       isInitialMount.current ||
       prevViewModeRef.current !== viewMode ||
-      prevFocusedCatRef.current !== focusedCategoryId ||
       prevCompletedCatRef.current !== selectedCompletedCategory?.id;
 
     if (shouldFit) {
       isInitialMount.current = false;
       prevViewModeRef.current = viewMode;
-      prevFocusedCatRef.current = focusedCategoryId;
       prevCompletedCatRef.current = selectedCompletedCategory?.id;
 
       const timeout = setTimeout(() => {
@@ -587,6 +641,7 @@ function MindMeshFlow() {
     setNodePositions({});
     setPositionMenu(null);
     setMenuOpen(false);
+    setSelectedGraphNodeId(null);
     setTimeout(() => {
       fitView({ padding: 0.2, duration: 400 });
     }, 60);
@@ -697,6 +752,7 @@ function MindMeshFlow() {
       setReminders(newRems);
       setFocusedCategoryId(null);
       setSelectedCompletedCategory(null);
+      setSelectedGraphNodeId(null);
       setMenuOpen(false);
       setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 60);
     }
@@ -711,6 +767,7 @@ function MindMeshFlow() {
       setReminders(emptyRems);
       setFocusedCategoryId(null);
       setSelectedCompletedCategory(null);
+      setSelectedGraphNodeId(null);
       setMenuOpen(false);
       setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 60);
     }
@@ -736,6 +793,7 @@ function MindMeshFlow() {
 
     setFocusedCategoryId(null);
     setSelectedCompletedCategory(null);
+    setSelectedGraphNodeId(null);
     setMenuOpen(false);
     setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 80);
   }, [fitView]);
@@ -1280,7 +1338,10 @@ function MindMeshFlow() {
                 onNodeDragStart={handleNodeDragStart}
                 onNodeDragStop={handleNodeDragStop}
                 onNodeContextMenu={handleNodeContextMenu}
-                onPaneClick={() => setPositionMenu(null)}
+                onPaneClick={() => {
+                  setPositionMenu(null);
+                  setSelectedGraphNodeId(null);
+                }}
                 nodesDraggable={true}
                 panOnDrag={true}
                 selectionOnDrag={false}
@@ -1288,8 +1349,10 @@ function MindMeshFlow() {
                 preventScrolling={true}
                 nodesConnectable={false}
                 nodeTypes={nodeTypes}
-                minZoom={0.25}
-                maxZoom={2.2}
+                // Wide dolly range so large graphs can be viewed whole and single
+                // nodes can be inspected closely without re-fitting the world.
+                minZoom={0.05}
+                maxZoom={4}
                 proOptions={{ hideAttribution: true }}
                 defaultEdgeOptions={{ type: 'default', animated: false }}
               >
@@ -1323,9 +1386,12 @@ function MindMeshFlow() {
                 edges={edges}
                 appearance={appearance}
                 onNodePositionChange={handleSpatialNodePositionChange}
+                focusNodeId={selectedGraphNodeId}
+                selectedNodeId={selectedGraphNodeId}
                 onEmptyClick={() => {
                   setFocusedCategoryId(null);
                   setSelectedCompletedCategory(null);
+                  setSelectedGraphNodeId(null);
                 }}
               />
             )}
