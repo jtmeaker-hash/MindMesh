@@ -23,7 +23,12 @@ import {
   restoreBackup,
   generateBackupFilename,
 } from '../../services/backup';
-import { resetMindMeshEntirely } from '../../services/storage';
+import {
+  applyLastImportedNodePositions,
+  hasLastImportedNodePositions,
+  loadLastImportedNodePositions,
+  resetMindMeshEntirely,
+} from '../../services/storage';
 import { logger } from '../../services/logger';
 import { SmartAssistancePanel } from './SmartAssistancePanel';
 
@@ -33,6 +38,78 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
+
+interface LayoutRecoveryCardProps {
+  hasPositions: boolean;
+  positionCount: number;
+  restored: boolean;
+  onRestore: () => void;
+}
+
+/**
+ * Lets the user bring back the custom node positions from the last imported
+ * backup without importing the whole backup again. The stored positions are
+ * kept separately from the live layout, so resetting the layout never loses them.
+ */
+const LayoutRecoveryCard: React.FC<LayoutRecoveryCardProps> = ({
+  hasPositions,
+  positionCount,
+  restored,
+  onRestore,
+}) => (
+  <div
+    data-testid="layout-recovery"
+    style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10,
+      padding: 16,
+      borderRadius: 16,
+      backgroundColor: 'rgba(30, 41, 59, 0.5)',
+      border: '1px solid rgba(99, 102, 241, 0.3)',
+      fontSize: 13,
+      color: '#cbd5e1',
+      lineHeight: 1.5,
+    }}
+  >
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#f8fafc' }}>
+      <Info size={16} color="#818cf8" />
+      <span>Node layout recovery</span>
+    </div>
+    <span style={{ color: '#94a3b8' }}>
+      The custom node positions from your last imported backup are kept separately, so resetting the
+      current layout does not remove them.
+    </span>
+    {hasPositions ? (
+      <button
+        type="button"
+        data-testid="restore-imported-positions"
+        onClick={onRestore}
+        style={{
+          alignSelf: 'flex-start',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '9px 14px',
+          borderRadius: 10,
+          border: '1px solid rgba(99, 102, 241, 0.45)',
+          backgroundColor: 'rgba(99, 102, 241, 0.16)',
+          color: restored ? '#34d399' : '#a5b4fc',
+          fontSize: 12.5,
+          fontWeight: 700,
+          cursor: 'pointer',
+        }}
+      >
+        <RefreshCw size={14} />
+        <span>{restored ? 'Custom positions restored' : `Restore ${positionCount} custom position${positionCount === 1 ? '' : 's'}`}</span>
+      </button>
+    ) : (
+      <span style={{ fontSize: 11.5, color: '#64748b' }}>
+        No node positions from an imported backup are stored yet.
+      </span>
+    )}
+  </div>
+);
 
 interface SettingsBackupModalProps {
   isOpen: boolean;
@@ -63,10 +140,26 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   // Reset state
   const [resetConfirmation, setResetConfirmation] = useState('');
   const [isResetting, setIsResetting] = useState(false);
+  const [layoutRestored, setLayoutRestored] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
+
+  const importedPositionCount = hasLastImportedNodePositions()
+    ? Object.keys(loadLastImportedNodePositions()).length
+    : 0;
+  const hasImportedPositions = importedPositionCount > 0;
+
+  // Reapply the positions captured from the last imported backup to the live
+  // layout, then let the app reload its persisted state.
+  const handleRestoreImportedPositions = () => {
+    const applied = applyLastImportedNodePositions();
+    if (!applied) return;
+    setLayoutRestored(true);
+    window.setTimeout(() => setLayoutRestored(false), 2600);
+    onRestoreComplete();
+  };
 
   // Handle Full Export: only reports success once the platform confirms the write.
   const handleExport = async () => {
@@ -768,6 +861,13 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                 <span>Restoration complete! Reloading MindMesh state...</span>
               </div>
             )}
+
+            <LayoutRecoveryCard
+              hasPositions={hasImportedPositions}
+              positionCount={importedPositionCount}
+              restored={layoutRestored}
+              onRestore={handleRestoreImportedPositions}
+            />
           </div>
         )}
 
@@ -800,6 +900,13 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                 <li>All manual node positions and custom categories</li>
               </ul>
             </div>
+
+            <LayoutRecoveryCard
+              hasPositions={hasImportedPositions}
+              positionCount={importedPositionCount}
+              restored={layoutRestored}
+              onRestore={handleRestoreImportedPositions}
+            />
 
             <div>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>

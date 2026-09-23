@@ -25,6 +25,12 @@ const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
 const NODE_POSITIONS_KEY = 'mindmesh_positions_v1';
+/**
+ * Custom node positions captured from the most recently imported backup. They
+ * live in their own key (never inside the live state payload) so that resetting
+ * the current layout can never overwrite or destroy them.
+ */
+export const LAST_IMPORTED_POSITIONS_KEY = 'mindmesh_last_imported_positions_v1';
 export const ROUTINE_QUARANTINE_KEY = 'mindmesh_routine_quarantine_v1';
 
 export function getDefaultState(): MindMeshStorageData {
@@ -529,6 +535,62 @@ export function clearNodePositions(): void {
   const current = loadAllData();
   saveAllData({ ...current, nodePositions: {} });
   logger.info('Storage', 'Cleared all manual node positions');
+}
+
+/**
+ * Stores the node positions from a backup the user just imported. This is kept
+ * apart from the live layout so that clearing/resetting node positions only
+ * empties the current layout and leaves the backup's positions recoverable.
+ */
+export function saveLastImportedNodePositions(nodePositions: NodePositionMap): void {
+  try {
+    const normalized = normalizeNodePositions(nodePositions);
+    localStorage.setItem(LAST_IMPORTED_POSITIONS_KEY, JSON.stringify(normalized));
+    logger.info('Storage', 'Stored node positions from an imported backup', {
+      count: Object.keys(normalized).length,
+    });
+  } catch (error) {
+    logger.error('Storage', 'Failed to store the last imported backup positions', error);
+  }
+}
+
+/** Reads the positions captured from the last imported backup (empty when none). */
+export function loadLastImportedNodePositions(): NodePositionMap {
+  try {
+    const raw = localStorage.getItem(LAST_IMPORTED_POSITIONS_KEY);
+    if (!raw) return {};
+    return normalizeNodePositions(JSON.parse(raw));
+  } catch (error) {
+    logger.error('Storage', 'Failed to read the last imported backup positions', error);
+    return {};
+  }
+}
+
+/**
+ * True when a backup has been imported at least once, even if its position map
+ * happened to be empty (that is still a meaningful "restore the auto layout").
+ */
+export function hasLastImportedNodePositions(): boolean {
+  try {
+    return localStorage.getItem(LAST_IMPORTED_POSITIONS_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reapplies the positions from the last imported backup to the live layout and
+ * returns them. Returns null when no imported backup positions are stored.
+ */
+export function applyLastImportedNodePositions(): NodePositionMap | null {
+  if (!hasLastImportedNodePositions()) return null;
+  const positions = loadLastImportedNodePositions();
+  const current = loadAllData();
+  saveAllData({ ...current, nodePositions: positions });
+  logger.info('Storage', 'Restored node positions from the last imported backup', {
+    count: Object.keys(positions).length,
+  });
+  return positions;
 }
 
 /**

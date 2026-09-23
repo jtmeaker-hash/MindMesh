@@ -10,6 +10,7 @@ import {
   saveAllData,
   resetMindMeshEntirely,
   inspectStorageReadability,
+  saveLastImportedNodePositions,
   CURRENT_STORAGE_VERSION,
 } from './storage';
 import { getDefaultAppearance, normalizeAppearance } from './appearance';
@@ -370,6 +371,16 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
 
   const completedReminders = (data.reminders as Reminder[]).filter((r) => r.completed).length;
 
+  const rawNodePositions = data.nodePositions;
+  const readableNodePositions =
+    Boolean(rawNodePositions) && typeof rawNodePositions === 'object' && !Array.isArray(rawNodePositions);
+  const nodePositionsCount = readableNodePositions
+    ? Object.keys(rawNodePositions as Record<string, unknown>).length
+    : 0;
+  if (rawNodePositions !== undefined && !readableNodePositions) {
+    warnings.push('Node positions in this backup were unreadable and will fall back to the automatic layout.');
+  }
+
   const summary: RestoreSummary = {
     createdAt: typeof obj.createdAt === 'string' ? obj.createdAt : new Date().toISOString(),
     appVersion: typeof obj.appVersion === 'string' ? obj.appVersion : 'unknown',
@@ -378,6 +389,7 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     categoriesCount: data.categories.length,
     remindersCount: data.reminders.length,
     completedRemindersCount: completedReminders,
+    nodePositionsCount,
     contactsCount,
     directDebitsCount,
     extraIncomeCount,
@@ -571,6 +583,25 @@ export function restoreBackup(backupFile: MindMeshBackupFile): { success: boolea
     if (expectedActiveSessions !== actualActiveSessions) {
       throw new Error('Active Routine session recovery could not be verified after persistence');
     }
+
+    // Every custom node position in the backup must survive the write unchanged.
+    const expectedPositions = migratedState.nodePositions || {};
+    const actualPositions = verifiedState.nodePositions || {};
+    const expectedPositionIds = Object.keys(expectedPositions).sort();
+    const actualPositionIds = Object.keys(actualPositions).sort();
+    if (JSON.stringify(expectedPositionIds) !== JSON.stringify(actualPositionIds)) {
+      throw new Error('Restored node positions could not be verified after persistence');
+    }
+    for (const nodeId of expectedPositionIds) {
+      const expected = expectedPositions[nodeId];
+      const restored = actualPositions[nodeId];
+      if (!restored || restored.x !== expected.x || restored.y !== expected.y) {
+        throw new Error(`Restored node position for "${nodeId}" could not be verified after persistence`);
+      }
+    }
+
+    // Keep the imported layout recoverable after the live layout is reset later.
+    saveLastImportedNodePositions(expectedPositions);
 
     const restoredDiagnosticsPreferences = backupFile.data.diagnostics?.preferences;
     if (restoredDiagnosticsPreferences) {

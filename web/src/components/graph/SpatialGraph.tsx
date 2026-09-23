@@ -78,6 +78,42 @@ function defaultCamera(): SpatialCamera {
   return { target: { x: 0, y: 0, z: 0 }, yaw: 0, pitch: 0.04, distance: 1180 };
 }
 
+/**
+ * Zoomed-out decluttering. Reminders and steps are only *skipped while drawing*;
+ * their data, saved state and positions are never touched, so zooming back in
+ * restores them exactly. Primary nodes (root and categories) always render.
+ */
+export interface SecondaryNodeVisibility {
+  reminders: boolean;
+  subtasks: boolean;
+}
+
+// The "show again" distance sits inside the "hide" distance on purpose: the gap
+// is a hysteresis band so a camera lingering near the boundary cannot flicker.
+const SUBTASK_HIDE_DISTANCE = 5_200;
+const SUBTASK_SHOW_DISTANCE = 4_200;
+const REMINDER_HIDE_DISTANCE = 9_000;
+const REMINDER_SHOW_DISTANCE = 7_400;
+
+function secondaryNodeLatch(hidden: boolean, distance: number, hideAt: number, showAt: number): boolean {
+  return hidden ? distance > showAt : distance >= hideAt;
+}
+
+/**
+ * Pure, testable decision for which secondary node kinds stay visible at a given
+ * camera distance. Takes the previous latch so the hysteresis band is honoured.
+ */
+export function resolveSecondaryNodeVisibility(
+  distance: number,
+  previous: SecondaryNodeVisibility,
+): SecondaryNodeVisibility {
+  const safeDistance = Number.isFinite(distance) ? distance : 0;
+  return {
+    reminders: secondaryNodeLatch(previous.reminders, safeDistance, REMINDER_HIDE_DISTANCE, REMINDER_SHOW_DISTANCE),
+    subtasks: secondaryNodeLatch(previous.subtasks, safeDistance, SUBTASK_HIDE_DISTANCE, SUBTASK_SHOW_DISTANCE),
+  };
+}
+
 export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appearance, onEmptyClick, onNodePositionChange, focusNodeId, selectedNodeId }) => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
@@ -91,6 +127,7 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
   const [camera, setCamera] = useState<SpatialCamera>(defaultCamera);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isInteracting, setIsInteracting] = useState(false);
+  const [hiddenSecondaryNodes, setHiddenSecondaryNodes] = useState<SecondaryNodeVisibility>({ reminders: false, subtasks: false });
   const [draggedPositions, setDraggedPositions] = useState<Record<string, { x: number; y: number }>>({});
   const nodeDragRef = useRef<{ id: string; startX: number; startY: number; originX: number; originY: number; moved: boolean; active: boolean; timer?: number } | null>(null);
   const suppressNodeClickRef = useRef(false);
@@ -326,17 +363,26 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
 
   const zoom = (amount: number) => updateCamera((current) => ({ ...current, distance: current.distance + amount }));
 
+  // Recompute the zoom latches only when the camera distance changes, and keep
+  // the previous object when nothing flipped so this never adds render churn.
+  useEffect(() => {
+    setHiddenSecondaryNodes((previous) => {
+      const next = resolveSecondaryNodeVisibility(camera.distance, previous);
+      return next.reminders === previous.reminders && next.subtasks === previous.subtasks ? previous : next;
+    });
+  }, [camera.distance]);
+
   const visibleNodeIds = useMemo(() => {
     const visible = new Set<string>();
     nodes.forEach((node) => {
-      const point = projected.get(node.id);
-      if (!point) return;
-      const hideDistantSubtask = node.data.type === 'subtask' && (camera.distance > 14_000 || point.scale < 0.045);
-      const hideDistantReminder = node.data.type === 'reminder' && (camera.distance > 24_000 || point.scale < 0.06);
-      if (!hideDistantSubtask && !hideDistantReminder) visible.add(node.id);
+      // Reaching this list already means the node projects on screen; the only
+      // extra rule is the zoom-out declutter of reminders and steps.
+      if (node.data.type === 'reminder' && hiddenSecondaryNodes.reminders) return;
+      if (node.data.type === 'subtask' && hiddenSecondaryNodes.subtasks) return;
+      visible.add(node.id);
     });
     return visible;
-  }, [camera.distance, nodes, projected]);
+  }, [hiddenSecondaryNodes, nodes]);
 
   const renderedNodes = nodes.filter((node) => visibleNodeIds.has(node.id)).sort((a, b) => (projected.get(b.id)?.depth ?? 0) - (projected.get(a.id)?.depth ?? 0));
 
@@ -350,6 +396,8 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({ nodes, edges, appear
       data-camera-pitch={camera.pitch}
       data-camera-distance={camera.distance}
       data-camera-target-x={camera.target.x}
+      data-reminders-hidden={hiddenSecondaryNodes.reminders}
+      data-subtasks-hidden={hiddenSecondaryNodes.subtasks}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

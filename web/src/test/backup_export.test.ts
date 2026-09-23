@@ -10,7 +10,7 @@ import {
   restoreBackup,
   generateBackupFilename,
 } from '../services/backup';
-import { loadAllData, saveAllData } from '../services/storage';
+import { hasLastImportedNodePositions, loadAllData, saveAllData } from '../services/storage';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 import { getDefaultAppearance } from '../services/appearance';
 import { runDiagnostics } from '../services/diagnostics';
@@ -412,6 +412,33 @@ describe('Backup round trip: export then restore', () => {
     expect(money.tipEntries).toHaveLength(1);
     expect(state.appearance?.themeId).toBe('matrix');
     expect(state.contactCategories).toContain('Clinic');
+  });
+
+  it('round trips every custom node position and keeps them recoverable after import', () => {
+    const base = loadAllData();
+    saveAllData({
+      ...base,
+      nodePositions: {
+        'cat-work': { nodeId: 'cat-work', x: 640, y: -480, manuallyPositioned: true, updatedAt: '2026-03-01T00:00:00.000Z' },
+        'sub-1': { nodeId: 'sub-1', x: 90, y: 30, manuallyPositioned: true },
+      },
+    });
+
+    const json = serializeBackup(createBackup());
+    localStorage.clear();
+
+    const validation = validateBackup(json);
+    expect(validation.valid).toBe(true);
+    expect(validation.summary?.nodePositionsCount).toBe(2);
+
+    const restored = restoreBackup(validation.backupFile!);
+    expect(restored.success).toBe(true);
+
+    const state = loadAllData();
+    expect(state.nodePositions['cat-work']).toMatchObject({ x: 640, y: -480, manuallyPositioned: true });
+    expect(state.nodePositions['sub-1']).toMatchObject({ x: 90, y: 30, manuallyPositioned: true });
+    // Imported positions are retained independently of the live layout.
+    expect(hasLastImportedNodePositions()).toBe(true);
   });
 
   it('keeps relationships valid across a round trip and drops dangling links', () => {
