@@ -102,11 +102,29 @@ describe('AppearanceModal', () => {
     const quality = screen.getByRole('group', { name: '3D effect quality' });
     expect(quality).toBeDefined();
     fireEvent.click(screen.getByText('High'));
-    fireEvent.click(screen.getByRole('switch', { name: 'Graph rotation cues' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Orbit gestures' }));
 
     const updated = lastEmitted(onChange);
     expect(updated.threeD.level).toBe('high');
     expect(updated.threeD.graphRotation).toBe(false);
+  });
+
+  it('exposes the graph camera controls, including reduced motion', () => {
+    const onChange = renderModal();
+
+    fireEvent.click(screen.getByRole('button', { name: '3D Depth' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Invert horizontal orbit' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Invert vertical orbit' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Reduce camera motion' }));
+
+    const updated = lastEmitted(onChange);
+    expect(updated.threeD.invertRotation).toBe(true);
+    expect(updated.threeD.invertOrbitY).toBe(true);
+    expect(updated.threeD.reducedMotion).toBe(true);
+    // Camera inertia ships with a sensible default rather than an off/on cliff.
+    expect(updated.threeD.cameraInertia).toBeGreaterThan(0);
+    // The retired auto-focus toggle no longer claims behaviour it does not have.
+    expect(screen.queryByRole('switch', { name: 'Auto-focus selected nodes' })).toBeNull();
   });
 
   it('edits node colours and connection colours independently', () => {

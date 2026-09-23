@@ -1,10 +1,11 @@
 import { MeshNodeData } from '../types';
 
 /**
- * MindMesh node interaction intentionally uses two normal taps instead of a
- * double-tap gesture or a separate "jump to node" control:
+ * MindMesh node interaction intentionally uses two normal taps. There is no
+ * separate "jump to node" control: selecting a node *is* the navigation action.
  *
- *  - First tap on a node focuses the camera on it (navigation only).
+ *  - First tap on a node focuses it: the camera travels to frame the node with
+ *    its neighbours and the node becomes the orbit pivot.
  *  - Second tap on the already-focused node opens its existing options/details.
  *  - Tapping a different node moves the focus instead of opening the previous one.
  *

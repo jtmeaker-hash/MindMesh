@@ -935,8 +935,8 @@ export const AppearanceModal: React.FC<AppearanceModalProps> = ({ isOpen, onClos
               onChange={(animationIntensity) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, animationIntensity } })}
             />
             <ToggleRow
-              label="Graph rotation cues"
-              hint="Drag the network to orbit through its actual depth layers"
+              label="Orbit gestures"
+              hint="One-finger drag rotates around the focused node. Turn off to pan instead."
               checked={appearance.threeD.graphRotation}
               onChange={(graphRotation) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, graphRotation } })}
             />
@@ -958,16 +958,32 @@ export const AppearanceModal: React.FC<AppearanceModalProps> = ({ isOpen, onClos
               display={`${Math.round(appearance.threeD.zoomSensitivity * 100)}%`}
               onChange={(zoomSensitivity) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, zoomSensitivity } })}
             />
+            <SliderRow
+              label="Camera inertia"
+              value={appearance.threeD.cameraInertia ?? 0.22}
+              min={0}
+              max={1}
+              step={0.02}
+              display={(appearance.threeD.cameraInertia ?? 0.22) <= 0 ? 'Off' : `${Math.round((appearance.threeD.cameraInertia ?? 0.22) * 100)}%`}
+              onChange={(cameraInertia) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, cameraInertia } })}
+            />
             <ToggleRow
-              label="Invert orbit direction"
+              label="Invert horizontal orbit"
+              hint="Swaps left/right drag direction"
               checked={appearance.threeD.invertRotation}
               onChange={(invertRotation) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, invertRotation } })}
             />
             <ToggleRow
-              label="Auto-focus selected nodes"
-              hint="Double-tap a node to travel toward it"
-              checked={appearance.threeD.autoFocus}
-              onChange={(autoFocus) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, autoFocus } })}
+              label="Invert vertical orbit"
+              hint="Swaps up/down drag direction"
+              checked={appearance.threeD.invertOrbitY === true}
+              onChange={(invertOrbitY) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, invertOrbitY } })}
+            />
+            <ToggleRow
+              label="Reduce camera motion"
+              hint="Shorter travel animations and no momentum. Your device's reduced-motion setting is also respected."
+              checked={appearance.threeD.reducedMotion === true}
+              onChange={(reducedMotion) => onChange({ ...appearance, themeId: 'custom', threeD: { ...appearance.threeD, reducedMotion } })}
             />
             <SliderRow
               label="Connection animation"

@@ -1385,6 +1385,7 @@ function MindMeshFlow() {
                 nodes={nodes}
                 edges={edges}
                 appearance={appearance}
+                surfaceKey="mesh"
                 onNodePositionChange={handleSpatialNodePositionChange}
                 focusNodeId={selectedGraphNodeId}
                 selectedNodeId={selectedGraphNodeId}

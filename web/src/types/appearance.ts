@@ -27,9 +27,20 @@ export interface ThreeDSettings {
   graphRotation: boolean;
   cameraSensitivity: number;
   zoomSensitivity: number;
+  /** Inverts horizontal orbit (left/right drag). */
   invertRotation: boolean;
   connectionAnimationIntensity: number;
+  /**
+   * Kept for stored-data compatibility. Node focus travel is now core graph
+   * navigation rather than an optional behaviour, so this is no longer exposed.
+   */
   autoFocus: boolean;
+  /** Light glide after an orbit/pan flick (0 disables momentum entirely). */
+  cameraInertia: number;
+  /** Inverts vertical orbit (up/down drag). */
+  invertOrbitY: boolean;
+  /** Shortens or removes camera travel animations, on top of the system setting. */
+  reducedMotion: boolean;
 }
 
 export type BackgroundImageFit = 'cover' | 'contain';

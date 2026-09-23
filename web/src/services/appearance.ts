@@ -61,6 +61,11 @@ export const DEFAULT_THREE_D: ThreeDSettings = {
   invertRotation: false,
   connectionAnimationIntensity: 0.35,
   autoFocus: true,
+  // Graph camera: light momentum, no inversion, animations on. Added as
+  // optional-with-defaults fields so stored appearance data keeps loading.
+  cameraInertia: 0.22,
+  invertOrbitY: false,
+  reducedMotion: false,
 };
 
 export function getDefaultAppearance(): AppearanceSettings {
@@ -560,6 +565,9 @@ export function normalizeAppearance(raw: unknown): AppearanceSettings {
         defaults.threeD.connectionAnimationIntensity,
       ),
       autoFocus: pickBoolean(rawThreeD.autoFocus, defaults.threeD.autoFocus),
+      cameraInertia: clampNumber(rawThreeD.cameraInertia, 0, 1, defaults.threeD.cameraInertia),
+      invertOrbitY: pickBoolean(rawThreeD.invertOrbitY, defaults.threeD.invertOrbitY),
+      reducedMotion: pickBoolean(rawThreeD.reducedMotion, defaults.threeD.reducedMotion),
     },
     showGrid: pickBoolean(source.showGrid, defaults.showGrid),
     gridColor: pickGridColor(source.gridColor, defaults.gridColor),

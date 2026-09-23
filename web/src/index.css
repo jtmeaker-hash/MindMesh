@@ -135,10 +135,25 @@ html, body, #root {
   pointer-events: auto;
 }
 
-.mm-spatial-node--selected {
+/* The focused node is lifted without hiding the rest of the network: a glow, a
+   faint ring and a small scale bump, while everything else stays readable. */
+.mm-spatial-node--focused {
   z-index: 3000 !important;
   filter: drop-shadow(0 0 12px rgba(129, 140, 248, 0.9));
 }
+
+.mm-spatial-node--focused::after {
+  content: '';
+  position: absolute;
+  inset: -14px;
+  border-radius: 24px;
+  border: 1px solid rgba(129, 140, 248, 0.5);
+  box-shadow: 0 0 18px rgba(129, 140, 248, 0.3), inset 0 0 14px rgba(129, 140, 248, 0.1);
+  pointer-events: none;
+}
+
+.mm-spatial-graph--move { cursor: move; }
+.mm-spatial-graph--move .mm-spatial-node { cursor: grab; }
 
 .mm-spatial-hud {
   position: absolute;
@@ -186,9 +201,10 @@ html, body, #root {
   pointer-events: auto;
 }
 
+/* Touch-sized camera controls: only the ones gestures cannot replace. */
 .mm-spatial-actions button {
-  width: 30px;
-  height: 30px;
+  width: 38px;
+  height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -200,6 +216,31 @@ html, body, #root {
 }
 .mm-spatial-actions button:hover,
 .mm-spatial-actions button:focus-visible { background: rgba(99, 102, 241, 0.32); color: #fff; }
+.mm-spatial-actions .mm-spatial-action--active {
+  background: rgba(99, 102, 241, 0.85);
+  color: #ffffff;
+}
+
+.mm-spatial-hint {
+  position: absolute;
+  z-index: 4100;
+  left: 50%;
+  top: 14px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 28px);
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(7, 12, 27, 0.85);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  color: #e2e8f0;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  pointer-events: none;
+}
 
 .mm-spatial-help {
   margin-left: auto;
@@ -300,7 +341,7 @@ html, body, #root {
 @media (max-width: 760px) {
   .mm-spatial-hud { left: 8px; right: 8px; bottom: 8px; flex-wrap: wrap; }
   .mm-spatial-help { width: 100%; margin-left: 0; text-align: center; }
-  .mm-spatial-legend { bottom: 92px; }
+  .mm-spatial-legend { bottom: 108px; max-height: 58vh; overflow-y: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
