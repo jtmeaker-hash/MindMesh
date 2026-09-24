@@ -2,6 +2,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HelpCircle, Home, Move, X } from 'lucide-react';
 import { Edge, Node, Position } from '@xyflow/react';
 import { MeshNodeData, AppearanceSettings } from '../../types';
+import { resolveConnectionRenderSettings } from '../../services/appearance';
+import {
+  buildScreenGrid,
+  connectionDensityDamp,
+  connectionWidthScale,
+  connectionZoomFade,
+  meanNodeScreenHeight,
+  nodeHalfExtent,
+  resolveGraphDetailLevel,
+  routeConnection,
+  ROUTING_MAX_EDGES,
+  ROUTING_MAX_OBSTACLES,
+  type ScreenObstacle,
+} from '../../services/graphLod';
 import { RootNode } from '../nodes/RootNode';
 import { CategoryNode } from '../nodes/CategoryNode';
 import { ReminderNode } from '../nodes/ReminderNode';
@@ -29,24 +43,24 @@ export type SpatialCamera = { target: Point3; yaw: number; pitch: number; distan
 type ProjectedPoint = Point3 & { screenX: number; screenY: number; scale: number; depth: number; visible: boolean };
 type NodeComponent = React.ComponentType<Record<string, unknown>>;
 
+/** One connection, fully resolved into screen-space geometry and styling. */
+interface RenderedConnection {
+  id: string;
+  path: string;
+  stroke: string;
+  strokeWidth: number;
+  strokeOpacity: number;
+  /** Background-separation halo opacity; 0 means no halo element is drawn. */
+  casingOpacity: number;
+  active: boolean;
+}
+
 const NODE_COMPONENTS: Record<string, NodeComponent> = {
   rootNode: RootNode as unknown as NodeComponent,
   categoryNode: CategoryNode as unknown as NodeComponent,
   reminderNode: ReminderNode as unknown as NodeComponent,
   subtaskNode: SubtaskNode as unknown as NodeComponent,
 };
-
-/** Half-extents of each node kind in world units, used for framing and clipping. */
-const NODE_HALF: Record<string, { x: number; y: number }> = {
-  root: { x: 52, y: 52 },
-  category: { x: 39, y: 39 },
-  reminder: { x: 83, y: 50 },
-  subtask: { x: 65, y: 21 },
-};
-
-function nodeHalfExtent(type: string): { x: number; y: number } {
-  return NODE_HALF[type] ?? NODE_HALF.reminder;
-}
 
 // ---- Camera tuning constants ------------------------------------------------
 
@@ -1230,6 +1244,123 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
     return visible;
   }, [hiddenSecondaryNodes, nodes]);
 
+  // ---- Connection rendering ------------------------------------------------
+  // Brightness/contrast are resolved once per appearance change and then applied
+  // together with zoom-aware and density-aware de-cluttering.
+  const connection = useMemo(() => resolveConnectionRenderSettings(appearance), [appearance]);
+
+  const visibleEdges = useMemo(() => {
+    const list: Array<{ edge: Edge; source: ProjectedPoint; target: ProjectedPoint }> = [];
+    for (const edge of edges) {
+      if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) continue;
+      const source = projected.get(edge.source);
+      const target = projected.get(edge.target);
+      if (!source || !target || !source.visible || !target.visible) continue;
+      list.push({ edge, source, target });
+    }
+    return list;
+  }, [edges, projected, visibleNodeIds]);
+
+  /** Average projected scale of the visible connections, used for zoom LOD. */
+  const meanConnectionScale = useMemo(() => {
+    if (visibleEdges.length === 0) return focal / Math.max(1, camera.distance);
+    let sum = 0;
+    for (const entry of visibleEdges) sum += (entry.source.scale + entry.target.scale) / 2;
+    return sum / visibleEdges.length;
+  }, [camera.distance, focal, visibleEdges]);
+
+  const screenObstacles = useMemo(() => {
+    const list: ScreenObstacle[] = [];
+    for (const node of nodes) {
+      if (!visibleNodeIds.has(node.id)) continue;
+      const point = projected.get(node.id);
+      if (!point || !point.visible) continue;
+      const half = nodeHalfExtent(node.data.type);
+      list.push({ id: node.id, x: point.screenX, y: point.screenY, radius: Math.max(half.x, half.y) * point.scale + 4 });
+    }
+    return list;
+  }, [nodes, projected, visibleNodeIds]);
+
+  // Routing is a readability win, not a correctness requirement, so it is
+  // skipped on graphs large enough for the extra work to be felt.
+  const routingEnabled = visibleEdges.length <= ROUTING_MAX_EDGES && screenObstacles.length <= ROUTING_MAX_OBSTACLES;
+  const screenGrid = useMemo(
+    () => (routingEnabled ? buildScreenGrid(screenObstacles) : null),
+    [routingEnabled, screenObstacles],
+  );
+
+  /**
+   * Every drawable connection, resolved once per frame: geometry, routing,
+   * brightness/contrast, zoom fade, density damping and selection emphasis.
+   *
+   * Resolving here (instead of inline in JSX) keeps the render body a simple
+   * map and means the whole connection treatment can be reasoned about in one
+   * place. A relationship is only ever dimmed or bowed - never removed.
+   */
+  const renderedConnections = useMemo<RenderedConnection[]>(() => {
+    if (visibleEdges.length === 0) return [];
+    const zoomFade = connectionZoomFade(meanConnectionScale);
+    const widthScale = connectionWidthScale(meanConnectionScale);
+    const density = connectionDensityDamp(visibleEdges.length);
+    // A contrast halo needs an extra element per line, so it is only paid for on
+    // graphs small enough that the router already runs.
+    const casingOpacity = routingEnabled ? connection.casingOpacity : 0;
+    const list: RenderedConnection[] = [];
+
+    for (const { edge, source, target } of visibleEdges) {
+      const isSelectedPath = selectedId === edge.source || selectedId === edge.target;
+      const isBackgroundPath = Boolean(selectedId) && !isSelectedPath;
+      const baseAlpha = Number(edge.style?.strokeOpacity ?? 0.55);
+      const baseWidth = Number(edge.style?.strokeWidth ?? 1.5);
+      const stroke = typeof edge.style?.stroke === 'string' ? edge.style.stroke : '#64748b';
+
+      let alpha = connection.alpha(baseAlpha) * zoomFade * density;
+      if (isBackgroundPath) alpha *= 0.4;
+      // The focused node's own relationships stay the most legible thing on screen.
+      if (isSelectedPath) alpha = Math.min(1, alpha * 1.5 + 0.3);
+
+      const strokeWidth = Math.max(0.6, baseWidth * widthScale + connection.widthBonus) * (isSelectedPath ? 1.45 : 1);
+
+      let path = `M ${source.screenX} ${source.screenY} L ${target.screenX} ${target.screenY}`;
+      if (screenGrid) {
+        // The two nodes a connection belongs to are never obstacles to itself.
+        const obstacles = screenGrid
+          .query(source, target)
+          .filter((obstacle) => obstacle.id !== edge.source && obstacle.id !== edge.target);
+        path = routeConnection(source, target, obstacles, Math.max(8, strokeWidth * 3)).path;
+      }
+
+      list.push({
+        id: edge.id,
+        path,
+        stroke,
+        strokeWidth,
+        strokeOpacity: Math.max(0.05, Math.min(1, alpha)),
+        casingOpacity: isBackgroundPath ? casingOpacity * 0.5 : casingOpacity,
+        active: Boolean(edge.animated) || isSelectedPath,
+      });
+    }
+    return list;
+  }, [connection, meanConnectionScale, routingEnabled, screenGrid, selectedId, visibleEdges]);
+
+  /*
+   * Level of detail for the whole mesh, derived from how tall the visible nodes
+   * actually project. Pulling the camera back simplifies each card (labels, then
+   * metadata) so hundreds of nodes stay distinguishable instead of fusing into a
+   * slab of text. Node size in graph space is never changed by this - only the
+   * amount of content drawn inside an already-small node.
+   */
+  const detailLevel = useMemo(() => {
+    const visible: Array<{ type: string; scale: number }> = [];
+    for (const node of nodes) {
+      const point = projected.get(node.id);
+      if (!point || !point.visible) continue;
+      visible.push({ type: node.data.type, scale: point.scale });
+    }
+    const meanHeight = meanNodeScreenHeight(visible);
+    return resolveGraphDetailLevel(meanHeight ?? focal / Math.max(1, camera.distance) * 100);
+  }, [camera.distance, focal, nodes, projected]);
+
   const renderedNodes = nodes
     .filter((node) => visibleNodeIds.has(node.id))
     .sort((a, b) => (projected.get(b.id)?.depth ?? 0) - (projected.get(a.id)?.depth ?? 0));
@@ -1241,6 +1372,7 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
       ref={viewportRef}
       className={`mm-spatial-graph${moveMode ? ' mm-spatial-graph--move' : ''}`}
       data-testid="spatial-graph"
+      data-lod-level={detailLevel}
       data-spatial-active="true"
       data-camera-yaw={camera.yaw}
       data-camera-pitch={camera.pitch}
@@ -1273,16 +1405,32 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
       }}
     >
       <svg className="mm-spatial-connections" viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="none" aria-hidden="true">
-        {edges.map((edge) => {
-          const source = projected.get(edge.source);
-          const target = projected.get(edge.target);
-          if (!source || !target || !source.visible || !target.visible) return null;
-          if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) return null;
-          const selectedPath = selectedId === edge.source || selectedId === edge.target;
-          const stroke = typeof edge.style?.stroke === 'string' ? edge.style.stroke : '#64748b';
-          const opacity = selectedId && !selectedPath ? 0.26 : Math.min(1, Number(edge.style?.strokeOpacity ?? 0.55) * (source.scale + target.scale) * 0.9);
-          return <line key={edge.id} x1={source.screenX} y1={source.screenY} x2={target.screenX} y2={target.screenY} stroke={stroke} strokeWidth={selectedPath ? 3.5 : Number(edge.style?.strokeWidth ?? 1.5) * Math.max(0.7, (source.scale + target.scale) / 1.6)} strokeOpacity={opacity} strokeLinecap="round" className={edge.animated || selectedPath ? 'mm-spatial-edge mm-spatial-edge--active' : 'mm-spatial-edge'} />;
-        })}
+        {renderedConnections.map((line) => (
+          <g key={line.id} data-connection-id={line.id}>
+            {/* Background-aware halo so lines stay separated from the void glow,
+                Matrix code rain and imported photos. */}
+            {line.casingOpacity > 0 && (
+              <path
+                className="mm-spatial-edge-casing"
+                d={line.path}
+                fill="none"
+                stroke={connection.casingColor}
+                strokeWidth={line.strokeWidth + 2.4}
+                strokeOpacity={line.casingOpacity}
+                strokeLinecap="round"
+              />
+            )}
+            <path
+              className={line.active ? 'mm-spatial-edge mm-spatial-edge--active' : 'mm-spatial-edge'}
+              d={line.path}
+              fill="none"
+              stroke={line.stroke}
+              strokeWidth={line.strokeWidth}
+              strokeOpacity={line.strokeOpacity}
+              strokeLinecap="round"
+            />
+          </g>
+        ))}
       </svg>
 
       <div className="mm-spatial-stars" aria-hidden="true" />

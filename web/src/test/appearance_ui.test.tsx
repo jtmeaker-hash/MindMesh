@@ -4,7 +4,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AppearanceModal } from '../components/modals/AppearanceModal';
 import { AppBackground } from '../components/background/AppBackground';
 import App from '../App';
-import { applyPreset, getDefaultAppearance } from '../services/appearance';
+import {
+  applyPreset,
+  CONNECTION_BRIGHTNESS_RANGE,
+  CONNECTION_CONTRAST_RANGE,
+  getDefaultAppearance,
+} from '../services/appearance';
 import { AppearanceSettings } from '../types/appearance';
 
 const IMAGE_DATA_URL = 'data:image/png;base64,iVBORw0KGgo=';
@@ -142,6 +147,29 @@ describe('AppearanceModal', () => {
     const withLine = lastEmitted(onChange);
     expect(withLine.connectionColors.branch).toBe('#123456');
     expect(withLine.nodeColorMode).toBe('custom');
+  });
+
+  it('exposes separate live connection brightness and contrast sliders', () => {
+    const onChange = renderModal();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Nodes & Lines' }));
+    const brightness = screen.getByLabelText('Connection brightness') as HTMLInputElement;
+    const contrast = screen.getByLabelText('Connection contrast') as HTMLInputElement;
+
+    // Both sliders cover their full supported range.
+    expect(brightness.min).toBe(String(CONNECTION_BRIGHTNESS_RANGE.min));
+    expect(brightness.max).toBe(String(CONNECTION_BRIGHTNESS_RANGE.max));
+    expect(contrast.min).toBe(String(CONNECTION_CONTRAST_RANGE.min));
+    expect(contrast.max).toBe(String(CONNECTION_CONTRAST_RANGE.max));
+
+    fireEvent.change(brightness, { target: { value: '1.6' } });
+    expect(lastEmitted(onChange).connectionBrightness).toBeCloseTo(1.6);
+
+    // Changing contrast leaves the chosen brightness untouched.
+    fireEvent.change(contrast, { target: { value: '0.8' } });
+    const updated = lastEmitted(onChange);
+    expect(updated.connectionContrast).toBeCloseTo(0.8);
+    expect(updated.connectionBrightness).toBeCloseTo(1.6);
   });
 
   it('rejects non-image files when importing a background photo', () => {

@@ -348,6 +348,9 @@ Appearance work includes:
 
 - Custom node colours.
 - Custom branch / connection colours.
+- Separate connection brightness and contrast controls.
+- Collision-aware graph layout that keeps nodes and their labels from overlapping.
+- Zoom-aware level of detail that simplifies node content and connection intensity as the camera pulls back.
 - Aqua styling.
 - Orange styling.
 - Matrix-green styling.

@@ -204,6 +204,7 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
 
       {/* Title */}
       <div
+        className="mm-node-label"
         style={{
           fontSize: 12,
           fontWeight: 600,
@@ -223,6 +224,7 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
       {/* Compact graph summary; full descriptions remain in the detail editor. */}
       {nodeData.summary && (
         <div
+          className="mm-node-detail"
           style={{
             fontSize: 10,
             color: muted,
@@ -239,7 +241,10 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
       )}
 
       {/* Footer Info: Subtasks badge or Due Date */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
+      <div
+        className="mm-node-detail"
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}
+      >
         {hasSubtasks ? (
           <div
             style={{

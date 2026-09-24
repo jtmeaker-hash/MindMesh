@@ -152,6 +152,26 @@ html, body, #root {
   pointer-events: none;
 }
 
+/* ---- Zoom level of detail ---------------------------------------------------
+   A node's size in graph space is fixed and is never inverse-scaled against the
+   camera, so getting closer always makes a node bigger. What the camera does
+   control is how much *content* is drawn inside an already-small node: metadata
+   is dropped first, then labels, so a big graph stays readable when zoomed out
+   without any node becoming a different size than the space it occupies. */
+.mm-spatial-graph[data-lod-level='compact'] .mm-spatial-node:not(.mm-spatial-node--focused) .mm-node-detail {
+  display: none !important;
+}
+
+.mm-spatial-graph[data-lod-level='minimal'] .mm-spatial-node:not(.mm-spatial-node--focused) .mm-node-detail,
+.mm-spatial-graph[data-lod-level='minimal'] .mm-spatial-node:not(.mm-spatial-node--focused) .mm-node-label {
+  display: none !important;
+}
+
+/* Keeps the remaining icon inside a tidier card instead of a large empty box. */
+.mm-spatial-graph[data-lod-level='minimal'] .mm-spatial-node:not(.mm-spatial-node--focused) .mm-node {
+  padding: 3px 5px !important;
+}
+
 .mm-spatial-graph--move { cursor: move; }
 .mm-spatial-graph--move .mm-spatial-node { cursor: grab; }
 

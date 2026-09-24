@@ -1061,3 +1061,96 @@ describe('zoomed-out secondary node visibility', () => {
     expect(node('rem-1')).not.toBeNull();
   });
 });
+
+// ============================================================================
+// Zoomed-out readability: level of detail + connection treatment
+// ============================================================================
+
+describe('zoomed-out readability', () => {
+  it('simplifies what is drawn inside a node as the camera pulls back, without hiding the node', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={[root, category]} edges={[]} appearance={getDefaultAppearance()} surfaceKey="lod" />
+      </ReactFlowProvider>
+    );
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+    expect(graph.getAttribute('data-lod-level')).toBe('full');
+
+    const framedScale = nodeScale(container, 'root');
+
+    // Pulling the camera back drops content detail rather than the node itself.
+    fireEvent.wheel(graph, { deltaY: 4_000 });
+    await waitFor(() => expect(graph.getAttribute('data-lod-level')).not.toBe('full'));
+
+    // The node still exists at its fixed world size, now projected smaller.
+    expect(container.querySelector('[data-node-id="root"]')).not.toBeNull();
+    expect(nodeScale(container, 'root')).toBeLessThan(framedScale);
+  });
+
+  it('never renders a screen-space zoom-compensation transform on a node', () => {
+    // A constant-screen-size node would need a 1/zoom factor. Nothing the graph
+    // renders may contain one, otherwise zooming in would not grow the node.
+    const { container } = renderGraph({ nodes: [root], edges: [], surfaceKey: 'no-compensation' });
+    container.querySelectorAll('[data-node-id]').forEach((element) => {
+      const transform = (element as HTMLElement).style.transform;
+      expect(transform).not.toMatch(/1\s*\/|calc\(|invert/i);
+    });
+  });
+
+  it('draws a background-separating halo only once connection contrast is raised', () => {
+    const base = getDefaultAppearance();
+    const flat = render(
+      <ReactFlowProvider>
+        <SpatialGraph
+          nodes={mesh}
+          edges={edges}
+          appearance={{ ...base, connectionContrast: 0 }}
+          surfaceKey="contrast-off"
+        />
+      </ReactFlowProvider>
+    );
+    expect(flat.container.querySelector('.mm-spatial-edge-casing')).toBeNull();
+    flat.unmount();
+
+    const punchy = render(
+      <ReactFlowProvider>
+        <SpatialGraph
+          nodes={mesh}
+          edges={edges}
+          appearance={{ ...base, connectionContrast: 0.9 }}
+          surfaceKey="contrast-on"
+        />
+      </ReactFlowProvider>
+    );
+    expect(punchy.container.querySelector('.mm-spatial-edge-casing')).not.toBeNull();
+  });
+
+  it('brightens every rendered connection live as the brightness slider rises', () => {
+    const base = getDefaultAppearance();
+    const opacityOf = (container: HTMLElement) => {
+      const path = container.querySelector('.mm-spatial-edge') as SVGPathElement | null;
+      return path ? Number(path.getAttribute('stroke-opacity')) : Number.NaN;
+    };
+
+    const dim = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={mesh} edges={edges} appearance={{ ...base, connectionBrightness: 0.2 }} surfaceKey="dim" />
+      </ReactFlowProvider>
+    );
+    const dimOpacity = opacityOf(dim.container);
+    dim.unmount();
+
+    const bright = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={mesh} edges={edges} appearance={{ ...base, connectionBrightness: 2 }} surfaceKey="bright" />
+      </ReactFlowProvider>
+    );
+    const brightOpacity = opacityOf(bright.container);
+
+    // Neither end of the range removes a relationship entirely.
+    expect(dimOpacity).toBeGreaterThan(0);
+    expect(brightOpacity).toBeGreaterThan(dimOpacity);
+  });
+});
