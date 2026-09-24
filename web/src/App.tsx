@@ -41,7 +41,10 @@ import {
   AppearanceSettings,
   AppNotificationSettings,
   NotificationHistoryEntry,
+  DirectDebit,
 } from './types';
+import { SmartEngineSettings } from './types/smartEngine';
+import { DiagnosticReport } from './types/diagnostics';
 import { getChromeTheme } from './services/appearance';
 import {
   configureNotificationEngine,
@@ -51,7 +54,7 @@ import {
   attachNativeBridgeHandlers,
   subscribeNotificationEngine,
 } from './services/notifications';
-import { runStartupSelfCheck } from './services/diagnostics';
+import { runDiagnostics, runStartupSelfCheck } from './services/diagnostics';
 import { OPEN_DIAGNOSTICS_FLAG, recordStartup } from './services/diagnosticsStore';
 import { logger } from './services/logger';
 import {
@@ -81,6 +84,7 @@ import {
   saveNotificationHistory,
   loadAllData,
   loadRoutines,
+  loadSmartEngineSettings,
 } from './utils/storage';
 import { generateCompletedCategoryMesh } from './utils/layout';
 import { generateNestedActiveMesh, generateNestedCompletedOverviewMesh } from './utils/nestedLayout';
@@ -99,10 +103,11 @@ import { ReminderModal } from './components/modals/ReminderModal';
 import { CategoryModal } from './components/modals/CategoryModal';
 import { CategoryActionsSheet } from './components/modals/CategoryActionsSheet';
 import { QuickAddModal } from './components/modals/QuickAddModal';
-import { SettingsBackupModal } from './components/modals/SettingsBackupModal';
+import { SettingsBackupModal, requestSettingsTab } from './components/modals/SettingsBackupModal';
 import { AppearanceModal } from './components/modals/AppearanceModal';
 import { NotificationsModal } from './components/notifications/NotificationsModal';
 import { DiagnosticsModal } from './components/diagnostics/DiagnosticsModal';
+import { SmartAssistantModal } from './components/modals/SmartAssistantModal';
 import { AppBackground } from './components/background/AppBackground';
 
 import { AppNavigation } from './components/navigation/AppNavigation';
@@ -162,6 +167,10 @@ function MindMeshFlow() {
   const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
   const [notificationsModalOpen, setNotificationsModalOpen] = useState(false);
   const [diagnosticsModalOpen, setDiagnosticsModalOpen] = useState(false);
+  const [assistantModalOpen, setAssistantModalOpen] = useState(false);
+  const [smartEngineSettings, setSmartEngineSettings] = useState<SmartEngineSettings>(() => loadSmartEngineSettings());
+  const [assistantDiagnostics, setAssistantDiagnostics] = useState<DiagnosticReport | undefined>();
+
   const [positionMenu, setPositionMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [startupNotice, setStartupNotice] = useState<string | null>(null);
   // Bumped only when the notification environment changes (never on every sweep),
@@ -725,6 +734,21 @@ function MindMeshFlow() {
     });
   };
 
+  // Smart Assistant direct-debit write. It reuses the exact same money-state
+  // update MoneyModule uses and only runs after the user confirms a proposal.
+  const handleAssistantDirectDebit = useCallback((debit: DirectDebit, linkedReminder?: Reminder) => {
+    setMoneyState((prev) => {
+      const exists = prev.directDebits.some((item) => item.id === debit.id);
+      return {
+        ...prev,
+        directDebits: exists
+          ? prev.directDebits.map((item) => (item.id === debit.id ? debit : item))
+          : [debit, ...prev.directDebits],
+      };
+    });
+    if (linkedReminder) handleSaveReminder(linkedReminder);
+  }, []);
+
   const handleDeleteReminder = (remId: string) => {
     logger.info('Reminders', 'Reminder deleted', { reminderId: remId });
     // Cancel every notification still scheduled for this reminder.
@@ -773,6 +797,18 @@ function MindMeshFlow() {
     }
   };
 
+
+  // Opens the local Smart Assistant. Settings and a read-only diagnostics report
+  // are refreshed first so the surface always reflects real, current state.
+  // ENTRY: options menu -> Smart Assistant.
+  const openSmartAssistant = useCallback(() => {
+    setMenuOpen(false);
+    setSmartEngineSettings(loadSmartEngineSettings());
+    setAssistantModalOpen(true);
+    runDiagnostics('quick')
+      .then((report) => setAssistantDiagnostics(report))
+      .catch(() => undefined);
+  }, []);
 
   // Reload full data after restore or complete reset
   const handleReloadAllPersistedState = useCallback(() => {
@@ -1079,6 +1115,30 @@ function MindMeshFlow() {
                 }}
               >
                 <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
+                  SMART ASSISTANCE
+                </div>
+                <button
+                  type="button"
+                  onClick={openSmartAssistant}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    color: '#a5b4fc',
+                    fontSize: 13,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Sparkles size={15} color="#818cf8" />
+                  <span>Smart Assistant</span>
+                </button>
+                <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
                   LAYOUT & PREFERENCES
                 </div>
                 <button
@@ -1156,6 +1216,7 @@ function MindMeshFlow() {
                   type="button"
                   onClick={() => {
                     setMenuOpen(false);
+                    requestSettingsTab('backup');
                     setBackupModalOpen(true);
                   }}
                   style={{
@@ -1244,6 +1305,28 @@ function MindMeshFlow() {
           </div>
         </div>
       </header>
+
+      {/* SMART ASSISTANT (local, preview-only; writes only after confirmation) */}
+      <SmartAssistantModal
+        isOpen={assistantModalOpen}
+        onClose={() => setAssistantModalOpen(false)}
+        settings={smartEngineSettings}
+        categories={categories}
+        reminders={reminders}
+        moneyState={moneyState}
+        contacts={contacts}
+        diagnosticsReport={assistantDiagnostics}
+        handlers={{
+          saveReminder: handleSaveReminder,
+          saveCategory: handleSaveCategory,
+          saveDirectDebit: handleAssistantDirectDebit,
+        }}
+        onOpenSettings={() => {
+          setAssistantModalOpen(false);
+          requestSettingsTab('smart');
+          setBackupModalOpen(true);
+        }}
+      />
 
       {/* MAIN CONTENT AREA ACCORDING TO SELECTED TAB */}
       {mainNavTab === 'reminders' && (

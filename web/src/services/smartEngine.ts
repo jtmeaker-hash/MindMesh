@@ -10,7 +10,10 @@ import {
   createIntelligentReminderProposal,
   createSubcategoryProposal,
   enhanceReminderLocally,
+  findCategoryMention,
   ReminderProposalContext,
+  ReminderScopeSummary,
+  summarizeReminderScope,
 } from './reminderIntelligence';
 import { analyzeDiagnostics, DiagnosticsAnalytics } from './smartEngineDiagnostics';
 import { classifyMoneyEntry, createBillProposal, MoneyEntryClassification, summarizeMoney } from './moneyIntelligence';
@@ -127,6 +130,7 @@ export class SmartEngine {
     if (!normalized) return this.unknown(operation, 'No input was provided; nothing can be safely inferred.');
 
     if (operation === 'assistant-command') return this.routeCommand(normalized);
+    if (operation === 'graph-summary') return this.graphSummaryResult(operation, normalized);
     if (operation === 'dashboard-summary') return this.dashboardSummaryResult(operation);
     if (operation === 'match-contact') return this.matchContactResult(operation, normalized);
     if (operation === 'diagnostics-suggestion') return this.diagnosticsSuggestionResult(operation);
@@ -157,6 +161,7 @@ export class SmartEngine {
       if (!this.isFeatureEnabled('moneySmartFeatures')) return this.unknown(operation, 'Money smart features are turned off in Smart Assistance settings.');
       return this.moneySummaryResult(operation);
     }
+    if (detected.intent === 'summarize-reminders') return this.graphSummaryResult(operation, normalized);
     if (detected.intent === 'query-dashboard') return this.dashboardSummaryResult(operation);
     if (detected.intent === 'search-contact') return this.matchContactResult(operation, normalized);
     if (detected.intent === 'diagnostics-help') return this.diagnosticsSuggestionResult(operation);
@@ -190,6 +195,7 @@ export class SmartEngine {
       if (!this.isFeatureEnabled('moneySmartFeatures')) return this.unknown('assistant-command', 'Money smart features are turned off in Smart Assistance settings.');
       return this.proposalResult('assistant-command', this.buildBillProposal(input));
     }
+    if (detected.intent === 'summarize-reminders') return this.graphSummaryResult('assistant-command', input);
     if (detected.intent === 'query-money') {
       if (!this.isFeatureEnabled('moneySmartFeatures')) return this.unknown('assistant-command', 'Money smart features are turned off in Smart Assistance settings.');
       return this.moneySummaryResult('assistant-command');
@@ -333,6 +339,55 @@ export class SmartEngine {
       ambiguities: [],
       missingFields: [],
       message: analytics.text,
+    };
+  }
+
+  /**
+   * Structured reminder/graph summary for the whole network or one named branch.
+   * It is read-only, and a category the user named but that does not exist is
+   * reported back instead of being silently answered with every reminder.
+   */
+  private graphSummaryResult(operation: SmartEngineOperation, input: string): SmartEngineResult<ReminderScopeSummary> {
+    if (!this.isFeatureEnabled('graphSummaries')) {
+      return this.unknown(operation, 'Reminder and graph summaries are turned off in Smart Assistance settings.');
+    }
+    const categories = this.contextProvider.getCategories() as Category[];
+    const mention = findCategoryMention(input, categories);
+    if (!mention.category && (mention.name || mention.alternatives.length > 1)) {
+      const ambiguous = mention.alternatives.length > 1;
+      return {
+        status: 'needs-confirmation',
+        operation,
+        confidence: { score: 0.45, reason: 'ambiguous' },
+        ambiguities: [{
+          field: 'categoryId',
+          message: ambiguous
+            ? `More than one of your categories matches “${mention.name}”; choose the branch to summarise.`
+            : `No category named “${mention.name}” exists; choose one of your categories to summarise.`,
+          options: (ambiguous ? mention.alternatives : categories.filter((category) => !category.parentCategoryId))
+            .map((category) => category.name),
+        }],
+        missingFields: [],
+        message: ambiguous
+          ? `More than one category matches “${mention.name}”, so nothing was summarised.`
+          : `No category named “${mention.name}” was found, so nothing was summarised.`,
+      };
+    }
+
+    const summary = summarizeReminderScope(this.reminders, categories, {
+      categoryId: mention.category?.id,
+      referenceDate: this.referenceDate,
+    });
+    return {
+      status: summary.totals.reminders > 0 ? 'ok' : 'needs-confirmation',
+      operation,
+      value: summary,
+      confidence: { score: summary.totals.reminders > 0 ? 0.96 : 0.6, reason: 'derived' },
+      ambiguities: [],
+      missingFields: summary.totals.reminders > 0
+        ? []
+        : [{ field: 'reminders', label: 'Reminders in scope', required: true }],
+      message: summary.text,
     };
   }
 

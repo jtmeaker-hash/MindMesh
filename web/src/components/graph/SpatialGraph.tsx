@@ -26,7 +26,7 @@ interface SpatialGraphProps {
 
 type Point3 = { x: number; y: number; z: number };
 export type SpatialCamera = { target: Point3; yaw: number; pitch: number; distance: number };
-type ProjectedPoint = Point3 & { screenX: number; screenY: number; scale: number; depth: number };
+type ProjectedPoint = Point3 & { screenX: number; screenY: number; scale: number; depth: number; visible: boolean };
 type NodeComponent = React.ComponentType<Record<string, unknown>>;
 
 const NODE_COMPONENTS: Record<string, NodeComponent> = {
@@ -83,9 +83,10 @@ const NODE_HINT_STORAGE_KEY = 'mindmesh_spatial_node_hint_seen';
 
 const SPATIAL_GESTURES: Array<{ glyph: string; label: string; hint: string }> = [
   { glyph: '\u27f3', label: 'Drag', hint: 'Rotate around the network' },
-  { glyph: '\u2922', label: 'Pinch', hint: 'Zoom, relative to the focus point' },
+  { glyph: '\u2922', label: 'Pinch', hint: 'Zoom in and out — closer nodes grow, distant ones shrink' },
+  { glyph: '\u26f6', label: 'Node size', hint: 'Nodes keep their real size in the mesh — getting closer makes them fill more of the view' },
   { glyph: '\u2725', label: 'Two-finger drag', hint: 'Move through the graph' },
-  { glyph: '\u25c9', label: 'Tap node', hint: 'Focus that node' },
+  { glyph: '\u25c9', label: 'Tap node', hint: 'Focus that node, then watch it grow as the camera arrives' },
   { glyph: '\u22ee', label: 'Tap focused node again', hint: 'Open its options' },
   { glyph: '\u2302', label: 'Home', hint: 'Return to the centre of the graph' },
 ];
@@ -105,6 +106,14 @@ function writeStoredFlag(key: string): void {
     // Non-fatal: the hint simply reappears next session.
   }
 }
+
+/**
+ * World units in front of the camera that are still drawn. This is a real near
+ * plane: nodes behind the camera are culled instead of being projected at a
+ * fixed minimum depth, which would draw them as an enormous, meaningless smear
+ * across the screen.
+ */
+const NEAR_PLANE = 60;
 
 function depthForNode(node: Node<MeshNodeData>, index: number): number {
   const base = node.data.type === 'root' ? 0 : node.data.type === 'category' ? 105 : node.data.type === 'reminder' ? 235 : 350;
@@ -128,9 +137,17 @@ export function projectSpatialPoint(point: Point3, camera: SpatialCamera, width:
   const sinPitch = Math.sin(camera.pitch);
   const pitchY = dy * cosPitch - yawZ * sinPitch;
   const cameraZ = dy * sinPitch + yawZ * cosPitch;
-  const depth = Math.max(30, camera.distance - cameraZ);
+  // Distance in front of the camera. Everything the camera can actually see is
+  // here; anything at or behind the near plane is behind the lens.
+  const forward = camera.distance - cameraZ;
+  const visible = forward > NEAR_PLANE;
+  const depth = visible ? forward : NEAR_PLANE;
+  // The projection is the whole story about size: a node's on-screen size is its
+  // fixed world size divided by its distance from the camera. There is no
+  // screen-space correction, so moving the camera closer always makes a node
+  // bigger and pulling back always makes it smaller.
   const scale = focal / depth;
-  return { ...point, screenX: width / 2 + yawX * scale, screenY: height / 2 + pitchY * scale, scale, depth };
+  return { ...point, screenX: width / 2 + yawX * scale, screenY: height / 2 + pitchY * scale, scale, depth, visible };
 }
 
 /**
@@ -1254,16 +1271,16 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
         setSelectedId(null);
         onEmptyClick?.();
       }}
-      style={{ '--mm-spatial-focal': `${focal}px` } as React.CSSProperties}
     >
       <svg className="mm-spatial-connections" viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="none" aria-hidden="true">
         {edges.map((edge) => {
           const source = projected.get(edge.source);
           const target = projected.get(edge.target);
-          if (!source || !target || !visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) return null;
+          if (!source || !target || !source.visible || !target.visible) return null;
+          if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) return null;
           const selectedPath = selectedId === edge.source || selectedId === edge.target;
           const stroke = typeof edge.style?.stroke === 'string' ? edge.style.stroke : '#64748b';
-          const opacity = selectedId && !selectedPath ? 0.26 : Number(edge.style?.strokeOpacity ?? 0.55) * (source.scale + target.scale) * 0.9;
+          const opacity = selectedId && !selectedPath ? 0.26 : Math.min(1, Number(edge.style?.strokeOpacity ?? 0.55) * (source.scale + target.scale) * 0.9);
           return <line key={edge.id} x1={source.screenX} y1={source.screenY} x2={target.screenX} y2={target.screenY} stroke={stroke} strokeWidth={selectedPath ? 3.5 : Number(edge.style?.strokeWidth ?? 1.5) * Math.max(0.7, (source.scale + target.scale) / 1.6)} strokeOpacity={opacity} strokeLinecap="round" className={edge.animated || selectedPath ? 'mm-spatial-edge mm-spatial-edge--active' : 'mm-spatial-edge'} />;
         })}
       </svg>
@@ -1272,11 +1289,16 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
       {renderedNodes.map((node) => {
         const point = projected.get(node.id);
         const Component = NODE_COMPONENTS[node.type || ''];
-        if (!point || !Component) return null;
+        if (!point || !point.visible || !Component) return null;
         const isFocused = selectedId === node.id;
+        // The node keeps its fixed size in graph space and is only *projected*:
+        // zooming the camera in brings it closer and visibly larger, zooming out
+        // makes it smaller. No inverse-zoom / constant-screen-size compensation
+        // is applied to the node itself. Only the selection highlight (and the
+        // card's own labels) may scale a little, and never against the camera.
+        const nodeScale = point.scale * (isFocused ? 1.06 : 1); // world-space size
         // The focused node stays obviously highlighted without burying the rest
         // of the network: everything else keeps enough opacity for context.
-        const visibleScale = Math.max(0.42, Math.min(1.28, point.scale * 1.55)) * (isFocused ? 1.06 : 1);
         const isDimmed = Boolean(selectedId && !isFocused && node.data.type !== 'root');
         return (
           <div
@@ -1343,7 +1365,7 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
               event.preventDefault();
               event.stopPropagation();
             }}
-            style={{ left: point.screenX, top: point.screenY, zIndex: Math.round(2000 - point.depth), opacity: isDimmed ? 0.45 : Math.max(0.62, Math.min(1, 1.15 - point.depth / 2100)), filter: point.depth > 1250 ? 'saturate(0.72)' : undefined, transform: `translate(-50%, -50%) scale(${visibleScale})` }}
+            style={{ left: point.screenX, top: point.screenY, zIndex: Math.round(2000 - point.depth), opacity: isDimmed ? 0.45 : Math.max(0.62, Math.min(1, 1.15 - point.depth / 2100)), filter: point.depth > 1250 ? 'saturate(0.72)' : undefined, transform: `translate(-50%, -50%) scale(${nodeScale})` }}
           >
             <Component id={node.id} type={node.type} data={node.data} selected={isFocused} dragging={activeDrag.mode === 'NODE_DRAG' && activeDrag.nodeId === node.id} zIndex={node.zIndex} xPos={node.position.x} yPos={node.position.y} sourcePosition={Position.Bottom} targetPosition={Position.Top} isConnectable={false} />
           </div>

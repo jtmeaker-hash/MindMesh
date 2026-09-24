@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   X,
   Download,
@@ -111,11 +111,34 @@ const LayoutRecoveryCard: React.FC<LayoutRecoveryCardProps> = ({
   </div>
 );
 
+export type SettingsTab = 'backup' | 'restore' | 'smart' | 'reset';
+
+/**
+ * One-shot request for the tab that should be focused the next time this modal
+ * opens. Callers use it right before they flip `isOpen` to true, so a surface
+ * such as the Smart Assistant can land the user on its own settings tab while
+ * every other entry point (options menu, diagnostics) keeps the default.
+ * The request is consumed on open, so it never leaks into a later opening.
+ */
+let pendingInitialTab: SettingsTab | null = null;
+
+export function requestSettingsTab(tab: SettingsTab): void {
+  pendingInitialTab = tab;
+}
+
+function consumeRequestedTab(): SettingsTab | null {
+  const requested = pendingInitialTab;
+  pendingInitialTab = null;
+  return requested;
+}
+
 interface SettingsBackupModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRestoreComplete: () => void;
   onResetComplete: () => void;
+  /** Optional tab to focus when the modal is opened (defaults to the backup tab). */
+  initialTab?: SettingsTab;
 }
 
 export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
@@ -123,8 +146,14 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
   onClose,
   onRestoreComplete,
   onResetComplete,
+  initialTab,
 }) => {
-  const [activeTab, setActiveTab] = useState<'backup' | 'restore' | 'smart' | 'reset'>('backup');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'backup');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setActiveTab(initialTab ?? consumeRequestedTab() ?? 'backup');
+  }, [isOpen, initialTab]);
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState<BackupExportResult | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);

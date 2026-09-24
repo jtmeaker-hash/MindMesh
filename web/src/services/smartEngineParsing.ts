@@ -14,6 +14,7 @@ export type SmartIntent =
   | 'create-category'
   | 'create-subcategory'
   | 'create-direct-debit'
+  | 'summarize-reminders'
   | 'query-reminders'
   | 'query-dashboard'
   | 'query-money'
@@ -69,12 +70,20 @@ export function detectIntent(input: string): IntentResult {
     ['create-direct-debit', /\b(?:direct debit|recurring bill|bill|subscription)\b|\bevery\s+(?:month|week|fortnight|quarter|year)\b.*\$?\d/i, 0.94, 'bill or recurring-payment wording'],
     ['create-reminder', /\b(?:remind me|reminder|remember to|todo|to-do|task)\b/i, 0.95, 'explicit reminder wording'],
     ['edit-reminder', /\b(?:edit|change|update|rename|move|reschedule|make)\b.*\b(?:reminder|task|title|due|date|time)\b/i, 1, 'edit wording'],
-    ['create-subcategory', /\b(?:create|add|new)\b.*\bsubcategor(?:y|ies)\b/i, 0.94, 'explicit subcategory wording'],
+    ['create-subcategory', /\b(?:create|add|new)\b.*\bsubcategor(?:y|ies)\b|\badd\b.*\bunder\b/i, 0.94, 'explicit subcategory wording'],
     ['create-category', /\b(?:create|add|new)\b.*\bcategory\b/i, 0.94, 'explicit category wording'],
-    ['query-dashboard', /\b(?:dashboard|statistics|stats|completion rate|how am i doing|summary of my tasks)\b/i, 0.9, 'dashboard/statistics wording'],
+    ['query-dashboard', /\b(?:dashboard|statistics|stats|completion rate|how am i doing|how am i going|how am i tracking|how(?:'s| is) it going|summary of my tasks)\b/i, 0.9, 'dashboard/statistics wording'],
+    // Reading the network back to the user. It outranks the plain reminder pattern
+    // so "summarise reminder rem-1" is a question, never a new reminder, while the
+    // "summary of" branch deliberately excludes "tasks" so "summary of my tasks"
+    // stays on the existing dashboard route.
+    ['summarize-reminders', /\b(?:summari[sz]e|overview of)\b.*\b(?:reminders?|tasks?|nodes?|graph|mesh|network|branch(?:es)?|categor(?:y|ies))\b|\bsummary of\b.*\b(?:reminders?|nodes?|graph|mesh|network|branch(?:es)?|categor(?:y|ies))\b/i, 0.96, 'reminder/graph summary wording'],
     ['query-money', /\b(?:money|finance|financial|bills?|pay cycle|payday|remaining|spend|income)\b/i, 0.86, 'money wording'],
     ['search-contact', /\b(?:contact|phone number|call|message|text)\b/i, 0.82, 'contact wording'],
     ['diagnostics-help', /\b(?:diagnostic|diagnostics|notification problem|help|how do i fix)\b/i, 0.82, 'help or diagnostics wording'],
+    // Notification troubleshooting likely mentions "reminder"/"notification" too, so it must
+    // outrank the plain reminder pattern instead of being read as a new reminder.
+    ['diagnostics-help', /\b(?:why|how come)\b.*\b(?:notification|reminder|alert)s?\b.*\b(?:work|working|fail|failing|broken|blocked|not)\b|\bnotifications?\b.*\b(?:not working|failing|broken|blocked)\b/i, 1, 'notification troubleshooting wording'],
     ['query-reminders', /\b(?:what(?:'s| is) due|upcoming reminders|show reminders|list reminders|overdue)\b/i, 0.88, 'reminder query wording'],
   ];
   const candidates = patterns.filter(([, pattern]) => pattern.test(text)).map(([intent, , score, reason]) => ({ intent, score, reason }));

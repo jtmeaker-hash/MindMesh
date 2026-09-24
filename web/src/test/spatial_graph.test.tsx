@@ -96,6 +96,20 @@ function renderGraph(options: {
 const attr = (element: HTMLElement, name: string) => Number(element.getAttribute(name));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The on-screen scale the graph applies to a node's fixed world-space box. The
+ * node is never resized to compensate for the camera, so this number is the
+ * projected perspective size of a constant-size object.
+ */
+function nodeScale(container: HTMLElement, nodeId: string): number {
+  const element = container.querySelector(`[data-node-id="${nodeId}"]`) as HTMLElement | null;
+  if (!element) return Number.NaN;
+  const match = /scale\(\s*([-\d.]+)\s*\)/.exec(element.style.transform);
+  return match ? Number(match[1]) : Number.NaN;
+}
+
+const relativeDifference = (a: number, b: number) => Math.abs(a - b) / Math.abs(b);
+
 /** Drags across the empty graph with one finger (touch). */
 function touchDrag(element: HTMLElement, options: { from?: [number, number]; to?: [number, number]; id?: number } = {}) {
   const [fromX, fromY] = options.from ?? [100, 100];
@@ -325,6 +339,77 @@ describe('screen-to-world node dragging', () => {
 });
 
 // ============================================================================
+// World-space node size (the camera moves, the nodes do not)
+// ============================================================================
+
+describe('fixed world-space node scaling', () => {
+  it('draws a node at its true projected size: closer looks larger, further looks smaller', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = renderGraph({ nodes: [root], edges: [], surfaceKey: 'world-size' });
+    const graph = getByTestId('spatial-graph');
+
+    // Wait for the opening fit to replace the pre-measurement default camera.
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+    const framed = { scale: nodeScale(container, 'root'), distance: attr(graph, 'data-camera-distance') };
+    expect(framed.scale).toBeGreaterThan(0);
+
+    // Pull the camera back: the node keeps its size in graph space, so it must
+    // cover less of the screen.
+    fireEvent.wheel(graph, { deltaY: 800 });
+    await waitFor(() => expect(nodeScale(container, 'root')).toBeLessThan(framed.scale));
+    const far = { scale: nodeScale(container, 'root'), distance: attr(graph, 'data-camera-distance') };
+
+    // A fixed world size means on-screen size is exactly focal / distance, so a
+    // camera 3x further away renders the node 3x smaller. Any inverse camera
+    // scaling would break this relationship.
+    expect(relativeDifference(framed.distance / far.distance, far.scale / framed.scale)).toBeLessThan(0.02);
+
+    // Move back in: the node visibly grows again.
+    fireEvent.wheel(graph, { deltaY: -400 });
+    await waitFor(() => expect(nodeScale(container, 'root')).toBeGreaterThan(far.scale * 1.5));
+  });
+
+  it('never caps a node to a constant screen size as the camera moves in close', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = renderGraph({ nodes: [root], edges: [], surfaceKey: 'no-screen-size-cap' });
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+
+    const framed = nodeScale(container, 'root');
+    fireEvent.wheel(graph, { deltaY: -600 });
+    await waitFor(() => expect(nodeScale(container, 'root')).toBeGreaterThan(framed));
+    const mid = nodeScale(container, 'root');
+
+    fireEvent.wheel(graph, { deltaY: -900 });
+    await waitFor(() => expect(nodeScale(container, 'root')).toBeGreaterThan(mid));
+
+    // A zoom-compensated node would stop growing at its constant-screen-size
+    // ceiling; a real one keeps filling the view as the camera arrives.
+    expect(nodeScale(container, 'root')).toBeGreaterThan(2);
+    expect(attr(graph, 'data-camera-distance')).toBeGreaterThanOrEqual(attr(graph, 'data-camera-min-distance'));
+  });
+
+  it('culls a node that is behind the camera instead of projecting it as a smear', () => {
+    const cam = camera({ distance: 400, yaw: 0, pitch: 0 });
+    const width = 900;
+    const height = 700;
+    const focal = 700;
+
+    // 400 units of camera distance plus 200 units of travel toward the lens.
+    const inFront = projectSpatialPoint({ x: 0, y: 0, z: -200 }, cam, width, height, focal);
+    expect(inFront.visible).toBe(true);
+    expect(inFront.scale).toBeCloseTo(focal / 600, 6);
+
+    const behind = projectSpatialPoint({ x: 0, y: 0, z: 900 }, cam, width, height, focal);
+    expect(behind.visible).toBe(false);
+    // Culled nodes still report finite numbers so nothing downstream is NaN.
+    expect(Number.isFinite(behind.scale)).toBe(true);
+    expect(Number.isFinite(behind.screenX)).toBe(true);
+    expect(Number.isFinite(behind.screenY)).toBe(true);
+  });
+});
+
+// ============================================================================
 // Touch camera behaviour
 // ============================================================================
 
@@ -544,6 +629,22 @@ describe('two-tap node navigation', () => {
 
     fireEvent.click(node());
     await waitFor(() => expect(getByTestId('opened').textContent).toBe('rem-1'));
+  });
+
+  it('makes the focused node visibly larger as the camera travels to it', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = render(<FocusHarness nodes={[root, reminder, subtask]} edges={[edges[2]]} />);
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+    const before = nodeScale(container, 'rem-1');
+
+    fireEvent.click(container.querySelector('[data-node-id="rem-1"]') as HTMLElement);
+    await waitFor(() => expect(attr(graph, 'data-camera-target-x')).toBeCloseTo(420, 1), { timeout: 3000 });
+
+    // Arriving at the node grows it on screen, and the camera stops at a
+    // viewing distance instead of travelling through it.
+    expect(nodeScale(container, 'rem-1')).toBeGreaterThan(before);
+    expect(attr(graph, 'data-camera-distance')).toBeGreaterThanOrEqual(attr(graph, 'data-camera-min-distance'));
   });
 
   it('never opens options for a different node that was only focused', async () => {
@@ -855,8 +956,14 @@ describe('on-canvas gesture guide', () => {
     expect(legend.textContent).toContain('Move through the graph');
     expect(legend.textContent).toContain('Tap focused node again');
     expect(legend.textContent).toContain('Return to the centre of the graph');
+    // The guide describes the corrected camera: nodes have a fixed size in the
+    // mesh, so getting closer makes them larger instead of staying screen-sized.
+    expect(legend.textContent).toContain('closer nodes grow, distant ones shrink');
+    expect(legend.textContent).toContain('watch it grow as the camera arrives');
+    expect(legend.textContent).toContain('Nodes keep their real size in the mesh');
     // No obsolete control advice survives.
     expect(legend.textContent).not.toMatch(/orbit the network|drag to orbit|jump to node/i);
+    expect(legend.textContent).not.toMatch(/same size on screen|stay(s)? the same size|fixed screen size/i);
   });
 
   it('stays dismissed, records that choice, and reopens from the HUD', () => {
@@ -947,7 +1054,9 @@ describe('zoomed-out secondary node visibility', () => {
     expect(node('root')).not.toBeNull();
     expect(node('cat-1')).not.toBeNull();
 
-    fireEvent.wheel(graph, { deltaY: -30_000 });
+    // Zooming back in restores the hidden nodes exactly (the camera stays in
+    // front of them, so they project into the view instead of being culled).
+    fireEvent.wheel(graph, { deltaY: -4_000 });
     await waitFor(() => expect(graph.getAttribute('data-reminders-hidden')).toBe('false'));
     expect(node('rem-1')).not.toBeNull();
   });

@@ -101,6 +101,36 @@ The Android layer contains a dedicated native notification bridge and scheduler 
 
 ---
 
+## Smart Assistance (local Smart Engine)
+
+MindMesh has a built-in Smart Engine that provides the app's AI-like assistance without an external AI service.
+
+It is deliberately **not** a generative model. It is a deterministic, rule-based interpreter that:
+
+- Runs entirely on-device and works offline.
+- Needs no API key and makes no network request for interpretation.
+- Never writes anything on its own: every change is proposed first, shown as a preview, and applied only after the user confirms it.
+- Asks for missing or ambiguous details instead of guessing, and refuses to write a low-confidence proposal.
+- Never silently alters reminders, contacts, financial entries, categories, settings or notifications.
+
+Smart Engine behaviour is unit-tested and separate from the UI so it stays predictable, and its preferences are stored and backed up with the rest of the app state.
+
+What it supports today:
+
+- Reminder title/description enhancement for the existing enhancement UI.
+- Reminder summaries and structured graph-view summary facts.
+- Natural-language reminder creation and editing proposals.
+- Date, relative-date and recurrence parsing (weekly, fortnightly, monthly, quarterly, yearly and every-X).
+- Category, subcategory and subtask suggestions.
+- Category and subcategory creation proposals.
+- Bill/direct-debit creation proposals, money-entry classification and bill-category suggestion.
+- Pay-cycle, upcoming-bills and remaining-money calculations from stored money data.
+- Dashboard, contact and diagnostics answers built only from data already on the device.
+
+Assistance is reachable from the header menu under **Smart Assistance**, where it can be previewed, confirmed or cancelled. Each capability has its own toggle in **Settings → Smart**, and confirmation for writes is always required and cannot be turned off.
+
+---
+
 ## Routine Builder
 
 MindMesh includes a dedicated Routine system for repeatable workflows that are more structured than a single reminder.
@@ -252,6 +282,7 @@ The current backup format stores the wider application state, including:
 - Preferences.
 - Diagnostics preferences.
 - Statistics.
+- Smart Assistance preferences.
 
 Current backup format version: **3**
 
@@ -600,6 +631,7 @@ Recent development has focused heavily on:
 - General expenses.
 - Dashboard statistics.
 - Visual customisation and 3D-inspired presentation.
+- The local Smart Engine and Smart Assistance surface.
 - Preserving compatibility while the storage schema grows.
 
 Bug reports are most useful when they include:

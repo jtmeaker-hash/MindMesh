@@ -111,6 +111,132 @@ export function toReminderGraphSummaryFacts(reminder: Reminder, categories: read
   };
 }
 
+export interface CategoryMention {
+  /** The category name that appears in the text, if any. */
+  name?: string;
+  category?: Category;
+  /** Other equally specific categories, so the caller can ask instead of guessing. */
+  alternatives: Category[];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const SCOPE_PHRASE = /\b(?:summari[sz]e|summary of|overview of)\s+(.*)$/i;
+const SCOPE_NOUN = /\b(?:reminders?|tasks?|nodes?|graph|mesh|network|branch(?:es)?|categor(?:y|ies))\b/i;
+
+/**
+ * Finds a category the user actually named. Matching is whole-word so a category
+ * called "Work" is never found inside "homework", and the longest name wins when
+ * one name contains another ("Car" vs "Car Insurance").
+ *
+ * When nothing in the text matches a stored category, the words that were placed
+ * before the scope noun are returned as an unmatched `name` ("summarise my Boat
+ * branch" -> "Boat") so the caller can say the category does not exist instead of
+ * silently answering with everything.
+ */
+export function findCategoryMention(input: string, categories: readonly Category[]): CategoryMention {
+  const matches = categories
+    .filter((category) => category.name.trim() && new RegExp(`\\b${escapeRegExp(category.name.trim())}\\b`, 'i').test(input))
+    .sort((a, b) => b.name.length - a.name.length);
+  if (matches.length > 0) {
+    const longest = matches[0].name.length;
+    const tied = matches.filter((category) => category.name.length === longest);
+    if (tied.length > 1) return { name: matches[0].name, alternatives: tied };
+    return { name: matches[0].name, category: matches[0], alternatives: matches.slice(1) };
+  }
+
+  const phrase = input.match(SCOPE_PHRASE)?.[1] ?? '';
+  const noun = phrase.match(SCOPE_NOUN);
+  if (!noun?.index) return { alternatives: [] };
+  const candidate = normalize(
+    phrase.slice(0, noun.index).replace(/\b(?:my|our|the|all|of|this|that|these|those|a|an)\b/gi, ' ').replace(/[^a-z0-9 &'-]+/gi, ' ')
+  );
+  return candidate ? { name: titleCase(candidate), alternatives: [] } : { alternatives: [] };
+}
+
+/** Structured, deterministic summary of the reminders inside one branch. */
+export interface ReminderScopeSummary {
+  scope: { categoryId?: string; categoryName?: string; label: string };
+  totals: {
+    reminders: number;
+    active: number;
+    completed: number;
+    overdue: number;
+    subtasks: number;
+    completedSubtasks: number;
+  };
+  nextDue?: { date: string; title: string };
+  /** One entry per reminder, ready for the graph view. Ordered by due date then title. */
+  nodes: ReminderGraphSummaryFacts[];
+  text: string;
+}
+
+export interface ReminderScopeRequest {
+  /** Restrict to this category and its descendants. */
+  categoryId?: string;
+  referenceDate?: Date;
+}
+
+function descendantIds(categoryId: string, categories: readonly Category[]): Set<string> {
+  const ids = new Set<string>([categoryId]);
+  let added = true;
+  while (added) {
+    added = false;
+    for (const category of categories) {
+      if (category.parentCategoryId && ids.has(category.parentCategoryId) && !ids.has(category.id)) {
+        ids.add(category.id);
+        added = true;
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * Builds the local summary used by the graph-view question answers. It only reads
+ * the supplied reminders and categories, so the same input always produces the
+ * same totals, ordering and text.
+ */
+export function summarizeReminderScope(
+  reminders: readonly Reminder[],
+  categories: readonly Category[] = [],
+  request: ReminderScopeRequest = {}
+): ReminderScopeSummary {
+  const referenceDate = request.referenceDate ?? new Date();
+  const scopeCategory = request.categoryId ? categories.find((category) => category.id === request.categoryId) : undefined;
+  const scoped = scopeCategory ? reminders.filter((reminder) => descendantIds(scopeCategory.id, categories).has(reminder.categoryId)) : [...reminders];
+
+  const nodes = scoped
+    .map((reminder) => toReminderGraphSummaryFacts(reminder, categories, referenceDate))
+    .sort((a, b) => (a.dueDate ?? '9999-99-99').localeCompare(b.dueDate ?? '9999-99-99') || a.title.localeCompare(b.title));
+
+  const totals = {
+    reminders: nodes.length,
+    active: nodes.filter((node) => !node.completed).length,
+    completed: nodes.filter((node) => node.completed).length,
+    overdue: nodes.filter((node) => node.overdue).length,
+    subtasks: nodes.reduce((sum, node) => sum + node.subtaskCount, 0),
+    completedSubtasks: nodes.reduce((sum, node) => sum + node.completedSubtaskCount, 0),
+  };
+  const label = scopeCategory ? scopeCategory.name : 'All reminders';
+  const nextNode = nodes.find((node) => !node.completed && node.dueDate);
+  const nextDue = nextNode?.dueDate ? { date: nextNode.dueDate, title: nextNode.title } : undefined;
+
+  const parts = [
+    `${label}: ${totals.reminders} reminder${totals.reminders === 1 ? '' : 's'}`,
+    `${totals.active} active`,
+    `${totals.completed} completed`,
+  ];
+  if (totals.overdue) parts.push(`${totals.overdue} overdue`);
+  let text = `${parts.join(', ')}.`;
+  if (nextDue) text += ` Next due ${nextDue.date} (${nextDue.title}).`;
+  if (totals.subtasks) text += ` Subtasks ${totals.completedSubtasks}/${totals.subtasks} complete.`;
+
+  return { scope: { categoryId: scopeCategory?.id, categoryName: scopeCategory?.name, label }, totals, nextDue, nodes, text };
+}
+
 function scoreCategory(category: Category, input: string): number {
   const text = input.toLowerCase();
   const name = category.name.toLowerCase();
@@ -259,7 +385,12 @@ export function createIntelligentReminderProposal(
 export function createEditReminderProposal(input: string, reminders: readonly Reminder[], referenceDate: Date = new Date()): EditReminderProposal {
   const text = normalize(input);
   const candidates = reminders.filter((reminder) => words(text).some((word) => word.length > 2 && words(reminder.title).includes(word)));
-  const exactId = text.match(/\b(?:reminder|task)\s+([a-z0-9_-]+)\b/i)?.[1];
+  // A bare word after "reminder"/"task" is usually normal English ("reminder to
+  // Thursday"), so an id only counts when it is asked for explicitly or looks like
+  // a real generated id (contains a digit or hyphen, e.g. "rem-1" / "r-dentist").
+  const exactId =
+    text.match(/\b(?:reminder|task)\s+id\s+([a-z0-9_-]+)\b/i)?.[1] ??
+    text.match(/\b(?:reminder|task)\s+([a-z0-9_]*[0-9-][a-z0-9_-]*)\b/i)?.[1];
   const selected = exactId ? reminders.find((reminder) => reminder.id === exactId) : candidates.length === 1 ? candidates[0] : undefined;
   const ambiguities: Ambiguity[] = [];
   const missingFields: MissingField[] = [];
@@ -282,7 +413,9 @@ export function createEditReminderProposal(input: string, reminders: readonly Re
 }
 
 export function createCategoryProposal(input: string): CreateCategoryProposal {
-  const match = normalize(input).match(/\b(?:create|add|new)\s+categor(?:y|ies)\s+(?:called\s+|named\s+)?["']?(.+?)["']?$/i);
+  // "Create a category called X" and "create category X" are both natural, so the
+  // article is optional and never becomes part of the name.
+  const match = normalize(input).match(/\b(?:create|add|new)\s+(?:a\s+|an\s+|the\s+)?categor(?:y|ies)\s+(?:called\s+|named\s+)?["']?(.+?)["']?$/i);
   const name = normalize(match?.[1] || '').replace(/[.!?]+$/, '');
   const missingFields: MissingField[] = name ? [] : [{ field: 'name', label: 'Category name', required: true }];
   const confidenceValue = name ? EXACT : UNKNOWN;
@@ -290,7 +423,11 @@ export function createCategoryProposal(input: string): CreateCategoryProposal {
 }
 
 export function createSubcategoryProposal(input: string, categories: readonly Category[] = []): CreateSubcategoryProposal {
-  const match = normalize(input).match(/\b(?:create|add|new)\s+subcategor(?:y|ies)\s+(?:called\s+|named\s+)?(.+?)(?:\s+(?:under|in)\s+(.+))?$/i);
+  const normalizedInput = normalize(input);
+  const match =
+    normalizedInput.match(/\b(?:create|add|new)\s+(?:a\s+|an\s+|the\s+)?subcategor(?:y|ies)\s+(?:called\s+|named\s+)?(.+?)(?:\s+(?:under|in)\s+(.+))?$/i) ??
+    // Natural "Add <child> under <parent>" phrasing without the word "subcategory".
+    normalizedInput.match(/\b(?:create|add|new)\s+(?:a\s+)?(.+?)\s+under\s+(.+)$/i);
   const name = normalize(match?.[1] || '').replace(/[.!?]+$/, '');
   const parentName = normalize(match?.[2] || '');
   const parents = categories.filter((category) => !category.parentCategoryId && (!parentName || category.name.toLowerCase() === parentName.toLowerCase()));
