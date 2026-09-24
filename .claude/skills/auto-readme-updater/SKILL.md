@@ -144,6 +144,24 @@ Use the actual workflow names from the repository.
 
 Describe what each important workflow does without copying the YAML implementation.
 
+## Pull Requests Use Pending Documentation
+
+MindMesh keeps `README.md` stable while a pull request is open.
+
+- The pull request workflow (`.github/workflows/pr-debug.yml`) generates a *pending* documentation summary for the open pull request and stores it in a single sticky pull request comment that is refreshed in place on every push. It also writes the GitHub Actions job summary.
+- Do not rewrite `README.md` on a branch whose pull request is still open. Record the change where the workflow can use it instead, for example in the pull request description:
+
+  ```markdown
+  <!-- mindmesh-docs
+  summary: What changed and why
+  fixes: Bugs or issues fixed
+  readme: One or two sentences describing the change for the README
+  -->
+  ```
+
+- After the pull request merges, `.github/workflows/readme-update.yml` inserts exactly one entry for that merge into the managed "Recent Merged Changes" section of `README.md` and preserves every other section.
+- Edit `README.md` directly only for documentation work that is unrelated to an open pull request, such as correcting a broken command, a stale workflow name, or an inaccurate feature description.
+
 ## Installation And Build Changes
 
 If installation or build behaviour changes, inspect the actual configuration before changing README instructions.

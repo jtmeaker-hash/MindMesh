@@ -25,3 +25,7 @@ dist/
 web/node_modules/
 web/dist/
 
+
+# Python bytecode (repository CI helper scripts)
+__pycache__/
+*.pyc

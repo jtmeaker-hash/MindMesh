@@ -1,0 +1,246 @@
+# MindMesh Main — Build + Test + RELEASE APK
+# ---------------------------------------------------------------------------
+# Authoritative release validation workflow.
+#
+# Purpose:  "main = Build + Test + Release APK"
+#
+# Triggered by pushes to `main` (i.e. merged pull requests). It performs the
+# full production validation - web lint, type-check, required + regression
+# tests, production bundle build, Android unit tests - and builds the signed
+# RELEASE APK. It never builds a DEBUG APK and never edits README.md.
+#
+# Documentation-only commits are ignored, so the automated README update
+# committed by the `MindMesh README - Update After Merge` workflow cannot
+# trigger a repeated release build.
+# ---------------------------------------------------------------------------
+
+name: MindMesh Main — Build + Test + RELEASE APK
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Release builds are never cancelled mid-flight.
+  group: mindmesh-main-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Full production validation and RELEASE APK build.
+  # -------------------------------------------------------------------------
+  release:
+    name: Build + Test + RELEASE APK
+    runs-on: ubuntu-latest
+    # Skip the workflow's own documentation-only commits.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!contains(github.event.head_commit.message, '[skip ci]') &&
+       !contains(github.event.head_commit.message, '[skip release]'))
+    outputs:
+      lint: ${{ steps.lint.outcome }}
+      typecheck: ${{ steps.typecheck.outcome }}
+      webtests: ${{ steps.webtests.outcome }}
+      webbuild: ${{ steps.webbuild.outcome }}
+      androidtests: ${{ steps.androidtests.outcome }}
+      apk: ${{ steps.apk.outcome }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Run web lint
+        id: lint
+        run: npm --prefix web run lint
+
+      - name: Run web type-check
+        id: typecheck
+        run: npm --prefix web run type-check
+
+      - name: Run required + regression web test suite
+        id: webtests
+        run: npm --prefix web run test -- --run
+
+      - name: Build production web bundle for the Android WebView
+        id: webbuild
+        run: npm --prefix web run build
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Ensure Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Run Android unit tests
+        id: androidtests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Validate release signing configuration
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${KEYSTORE_BASE64}" ] || missing="${missing} RELEASE_KEYSTORE_BASE64"
+          [ -n "${STORE_PASSWORD}" ] || missing="${missing} RELEASE_STORE_PASSWORD"
+          [ -n "${KEY_PASSWORD}" ] || missing="${missing} RELEASE_KEY_PASSWORD"
+          if [ -n "${missing}" ]; then
+            echo "::error title=Release signing secrets missing::The RELEASE APK cannot be signed. Add the missing repository secret(s):${missing}. See app/build.gradle.kts (signingConfigs.release) - it reads KEYSTORE_PATH, STORE_PASSWORD and KEY_PASSWORD."
+            exit 1
+          fi
+          umask 077
+          keystore="${GITHUB_WORKSPACE}/my-upload-key.jks"
+          printf '%s' "${KEYSTORE_BASE64}" | base64 -d > "${keystore}"
+          if [ ! -s "${keystore}" ]; then
+            echo "::error title=Invalid keystore secret::RELEASE_KEYSTORE_BASE64 did not decode into a usable keystore file."
+            exit 1
+          fi
+          echo "KEYSTORE_PATH=${keystore}" >> "$GITHUB_ENV"
+          echo "STORE_PASSWORD=${STORE_PASSWORD}" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=${KEY_PASSWORD}" >> "$GITHUB_ENV"
+          echo "Release signing material is available for the Gradle release task."
+
+      - name: Build signed RELEASE APK
+        id: apk
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Verify RELEASE APK is signed and no DEBUG APK was built
+        id: apkverify
+        if: always() && steps.apk.outcome == 'success'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          release_apks=(app/build/outputs/apk/release/*.apk)
+          if [ "${#release_apks[@]}" -eq 0 ]; then
+            echo "::error title=RELEASE APK missing::Gradle reported success but no release APK was produced."
+            exit 1
+          fi
+          printf 'RELEASE APK: %s\n' "${release_apks[@]}"
+          ls -lh app/build/outputs/apk/release/
+          apksigner_bin="$(ls "${ANDROID_HOME}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1 || true)"
+          if [ -n "${apksigner_bin}" ]; then
+            for apk in "${release_apks[@]}"; do
+              if ! "${apksigner_bin}" verify --verbose "${apk}" >/dev/null; then
+                echo "::error title=Unsigned RELEASE APK::${apk} failed apksigner verification. Check the release signing configuration."
+                exit 1
+              fi
+              echo "Verified signature: ${apk}"
+            done
+          else
+            echo "::warning title=apksigner unavailable::Could not locate apksigner; signature verification was skipped."
+          fi
+          debug_apks=(app/build/outputs/apk/debug/*.apk)
+          if [ "${#debug_apks[@]}" -ne 0 ]; then
+            echo "::error title=Unexpected DEBUG APK::A DEBUG APK was produced on main. Main must build the RELEASE APK only."
+            exit 1
+          fi
+          echo "Confirmed: main produced the signed RELEASE APK only."
+
+      - name: Upload RELEASE APK artifact
+        if: always() && steps.apkverify.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mindmesh-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+      - name: Remove decoded signing material
+        if: always() && steps.signing.outcome == 'success'
+        run: rm -f "${GITHUB_WORKSPACE}/my-upload-key.jks"
+
+  # -------------------------------------------------------------------------
+  # Readable release validation summary.
+  # -------------------------------------------------------------------------
+  release-summary:
+    name: Release validation summary
+    runs-on: ubuntu-latest
+    needs: [ release ]
+    if: >-
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       (!contains(github.event.head_commit.message, '[skip ci]') &&
+        !contains(github.event.head_commit.message, '[skip release]')))
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect release change context
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          : > changed-files.txt
+          : > commit-subjects.txt
+          if [ -n "${BEFORE_SHA}" ] && [ -n "${HEAD_SHA}" ] && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            git diff --name-only "${BEFORE_SHA}" "${HEAD_SHA}" > changed-files.txt 2>/dev/null || true
+            git log --no-merges --format=%s "${BEFORE_SHA}..${HEAD_SHA}" > commit-subjects.txt 2>/dev/null || true
+          fi
+          if [ ! -s commit-subjects.txt ]; then
+            git log -1 --format=%s "${HEAD_SHA:-HEAD}" > commit-subjects.txt 2>/dev/null || true
+          fi
+          echo "Commits: $(wc -l < commit-subjects.txt)"
+
+      - name: Check README managed section
+        id: readme
+        run: |
+          set -euo pipefail
+          if grep -q '<!-- mindmesh-release-notes:start -->' README.md \
+             && grep -q '<!-- mindmesh-release-notes:end -->' README.md; then
+            echo "markers=present" >> "$GITHUB_OUTPUT"
+          else
+            echo "markers=missing (the README update workflow will create the section on the next merge)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate release validation summary
+        env:
+          MODE: main
+          BUILD_TYPE: RELEASE
+          COMMIT_SHA: ${{ github.event.after }}
+          COMMIT_SUBJECT: ${{ github.event.head_commit.message }}
+          COMMIT_AUTHOR: ${{ github.event.head_commit.author.username }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          README_MARKERS: ${{ steps.readme.outputs.markers }}
+          CHANGED_FILES: changed-files.txt
+          COMMIT_SUBJECTS: commit-subjects.txt
+          LINT_OUTCOME: ${{ needs.release.outputs.lint }}
+          TYPECHECK_OUTCOME: ${{ needs.release.outputs.typecheck }}
+          WEB_TESTS_OUTCOME: ${{ needs.release.outputs.webtests }}
+          WEB_BUILD_OUTCOME: ${{ needs.release.outputs.webbuild }}
+          ANDROID_TESTS_OUTCOME: ${{ needs.release.outputs.androidtests }}
+          APK_OUTCOME: ${{ needs.release.outputs.apk }}
+        run: python3 .github/scripts/pending_docs.py
