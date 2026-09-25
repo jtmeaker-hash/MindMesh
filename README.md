@@ -667,6 +667,34 @@ Bug reports are most useful when they include:
 This section is maintained automatically. When a pull request is merged into `main`, the repository's README workflow inserts one entry describing the merged change, grouped from the pull request rather than from individual commits. Entries are never duplicated, and no other part of this README is rewritten.
 
 <!-- mindmesh-release-notes:start -->
+
+<!-- mindmesh-pr-1 -->
+### PR #1 — (Fix) Node sizes when zooming
+
+#### Summary of Changes
+
+- Updated the web application UI, services or types, web tests, the Android host application, the GitHub Actions workflows and documentation.
+- (Fix) Broken UI reminder explorer\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+- Workflow Changes\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+- (Fix) node auto position system & zoom in node size\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+- (Fix) Node sizes when zooming\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+
+#### Applied Fixes
+
+- (Fix) Broken UI reminder explorer\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+- (Fix) node auto position system & zoom in node size\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+- (Fix) Node sizes when zooming\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+
+#### Build / Test Failures
+
+- No build, test, regression, lint, signing or packaging failures were recorded.
+
+#### README Description
+
+(Fix) Node sizes when zooming. It updates the web application UI, services or types, web tests, the Android host application, the GitHub Actions workflows and documentation. The DEBUG build, the required test suite and the regression checks are validated by this workflow.
+
+_Merged 2026-09-25 · [PR #1](https://github.com/jtmeaker-hash/MindMesh/pull/1) · @app/freebuff-web_
+
 <!-- mindmesh-release-notes:end -->
 
 ---
