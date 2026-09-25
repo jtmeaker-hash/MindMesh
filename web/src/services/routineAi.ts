@@ -1,10 +1,5 @@
 import { Routine, RoutineAiAction, RoutineAiChange, RoutineAiProposal, RoutineStep, createRoutineStep } from '../types/routine';
 
-interface NativeRoutineAiBridge { propose?(action: RoutineAiAction, prompt: string, routine: Routine): Promise<unknown> | unknown; }
-function nativeBridge(): NativeRoutineAiBridge | undefined {
-  if (typeof window === 'undefined') return undefined;
-  return (window as Window & { MindMeshRoutineAI?: NativeRoutineAiBridge }).MindMeshRoutineAI;
-}
 const id = (prefix: string) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 function offlineSteps(prompt: string): string[] {
@@ -13,13 +8,6 @@ function offlineSteps(prompt: string): string[] {
 }
 
 export async function createRoutineAiProposal(action: RoutineAiAction, prompt: string, routine: Routine): Promise<RoutineAiProposal> {
-  const bridge = nativeBridge();
-  if (bridge?.propose) {
-    try {
-      const result = await bridge.propose(action, prompt, routine);
-      if (result && typeof result === 'object') return { ...(result as RoutineAiProposal), id: id('ai-proposal'), action, prompt, provider: 'native', createdAt: new Date().toISOString() };
-    } catch { /* Fall through to the deterministic offline proposal. */ }
-  }
   const titles = offlineSteps(prompt);
   const changes: RoutineAiChange[] = titles.map((title, index) => ({ id: id('change'), type: 'add-step', description: `Add step “${title}”`, after: title, requiresConfirmation: false, stepId: `proposed-${index}` }));
   if (action === 'rewrite' && routine.description) changes.push({ id: id('change'), type: 'edit-routine', description: 'Rewrite the routine description for clarity', before: routine.description, after: `${routine.description.trim()} Start with the smallest visible action.`, requiresConfirmation: false });
@@ -43,5 +31,3 @@ export function applyApprovedAiChanges(routine: Routine, proposal: RoutineAiProp
   }
   return { ...next, updatedAt: new Date().toISOString() };
 }
-
-export function aiUnavailableMessage(): string { return 'AI assistance is unavailable offline. Your routine is still fully usable; try again when the optional AI bridge is available.'; }

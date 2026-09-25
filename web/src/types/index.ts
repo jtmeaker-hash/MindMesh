@@ -28,7 +28,7 @@ export interface Reminder {
   id: string;
   categoryId: string;
   title: string;
-  /** Longer context shown in reminder details and used by optional AI enhancement. */
+  /** Longer context shown in reminder details and used by local Smart Assistance enhancement. */
   description?: string;
   /** Compact text intended for graph nodes and other dense surfaces. */
   summary?: string;
