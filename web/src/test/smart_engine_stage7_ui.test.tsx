@@ -29,7 +29,8 @@ function createHandlers(): { [K in keyof SmartAssistantHandlers]: ReturnType<typ
 function renderAssistant(
   handlers: SmartAssistantHandlers,
   settings: SmartEngineSettings = DEFAULT_SMART_ENGINE_SETTINGS,
-  onOpenSettings = vi.fn()
+  onOpenSettings = vi.fn(),
+  assistantReminders: Reminder[] = reminders
 ) {
   render(
     <SmartAssistantModal
@@ -37,7 +38,7 @@ function renderAssistant(
       onClose={() => undefined}
       settings={settings}
       categories={categories}
-      reminders={reminders}
+      reminders={assistantReminders}
       moneyState={moneyState}
       contacts={[]}
       handlers={handlers}
@@ -78,6 +79,44 @@ describe('MindMesh Smart Assistant surface', () => {
     expect(reminder.title).toBe('service the car');
     expect(reminder.categoryId).toBe('car');
     expect(screen.getByTestId('smart-assistant-outcome').textContent).toMatch(/Created reminder/);
+  });
+
+  it('renders structured reminder facts as a read-only summary', () => {
+    const handlers = createHandlers();
+    const summaryReminders: Reminder[] = [
+      {
+        id: 'r1',
+        categoryId: 'car',
+        title: 'Service car',
+        dueDate: '2099-03-15',
+        priority: 'medium',
+        completed: false,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        subtasks: [{ id: 's1', reminderId: 'r1', title: 'Book service', completed: true, createdAt: '2026-01-01T00:00:00.000Z' }],
+      },
+      {
+        id: 'r2',
+        categoryId: 'work',
+        title: 'Send report',
+        priority: 'medium',
+        completed: true,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        subtasks: [],
+      },
+    ];
+    renderAssistant(handlers, DEFAULT_SMART_ENGINE_SETTINGS, vi.fn(), summaryReminders);
+
+    typeCommand('Summarize my reminders');
+
+    expect(screen.getByTestId('smart-assistant-graph-summary')).toBeTruthy();
+    expect(screen.getByText('Service car')).toBeTruthy();
+    expect(screen.getByText('Send report')).toBeTruthy();
+    expect(screen.getByTestId('smart-assistant-graph-summary').textContent).toContain('1/1 subtasks');
+    expect(screen.getAllByTestId('smart-assistant-graph-summary-node')).toHaveLength(2);
+    expect(screen.queryByTestId('smart-assistant-confirm')).toBeNull();
+    expect(handlers.saveReminder).not.toHaveBeenCalled();
+    expect(handlers.saveCategory).not.toHaveBeenCalled();
+    expect(handlers.saveDirectDebit).not.toHaveBeenCalled();
   });
 
   it('keeps confirmation disabled until the missing answer is supplied', () => {

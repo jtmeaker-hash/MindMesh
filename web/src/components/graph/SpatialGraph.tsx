@@ -81,6 +81,21 @@ const HUD_RESERVED_PIXELS = 104;
 /** Fraction of the viewport a framed branch is allowed to occupy. */
 const FRAMING_PADDING = 0.84;
 const PITCH_LIMIT = Math.PI / 2 - 0.015;
+/** Matches the persisted node-position safety range. */
+const MAX_WORLD_COORDINATE = 100_000;
+
+function safeWorldCoordinate(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(-MAX_WORLD_COORDINATE, Math.min(MAX_WORLD_COORDINATE, value));
+}
+
+function safeViewportDimension(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.max(1, value) : 1;
+}
+
+function safeFocalLength(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.max(260, value) : 260;
+}
 
 // Momentum is deliberately gentle: it is capped relative to the gesture that
 // produced it, so a flick can never turn into an uncontrollable slide.
@@ -136,32 +151,52 @@ function depthForNode(node: Node<MeshNodeData>, index: number): number {
 }
 
 function worldPoint(node: Node<MeshNodeData>, index: number): Point3 {
-  return { x: node.position.x, y: node.position.y, z: depthForNode(node, index) };
+  return {
+    x: safeWorldCoordinate(node.position.x),
+    y: safeWorldCoordinate(node.position.y),
+    z: depthForNode(node, index),
+  };
 }
 
 export function projectSpatialPoint(point: Point3, camera: SpatialCamera, width: number, height: number, focal: number): ProjectedPoint {
-  const dx = point.x - camera.target.x;
-  const dy = point.y - camera.target.y;
-  const dz = point.z - camera.target.z;
-  const cosYaw = Math.cos(camera.yaw);
-  const sinYaw = Math.sin(camera.yaw);
+  const safePoint = {
+    x: safeWorldCoordinate(point.x),
+    y: safeWorldCoordinate(point.y),
+    z: safeWorldCoordinate(point.z),
+  };
+  const safeCamera = clampSpatialCamera(camera);
+  const viewportWidth = safeViewportDimension(width);
+  const viewportHeight = safeViewportDimension(height);
+  const projectionFocal = safeFocalLength(focal);
+  const dx = safePoint.x - safeCamera.target.x;
+  const dy = safePoint.y - safeCamera.target.y;
+  const dz = safePoint.z - safeCamera.target.z;
+  const cosYaw = Math.cos(safeCamera.yaw);
+  const sinYaw = Math.sin(safeCamera.yaw);
   const yawX = dx * cosYaw - dz * sinYaw;
   const yawZ = dx * sinYaw + dz * cosYaw;
-  const cosPitch = Math.cos(camera.pitch);
-  const sinPitch = Math.sin(camera.pitch);
+  const cosPitch = Math.cos(safeCamera.pitch);
+  const sinPitch = Math.sin(safeCamera.pitch);
   const pitchY = dy * cosPitch - yawZ * sinPitch;
   const cameraZ = dy * sinPitch + yawZ * cosPitch;
   // Distance in front of the camera. Everything the camera can actually see is
   // here; anything at or behind the near plane is behind the lens.
-  const forward = camera.distance - cameraZ;
+  const forward = safeCamera.distance - cameraZ;
   const visible = forward > NEAR_PLANE;
   const depth = visible ? forward : NEAR_PLANE;
   // The projection is the whole story about size: a node's on-screen size is its
   // fixed world size divided by its distance from the camera. There is no
   // screen-space correction, so moving the camera closer always makes a node
   // bigger and pulling back always makes it smaller.
-  const scale = focal / depth;
-  return { ...point, screenX: width / 2 + yawX * scale, screenY: height / 2 + pitchY * scale, scale, depth, visible };
+  const scale = projectionFocal / depth;
+  return {
+    ...safePoint,
+    screenX: viewportWidth / 2 + yawX * scale,
+    screenY: viewportHeight / 2 + pitchY * scale,
+    scale,
+    depth,
+    visible,
+  };
 }
 
 /**
@@ -888,7 +923,7 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
     if (!element) return;
     const update = () => {
       const rect = element.getBoundingClientRect();
-      setSize({ width: Math.max(1, rect.width), height: Math.max(1, rect.height) });
+      setSize({ width: safeViewportDimension(rect.width), height: safeViewportDimension(rect.height) });
     };
     const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : undefined;
     observer?.observe(element);
@@ -946,7 +981,12 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
     const element = viewportRef.current;
     if (!element) return { left: 0, top: 0, width: 1, height: 1 };
     const rect = element.getBoundingClientRect();
-    return { left: rect.left, top: rect.top, width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+    return {
+      left: Number.isFinite(rect.left) ? rect.left : 0,
+      top: Number.isFinite(rect.top) ? rect.top : 0,
+      width: safeViewportDimension(rect.width),
+      height: safeViewportDimension(rect.height),
+    };
   }, []);
 
   // ---- Node repositioning (explicit Move mode only) ------------------------
@@ -1321,13 +1361,18 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
 
       const strokeWidth = Math.max(0.6, baseWidth * widthScale + connection.widthBonus) * (isSelectedPath ? 1.45 : 1);
 
-      let path = `M ${source.screenX} ${source.screenY} L ${target.screenX} ${target.screenY}`;
+      // `ProjectedPoint.x/y` are intentionally world-space. Routing and SVG are
+      // screen-space, so convert explicitly instead of passing the world point
+      // through under an ambiguous `{ x, y }` shape.
+      const screenSource = { x: source.screenX, y: source.screenY };
+      const screenTarget = { x: target.screenX, y: target.screenY };
+      let path = `M ${screenSource.x} ${screenSource.y} L ${screenTarget.x} ${screenTarget.y}`;
       if (screenGrid) {
         // The two nodes a connection belongs to are never obstacles to itself.
         const obstacles = screenGrid
-          .query(source, target)
+          .query(screenSource, screenTarget)
           .filter((obstacle) => obstacle.id !== edge.source && obstacle.id !== edge.target);
-        path = routeConnection(source, target, obstacles, Math.max(8, strokeWidth * 3)).path;
+        path = routeConnection(screenSource, screenTarget, obstacles, Math.max(8, strokeWidth * 3)).path;
       }
 
       list.push({
@@ -1372,6 +1417,8 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
       ref={viewportRef}
       className={`mm-spatial-graph${moveMode ? ' mm-spatial-graph--move' : ''}`}
       data-testid="spatial-graph"
+      data-viewport-width={size.width}
+      data-viewport-height={size.height}
       data-lod-level={detailLevel}
       data-spatial-active="true"
       data-camera-yaw={camera.yaw}

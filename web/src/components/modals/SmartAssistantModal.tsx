@@ -5,6 +5,7 @@ import { Contact } from '../../types/contact';
 import { DiagnosticReport } from '../../types/diagnostics';
 import { MoneyState } from '../../types/finance';
 import { SmartEngineResult, SmartEngineSettings } from '../../types/smartEngine';
+import { ReminderScopeSummary } from '../../services/reminderIntelligence';
 import {
   AssistantResolutionPrompt,
   ProposalResolution,
@@ -172,6 +173,8 @@ export const SmartAssistantModal: React.FC<SmartAssistantModalProps> = ({
   const setResolution = (field: string, value: string) => {
     setResolutions((prev) => ({ ...prev, [field]: value }));
   };
+
+  const reminderSummary = isReminderScopeSummary(resolvedResult?.value) ? resolvedResult.value : undefined;
 
   const renderPrompt = (prompt: AssistantResolutionPrompt) => {
     const selected = resolutions[prompt.field];
@@ -433,6 +436,85 @@ export const SmartAssistantModal: React.FC<SmartAssistantModalProps> = ({
                   <span style={{ fontSize: 12.5, color: '#e2e8f0', lineHeight: 1.5 }}>{resolvedResult.message}</span>
                 </div>
 
+                {reminderSummary && (
+                  <section
+                    data-testid="smart-assistant-graph-summary"
+                    aria-label={`${reminderSummary.scope.label} reminder facts`}
+                    style={{
+                      padding: 12,
+                      borderRadius: 14,
+                      backgroundColor: 'rgba(6, 182, 212, 0.08)',
+                      border: '1px solid rgba(6, 182, 212, 0.24)',
+                    }}
+                  >
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#67e8f9', letterSpacing: '0.04em', marginBottom: 9 }}>
+                      REMINDER FACTS · {reminderSummary.scope.label.toUpperCase()}
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: reminderSummary.nodes.length ? 10 : 0 }}>
+                      {[
+                        ['Reminders', reminderSummary.totals.reminders],
+                        ['Active', reminderSummary.totals.active],
+                        ['Completed', reminderSummary.totals.completed],
+                        ['Overdue', reminderSummary.totals.overdue],
+                      ].map(([label, count]) => (
+                        <div
+                          key={label}
+                          style={{
+                            flex: '1 1 72px',
+                            padding: '7px 9px',
+                            borderRadius: 10,
+                            backgroundColor: 'rgba(15, 23, 42, 0.7)',
+                            border: '1px solid rgba(148, 163, 184, 0.14)',
+                          }}
+                        >
+                          <div style={{ fontSize: 16, fontWeight: 800, color: '#f8fafc' }}>{count}</div>
+                          <div style={{ fontSize: 10.5, color: '#94a3b8' }}>{label}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {reminderSummary.nodes.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                        {reminderSummary.nodes.slice(0, 6).map((node) => {
+                          const status = node.completed ? 'Completed' : node.overdue ? 'Overdue' : 'Active';
+                          const statusColor = node.completed ? '#6ee7b7' : node.overdue ? '#fca5a5' : '#cbd5e1';
+                          const due = node.dueDate ? `${node.dueDate}${node.dueTime ? ` · ${node.dueTime}` : ''}` : undefined;
+                          const details = [node.categoryName, due, node.subtaskCount ? `${node.completedSubtaskCount}/${node.subtaskCount} subtasks` : undefined]
+                            .filter(Boolean)
+                            .join(' · ');
+                          return (
+                            <div
+                              key={node.id}
+                              data-testid="smart-assistant-graph-summary-node"
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                gap: 12,
+                                padding: '8px 10px',
+                                borderRadius: 10,
+                                backgroundColor: '#111c31',
+                                border: '1px solid #1e293b',
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: 12.5, fontWeight: 650, color: '#f8fafc', overflowWrap: 'anywhere' }}>{node.title}</div>
+                                {details && <div style={{ fontSize: 10.5, color: '#94a3b8', marginTop: 3 }}>{details}</div>}
+                              </div>
+                              <span style={{ flexShrink: 0, fontSize: 10.5, fontWeight: 700, color: statusColor }}>{status}</span>
+                            </div>
+                          );
+                        })}
+                        {reminderSummary.nodes.length > 6 && (
+                          <div style={{ fontSize: 10.5, color: '#94a3b8', textAlign: 'center', paddingTop: 2 }}>
+                            +{reminderSummary.nodes.length - 6} more reminders in this summary
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11.5, color: '#94a3b8' }}>No reminder nodes in this scope yet.</div>
+                    )}
+                  </section>
+                )}
+
                 {hasProposal && (
                   <div data-testid="smart-assistant-rows" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: '0.04em', marginBottom: 2 }}>
@@ -554,6 +636,16 @@ export const SmartAssistantModal: React.FC<SmartAssistantModalProps> = ({
     </div>
   );
 };
+
+function isReminderScopeSummary(value: unknown): value is ReminderScopeSummary {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<ReminderScopeSummary>;
+  return Boolean(
+    candidate.scope && typeof candidate.scope.label === 'string' &&
+    candidate.totals && typeof candidate.totals.reminders === 'number' &&
+    Array.isArray(candidate.nodes)
+  );
+}
 
 function chipStyle(active: boolean): React.CSSProperties {
   return {
