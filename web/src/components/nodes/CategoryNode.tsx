@@ -91,10 +91,11 @@ export const CategoryNode = memo(({ data }: NodeProps) => {
           whiteSpace: 'nowrap',
         }}
       >
-        {nodeData.label}
+        <span className="mm-node-label">{nodeData.label}</span>
       </div>
 
       <div
+        className="mm-node-detail"
         style={{
           fontSize: 9,
           fontWeight: 600,

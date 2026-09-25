@@ -75,10 +75,11 @@ export const RootNode = memo(({ data }: NodeProps) => {
           lineHeight: 1.1,
         }}
       >
-        {nodeData.label}
+        <span className="mm-node-label">{nodeData.label}</span>
       </div>
 
       <div
+        className="mm-node-detail"
         style={{
           fontSize: 10,
           fontWeight: 600,

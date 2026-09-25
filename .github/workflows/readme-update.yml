@@ -1,0 +1,162 @@
+# MindMesh README — Update After Merge
+# ---------------------------------------------------------------------------
+# README merge/update workflow.
+#
+# Trigger: a pull request that targets `main` is merged.
+#
+# Responsibilities:
+#   * take the final pending documentation summary produced during the PR
+#   * update README.md exactly once for that merged pull request
+#   * preserve every existing README section outside the managed block
+#   * never create duplicate documentation entries (idempotent by PR marker)
+#
+# Loop safety:
+#   * this workflow only ever runs on pull request closure, so the README
+#     commit it pushes cannot re-trigger itself
+#   * the commit message carries `[skip ci]`, and the main release workflow
+#     ignores documentation-only pushes, so the automated README commit does
+#     not cause a repeated RELEASE APK build
+#
+# This workflow never builds a DEBUG or RELEASE APK.
+# ---------------------------------------------------------------------------
+
+name: MindMesh README — Update After Merge
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ closed ]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Merged pull request number to document in README.md
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  # Documentation updates are serialised so two merges cannot race on README.md.
+  group: mindmesh-readme-update
+  cancel-in-progress: false
+
+jobs:
+  update-readme:
+    name: Apply merged PR summary to README
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.base.ref == 'main')
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve merged pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          INPUT_PR: ${{ github.event.inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          number="${EVENT_PR:-${INPUT_PR:-}}"
+          if [ -z "${number}" ]; then
+            echo "::error title=Missing pull request::No pull request number was available for this run."
+            exit 1
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+          gh pr view "${number}" --json number,title,url,author,body,mergedAt,state > pr.json
+          python3 -c "import json; d=json.load(open('pr.json')); print('Resolved PR', d.get('number'), d.get('state'))"
+
+      - name: Fetch the stored pending documentation summary
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          : > pending-comment.md
+          comment_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.body | contains("<!-- mindmesh-pending-docs -->")) | .id' 2>/dev/null | tail -n1 || true)"
+          if [ -n "${comment_id}" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --jq .body > pending-comment.md
+            echo "Using the stored pending summary comment ${comment_id}."
+          else
+            echo "No stored pending summary comment found; the entry will be rebuilt from PR metadata."
+          fi
+
+      - name: Collect merged pull request context
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          : > changed-files.txt
+          : > commit-subjects.txt
+          gh pr diff "${PR_NUMBER}" --name-only > changed-files.txt 2>/dev/null || true
+          gh pr view "${PR_NUMBER}" --json commits --jq '.commits[].messageHeadline' > commit-subjects.txt 2>/dev/null || true
+          echo "Changed files: $(wc -l < changed-files.txt)"
+          echo "Commits: $(wc -l < commit-subjects.txt)"
+
+      - name: Update README from the merged pull request summary
+        id: update
+        env:
+          PR_JSON: pr.json
+          PENDING_COMMENT: pending-comment.md
+          CHANGED_FILES: changed-files.txt
+          COMMIT_SUBJECTS: commit-subjects.txt
+          README_PATH: README.md
+        run: python3 .github/scripts/update_readme.py
+
+      - name: Commit and push the README update
+        if: steps.update.outputs.changed == 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs(readme): merged PR #${PR_NUMBER} release notes [skip ci]"
+          git fetch --no-tags origin main
+          git rebase origin/main
+          git push origin HEAD:main
+
+      - name: Confirm the README update on the merged pull request
+        if: steps.update.outputs.changed == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="README.md has been updated from this pull request's merged documentation summary."
+
+      - name: Report README status
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## README Status"
+            echo ""
+            if [ "${{ steps.update.outcome }}" != "success" ]; then
+              echo "README update failed — see the failing step above. No README change was pushed."
+              echo ""
+              echo "If the merge gate blocked the direct push, apply the update through the normal"
+              echo "pull request flow or re-run this workflow manually for the pull request number."
+            elif [ "${{ steps.update.outputs.changed }}" = "true" ]; then
+              echo "README updated from merged PR summary."
+            else
+              echo "README already documented this merged pull request — no duplicate entry was added."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

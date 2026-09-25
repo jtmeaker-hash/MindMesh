@@ -535,7 +535,7 @@ Routine Builder is integrated into MindMesh’s local-first storage and shared n
 
 ## Exact next stage
 
-**Post-release operational verification:** run `.github/workflows/mindmesh-routine-regression.yml` and the existing Android workflow on GitHub, then complete the configured emulator/device matrix before publishing an Android release.
+**Post-release operational verification:** run `.github/workflows/main-release.yml` (release validation on `main`) and `.github/workflows/pr-debug.yml` (pull request validation) on GitHub, then complete the configured emulator/device matrix before publishing an Android release.
 
 ## Last good commit
 

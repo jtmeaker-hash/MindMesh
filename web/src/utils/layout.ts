@@ -2,11 +2,43 @@ import { Node, Edge } from '@xyflow/react';
 import { Category, Reminder, MeshNodeData, NodePositionMap } from '../types';
 import { Contact } from '../types/contact';
 import { AppearanceSettings } from '../types/appearance';
-import { accentForNodeType, getDefaultAppearance, resolveNodeTheme, withAlpha } from '../services/appearance';
+import {
+  accentForNodeType,
+  connectionStrokeStyle as connectionEdgeStyle,
+  getDefaultAppearance,
+  resolveNodeTheme,
+  withAlpha,
+} from '../services/appearance';
+import { PlacementGrid } from '../services/nodePositions';
 
 export interface GraphElements {
   nodes: Node<MeshNodeData>[];
   edges: Edge[];
+}
+
+/** Node box sizes in world units, matching the rendered node components. */
+const NODE_BOX = {
+  root: { width: 104, height: 104 },
+  category: { width: 78, height: 78 },
+  reminder: { width: 165, height: 100 },
+  subtask: { width: 130, height: 42 },
+} as const;
+
+/** Minimum gap kept between neighbouring node boxes, wide enough for labels. */
+const NODE_GAP = 72;
+
+type BoxSize = { width: number; height: number };
+
+/** Reserves every manually positioned node so auto placement routes around it. */
+function reserveManualPositions(
+  grid: PlacementGrid,
+  manualPositions: NodePositionMap | undefined,
+  sizeFor: (id: string) => BoxSize,
+): void {
+  if (!manualPositions) return;
+  for (const [id, position] of Object.entries(manualPositions)) {
+    if (position?.manuallyPositioned) grid.reserve({ x: position.x, y: position.y }, sizeFor(id));
+  }
 }
 
 /**
@@ -76,10 +108,22 @@ export function generateActiveMesh(
 
   const activeReminders = reminders.filter((r) => !r.completed);
 
+  // Collision-aware placement: every node claims its box before the next one is
+  // positioned, so automatic layout can never stack nodes or their labels.
+  const grid = new PlacementGrid();
+  const sizeFor = (id: string): BoxSize => {
+    if (id === 'root' || id === 'completed-root') return NODE_BOX.root;
+    if (categories.some((category) => category.id === id)) return NODE_BOX.category;
+    if (activeReminders.some((reminder) => reminder.id === id)) return NODE_BOX.reminder;
+    return NODE_BOX.subtask;
+  };
+  reserveManualPositions(grid, manualPositions, sizeFor);
+
   // 1. Root Center Node
   const manualRoot = manualPositions?.['root'];
   const rootX = manualRoot?.manuallyPositioned ? manualRoot.x : 0;
   const rootY = manualRoot?.manuallyPositioned ? manualRoot.y : 0;
+  grid.reserve({ x: rootX, y: rootY }, NODE_BOX.root);
 
   const rootAccent = accentForNodeType(theme, 'root');
   const rootTheme = nodeTheme(theme, rootAccent);
@@ -125,8 +169,11 @@ export function generateActiveMesh(
     const autoCatY = Math.round(rootY + catRadius * Math.sin(autoCatAngle));
 
     const manualCat = manualPositions?.[category.id];
-    const catX = manualCat?.manuallyPositioned ? manualCat.x : autoCatX;
-    const catY = manualCat?.manuallyPositioned ? manualCat.y : autoCatY;
+    const catPosition = manualCat?.manuallyPositioned
+      ? { x: manualCat.x, y: manualCat.y }
+      : grid.place({ x: autoCatX, y: autoCatY }, NODE_BOX.category, NODE_GAP);
+    const catX = catPosition.x;
+    const catY = catPosition.y;
     const effectiveCatAngle = Math.atan2(catY - rootY, catX - rootX);
 
     const isFocused = focusedCategoryId === category.id;
@@ -171,8 +218,7 @@ export function generateActiveMesh(
       animated: isFocused,
       style: {
         stroke: branchStroke,
-        strokeWidth: isFocused ? 3.5 : 2.2,
-        strokeOpacity: isFocused ? 0.95 : 0.6,
+        ...connectionEdgeStyle(theme, isFocused ? 3.5 : 2.2, isFocused ? 0.95 : 0.6),
         filter: isFocused ? `drop-shadow(0 0 6px ${branchStroke})` : undefined,
       },
     });
@@ -195,8 +241,11 @@ export function generateActiveMesh(
         const autoRemY = Math.round(catY + remDistance * Math.sin(remAngle));
 
         const manualRem = manualPositions?.[reminder.id];
-        const remX = manualRem?.manuallyPositioned ? manualRem.x : autoRemX;
-        const remY = manualRem?.manuallyPositioned ? manualRem.y : autoRemY;
+        const remPosition = manualRem?.manuallyPositioned
+          ? { x: manualRem.x, y: manualRem.y }
+          : grid.place({ x: autoRemX, y: autoRemY }, NODE_BOX.reminder, NODE_GAP);
+        const remX = remPosition.x;
+        const remY = remPosition.y;
         const effectiveRemAngle = Math.atan2(remY - catY, remX - catX);
 
         const completedSubtasks = reminder.subtasks.filter((s) => s.completed).length;
@@ -252,8 +301,7 @@ export function generateActiveMesh(
           target: reminder.id,
           style: {
             stroke: customLines ? theme.connectionColors.reminder : category.color,
-            strokeWidth: isFocused ? 2.5 : 1.8,
-            strokeOpacity: isFocused ? 0.85 : 0.5,
+            ...connectionEdgeStyle(theme, isFocused ? 2.5 : 1.8, isFocused ? 0.85 : 0.5),
           },
         });
 
@@ -272,8 +320,11 @@ export function generateActiveMesh(
             const autoSubY = Math.round(remY + subDist * Math.sin(subAngle));
 
             const manualSub = manualPositions?.[subtask.id];
-            const subX = manualSub?.manuallyPositioned ? manualSub.x : autoSubX;
-            const subY = manualSub?.manuallyPositioned ? manualSub.y : autoSubY;
+            const subPosition = manualSub?.manuallyPositioned
+              ? { x: manualSub.x, y: manualSub.y }
+              : grid.place({ x: autoSubX, y: autoSubY }, NODE_BOX.subtask, NODE_GAP / 2);
+            const subX = subPosition.x;
+            const subY = subPosition.y;
 
             const subtaskAccent = customNodeColors ? accentForNodeType(theme, 'subtask') : category.color;
             const subTheme = nodeTheme(theme, subtaskAccent, { completed: subtask.completed });
@@ -318,8 +369,7 @@ export function generateActiveMesh(
                   : customLines
                   ? theme.connectionColors.subtask
                   : category.color,
-                strokeWidth: 1.4,
-                strokeOpacity: subtask.completed ? 0.35 : 0.55,
+                ...connectionEdgeStyle(theme, 1.4, subtask.completed ? 0.35 : 0.55),
                 strokeDasharray: subtask.completed ? '4 4' : undefined,
               },
             });
@@ -438,8 +488,7 @@ export function generateCompletedOverviewMesh(
       target: category.id,
       style: {
         stroke: customLines ? theme.connectionColors.branch : category.color,
-        strokeWidth: 2,
-        strokeOpacity: catCompletedCount > 0 ? 0.7 : 0.3,
+        ...connectionEdgeStyle(theme, 2, catCompletedCount > 0 ? 0.7 : 0.3),
       },
     });
   });
@@ -472,10 +521,31 @@ export function generateCompletedCategoryMesh(
     (r) => r.completed && r.categoryId === category.id
   );
 
+  // Only nodes that actually exist in this view can block automatic placement,
+  // and every manual position among them is respected and never moved.
+  const visibleIds = new Set<string>([category.id]);
+  completedCatReminders.forEach((reminder) => {
+    visibleIds.add(reminder.id);
+    reminder.subtasks.forEach((subtask) => visibleIds.add(subtask.id));
+  });
+  const grid = new PlacementGrid();
+  const sizeFor = (id: string): BoxSize => {
+    if (id === category.id) return NODE_BOX.category;
+    if (completedCatReminders.some((reminder) => reminder.id === id)) return NODE_BOX.reminder;
+    return NODE_BOX.subtask;
+  };
+  if (manualPositions) {
+    for (const [id, position] of Object.entries(manualPositions)) {
+      if (!position?.manuallyPositioned || !visibleIds.has(id)) continue;
+      grid.reserve({ x: position.x, y: position.y }, sizeFor(id));
+    }
+  }
+
   // Category as the central hero node
   const manualCat = manualPositions?.[category.id];
   const catX = manualCat?.manuallyPositioned ? manualCat.x : 0;
   const catY = manualCat?.manuallyPositioned ? manualCat.y : 0;
+  grid.reserve({ x: catX, y: catY }, NODE_BOX.category);
 
   const centerAccent = customNodeColors
     ? accentForNodeType(theme, 'category', { completed: true })
@@ -522,8 +592,11 @@ export function generateCompletedCategoryMesh(
     const autoRemY = Math.round(catY + remRadius * Math.sin(autoAngle));
 
     const manualRem = manualPositions?.[reminder.id];
-    const remX = manualRem?.manuallyPositioned ? manualRem.x : autoRemX;
-    const remY = manualRem?.manuallyPositioned ? manualRem.y : autoRemY;
+    const remPosition = manualRem?.manuallyPositioned
+      ? { x: manualRem.x, y: manualRem.y }
+      : grid.place({ x: autoRemX, y: autoRemY }, NODE_BOX.reminder, NODE_GAP);
+    const remX = remPosition.x;
+    const remY = remPosition.y;
     const effectiveRemAngle = Math.atan2(remY - catY, remX - catX);
     const linkedContact = contacts?.find((c) => c.id === reminder.linkedContactId);
     const reminderAccent = customNodeColors
@@ -575,8 +648,7 @@ export function generateCompletedCategoryMesh(
       target: reminder.id,
       style: {
         stroke: customLines ? theme.connectionColors.reminder : category.color,
-        strokeWidth: 2,
-        strokeOpacity: 0.65,
+        ...connectionEdgeStyle(theme, 2, 0.65),
       },
     });
 
@@ -594,8 +666,11 @@ export function generateCompletedCategoryMesh(
         const autoSubY = Math.round(remY + subDist * Math.sin(subAngle));
 
         const manualSub = manualPositions?.[subtask.id];
-        const subX = manualSub?.manuallyPositioned ? manualSub.x : autoSubX;
-        const subY = manualSub?.manuallyPositioned ? manualSub.y : autoSubY;
+        const subPosition = manualSub?.manuallyPositioned
+          ? { x: manualSub.x, y: manualSub.y }
+          : grid.place({ x: autoSubX, y: autoSubY }, NODE_BOX.subtask, NODE_GAP / 2);
+        const subX = subPosition.x;
+        const subY = subPosition.y;
 
         const subtaskAccent = customNodeColors
           ? accentForNodeType(theme, 'subtask', { completed: subtask.completed })
@@ -635,8 +710,7 @@ export function generateCompletedCategoryMesh(
           target: subtask.id,
           style: {
             stroke: customLines ? theme.connectionColors.completed : '#64748B',
-            strokeWidth: 1.2,
-            strokeOpacity: 0.45,
+            ...connectionEdgeStyle(theme, 1.2, 0.45),
           },
         });
       });

@@ -161,6 +161,7 @@ export type SmartAssistanceFeature =
   | 'suggestSubtasks'
   | 'moneySmartFeatures'
   | 'dashboardSummaries'
+  | 'graphSummaries'
   | 'useCompletedHistory'
   | 'useContactContext'
   | 'diagnosticsSuggestions';
@@ -259,6 +260,13 @@ export const SMART_ASSISTANCE_FEATURES: readonly SmartAssistanceFeatureDefinitio
     feature: 'dashboardSummaries',
     label: 'Dashboard summaries',
     description: 'Summarise your stored dashboard statistics and overdue/completion facts locally.',
+    group: 'context',
+    defaultEnabled: true,
+  },
+  {
+    feature: 'graphSummaries',
+    label: 'Reminder & graph summaries',
+    description: 'Summarise the reminders in a category or branch as text and as structured graph facts. Nothing is changed.',
     group: 'context',
     defaultEnabled: true,
   },

@@ -20,6 +20,11 @@ export const BACKGROUND_DEFAULT_COLOR = '#080B12';
 
 const HEX_PATTERN = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
+/** User-facing range for the connection brightness slider. */
+export const CONNECTION_BRIGHTNESS_RANGE = { min: 0.1, max: 2, step: 0.05, default: 1 } as const;
+/** User-facing range for the connection contrast slider. */
+export const CONNECTION_CONTRAST_RANGE = { min: 0, max: 1, step: 0.05, default: 0.35 } as const;
+
 const DEFAULT_NODE_COLORS: NodeColorPalette = {
   root: '#6366f1',
   category: '#06b6d4',
@@ -76,6 +81,8 @@ export function getDefaultAppearance(): AppearanceSettings {
     connectionColorMode: 'inherit',
     nodeColors: { ...DEFAULT_NODE_COLORS },
     connectionColors: { ...DEFAULT_CONNECTION_COLORS },
+    connectionBrightness: CONNECTION_BRIGHTNESS_RANGE.default,
+    connectionContrast: CONNECTION_CONTRAST_RANGE.default,
     surfaceMode: 'auto',
     background: {
       kind: 'default',
@@ -461,7 +468,18 @@ export function validateAppearance(raw: unknown): AppearanceValidation {
     }
     return JSON.stringify(value);
   };
-  const shapePreserved = hasRequiredShape && stable(normalized) === stable(raw);
+  // Connection brightness/contrast were added later and always normalize to a
+  // real number, so stored data written before they existed must still count as
+  // shape-preserved rather than "malformed".
+  const withoutLaterFields = (value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const copy = { ...(value as Record<string, unknown>) };
+    delete copy.connectionBrightness;
+    delete copy.connectionContrast;
+    return copy;
+  };
+  const shapePreserved =
+    hasRequiredShape && stable(withoutLaterFields(normalized)) === stable(withoutLaterFields(source));
 
   if (!isPreset && !isCustom) {
     return { valid: false, mode: 'legacy', reason: `Theme "${String(themeId ?? 'missing')}" is not a supported appearance mode.`, normalized };
@@ -523,6 +541,19 @@ export function normalizeAppearance(raw: unknown): AppearanceSettings {
       subtask: pickColor(rawLines.subtask, defaults.connectionColors.subtask),
       completed: pickColor(rawLines.completed, defaults.connectionColors.completed),
     },
+    // Added after the first release, so absence simply means "use the default".
+    connectionBrightness: clampNumber(
+      source.connectionBrightness,
+      CONNECTION_BRIGHTNESS_RANGE.min,
+      CONNECTION_BRIGHTNESS_RANGE.max,
+      defaults.connectionBrightness,
+    ),
+    connectionContrast: clampNumber(
+      source.connectionContrast,
+      CONNECTION_CONTRAST_RANGE.min,
+      CONNECTION_CONTRAST_RANGE.max,
+      defaults.connectionContrast,
+    ),
     background: {
       // Gracefully fall back when the stored image data is missing or invalid
       kind: requestedKind === 'image' && !dataUrl ? defaults.background.kind : requestedKind,
@@ -576,4 +607,84 @@ export function normalizeAppearance(raw: unknown): AppearanceSettings {
 
 export function appearancesMatch(a: AppearanceSettings, b: AppearanceSettings): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// ==================== CONNECTION RENDERING ====================
+
+/**
+ * Resolved, ready-to-render connection treatment shared by every graph surface
+ * (the 3D mesh, the 2D fallback canvas and the settings preview) so a
+ * brightness/contrast change is applied identically everywhere.
+ */
+export interface ConnectionRenderSettings {
+  /** Opacity multiplier, 0.1 - 2. */
+  brightness: number;
+  /** Background separation amount, 0 - 1. */
+  contrast: number;
+  /** Palette alpha -> rendered alpha, after brightness and contrast. */
+  alpha(base: number): number;
+  /** Extra stroke width contributed by contrast so lines stay readable. */
+  widthBonus: number;
+  /** Halo colour drawn behind a line to lift it off a busy background. */
+  casingColor: string;
+  /** Halo opacity; 0 means no casing line should be drawn. */
+  casingOpacity: number;
+}
+
+/** True when the chosen background is bright enough to need a dark halo. */
+export function hasLightGraphBackground(appearance: AppearanceSettings): boolean {
+  const kind = appearance.background.kind;
+  if (kind === 'white') return true;
+  if (kind === 'black' || kind === 'void' || kind === 'image') return false;
+  return relativeLuminance(appearance.background.color) > 0.5;
+}
+
+/**
+ * Turns the two user-facing connection sliders into concrete render values.
+ * Brightness scales line opacity; contrast lifts faint lines toward full opacity
+ * (a gamma curve, so mid-tone lines gain the most) and adds a background-aware
+ * halo that separates lines from the void, code rain and photo backgrounds.
+ */
+export function resolveConnectionRenderSettings(appearance: AppearanceSettings): ConnectionRenderSettings {
+  const brightness = clampNumber(
+    appearance.connectionBrightness,
+    CONNECTION_BRIGHTNESS_RANGE.min,
+    CONNECTION_BRIGHTNESS_RANGE.max,
+    CONNECTION_BRIGHTNESS_RANGE.default,
+  );
+  const contrast = clampNumber(
+    appearance.connectionContrast,
+    CONNECTION_CONTRAST_RANGE.min,
+    CONNECTION_CONTRAST_RANGE.max,
+    CONNECTION_CONTRAST_RANGE.default,
+  );
+  const casingColor = hasLightGraphBackground(appearance) ? '#0b1220' : '#f8fafc';
+  return {
+    brightness,
+    contrast,
+    alpha(base: number) {
+      const lit = Math.max(0, Math.min(1, base * brightness));
+      return Math.max(0, Math.min(1, Math.pow(lit, 1 - 0.55 * contrast)));
+    },
+    widthBonus: contrast * 1.1,
+    casingColor,
+    casingOpacity: contrast * 0.4,
+  };
+}
+
+/**
+ * Applies the user's connection brightness and contrast to one connection's
+ * stroke width and alpha. Callers keep their own stroke colour and dash pattern,
+ * so node/connection colour customisation keeps working untouched.
+ */
+export function connectionStrokeStyle(
+  appearance: AppearanceSettings,
+  width: number,
+  opacity: number,
+): { strokeWidth: number; strokeOpacity: number } {
+  const connection = resolveConnectionRenderSettings(appearance);
+  return {
+    strokeWidth: width + connection.widthBonus,
+    strokeOpacity: connection.alpha(opacity),
+  };
 }

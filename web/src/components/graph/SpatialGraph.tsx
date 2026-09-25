@@ -2,6 +2,20 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HelpCircle, Home, Move, X } from 'lucide-react';
 import { Edge, Node, Position } from '@xyflow/react';
 import { MeshNodeData, AppearanceSettings } from '../../types';
+import { resolveConnectionRenderSettings } from '../../services/appearance';
+import {
+  buildScreenGrid,
+  connectionDensityDamp,
+  connectionWidthScale,
+  connectionZoomFade,
+  meanNodeScreenHeight,
+  nodeHalfExtent,
+  resolveGraphDetailLevel,
+  routeConnection,
+  ROUTING_MAX_EDGES,
+  ROUTING_MAX_OBSTACLES,
+  type ScreenObstacle,
+} from '../../services/graphLod';
 import { RootNode } from '../nodes/RootNode';
 import { CategoryNode } from '../nodes/CategoryNode';
 import { ReminderNode } from '../nodes/ReminderNode';
@@ -26,8 +40,20 @@ interface SpatialGraphProps {
 
 type Point3 = { x: number; y: number; z: number };
 export type SpatialCamera = { target: Point3; yaw: number; pitch: number; distance: number };
-type ProjectedPoint = Point3 & { screenX: number; screenY: number; scale: number; depth: number };
+type ProjectedPoint = Point3 & { screenX: number; screenY: number; scale: number; depth: number; visible: boolean };
 type NodeComponent = React.ComponentType<Record<string, unknown>>;
+
+/** One connection, fully resolved into screen-space geometry and styling. */
+interface RenderedConnection {
+  id: string;
+  path: string;
+  stroke: string;
+  strokeWidth: number;
+  strokeOpacity: number;
+  /** Background-separation halo opacity; 0 means no halo element is drawn. */
+  casingOpacity: number;
+  active: boolean;
+}
 
 const NODE_COMPONENTS: Record<string, NodeComponent> = {
   rootNode: RootNode as unknown as NodeComponent,
@@ -35,18 +61,6 @@ const NODE_COMPONENTS: Record<string, NodeComponent> = {
   reminderNode: ReminderNode as unknown as NodeComponent,
   subtaskNode: SubtaskNode as unknown as NodeComponent,
 };
-
-/** Half-extents of each node kind in world units, used for framing and clipping. */
-const NODE_HALF: Record<string, { x: number; y: number }> = {
-  root: { x: 52, y: 52 },
-  category: { x: 39, y: 39 },
-  reminder: { x: 83, y: 50 },
-  subtask: { x: 65, y: 21 },
-};
-
-function nodeHalfExtent(type: string): { x: number; y: number } {
-  return NODE_HALF[type] ?? NODE_HALF.reminder;
-}
 
 // ---- Camera tuning constants ------------------------------------------------
 
@@ -67,6 +81,21 @@ const HUD_RESERVED_PIXELS = 104;
 /** Fraction of the viewport a framed branch is allowed to occupy. */
 const FRAMING_PADDING = 0.84;
 const PITCH_LIMIT = Math.PI / 2 - 0.015;
+/** Matches the persisted node-position safety range. */
+const MAX_WORLD_COORDINATE = 100_000;
+
+function safeWorldCoordinate(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(-MAX_WORLD_COORDINATE, Math.min(MAX_WORLD_COORDINATE, value));
+}
+
+function safeViewportDimension(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.max(1, value) : 1;
+}
+
+function safeFocalLength(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.max(260, value) : 260;
+}
 
 // Momentum is deliberately gentle: it is capped relative to the gesture that
 // produced it, so a flick can never turn into an uncontrollable slide.
@@ -83,9 +112,10 @@ const NODE_HINT_STORAGE_KEY = 'mindmesh_spatial_node_hint_seen';
 
 const SPATIAL_GESTURES: Array<{ glyph: string; label: string; hint: string }> = [
   { glyph: '\u27f3', label: 'Drag', hint: 'Rotate around the network' },
-  { glyph: '\u2922', label: 'Pinch', hint: 'Zoom, relative to the focus point' },
+  { glyph: '\u2922', label: 'Pinch', hint: 'Zoom in and out — closer nodes grow, distant ones shrink' },
+  { glyph: '\u26f6', label: 'Node size', hint: 'Nodes keep their real size in the mesh — getting closer makes them fill more of the view' },
   { glyph: '\u2725', label: 'Two-finger drag', hint: 'Move through the graph' },
-  { glyph: '\u25c9', label: 'Tap node', hint: 'Focus that node' },
+  { glyph: '\u25c9', label: 'Tap node', hint: 'Focus that node, then watch it grow as the camera arrives' },
   { glyph: '\u22ee', label: 'Tap focused node again', hint: 'Open its options' },
   { glyph: '\u2302', label: 'Home', hint: 'Return to the centre of the graph' },
 ];
@@ -106,6 +136,14 @@ function writeStoredFlag(key: string): void {
   }
 }
 
+/**
+ * World units in front of the camera that are still drawn. This is a real near
+ * plane: nodes behind the camera are culled instead of being projected at a
+ * fixed minimum depth, which would draw them as an enormous, meaningless smear
+ * across the screen.
+ */
+const NEAR_PLANE = 60;
+
 function depthForNode(node: Node<MeshNodeData>, index: number): number {
   const base = node.data.type === 'root' ? 0 : node.data.type === 'category' ? 105 : node.data.type === 'reminder' ? 235 : 350;
   const hash = Array.from(node.id).reduce((sum, char) => sum + char.charCodeAt(0), 0);
@@ -113,24 +151,52 @@ function depthForNode(node: Node<MeshNodeData>, index: number): number {
 }
 
 function worldPoint(node: Node<MeshNodeData>, index: number): Point3 {
-  return { x: node.position.x, y: node.position.y, z: depthForNode(node, index) };
+  return {
+    x: safeWorldCoordinate(node.position.x),
+    y: safeWorldCoordinate(node.position.y),
+    z: depthForNode(node, index),
+  };
 }
 
 export function projectSpatialPoint(point: Point3, camera: SpatialCamera, width: number, height: number, focal: number): ProjectedPoint {
-  const dx = point.x - camera.target.x;
-  const dy = point.y - camera.target.y;
-  const dz = point.z - camera.target.z;
-  const cosYaw = Math.cos(camera.yaw);
-  const sinYaw = Math.sin(camera.yaw);
+  const safePoint = {
+    x: safeWorldCoordinate(point.x),
+    y: safeWorldCoordinate(point.y),
+    z: safeWorldCoordinate(point.z),
+  };
+  const safeCamera = clampSpatialCamera(camera);
+  const viewportWidth = safeViewportDimension(width);
+  const viewportHeight = safeViewportDimension(height);
+  const projectionFocal = safeFocalLength(focal);
+  const dx = safePoint.x - safeCamera.target.x;
+  const dy = safePoint.y - safeCamera.target.y;
+  const dz = safePoint.z - safeCamera.target.z;
+  const cosYaw = Math.cos(safeCamera.yaw);
+  const sinYaw = Math.sin(safeCamera.yaw);
   const yawX = dx * cosYaw - dz * sinYaw;
   const yawZ = dx * sinYaw + dz * cosYaw;
-  const cosPitch = Math.cos(camera.pitch);
-  const sinPitch = Math.sin(camera.pitch);
+  const cosPitch = Math.cos(safeCamera.pitch);
+  const sinPitch = Math.sin(safeCamera.pitch);
   const pitchY = dy * cosPitch - yawZ * sinPitch;
   const cameraZ = dy * sinPitch + yawZ * cosPitch;
-  const depth = Math.max(30, camera.distance - cameraZ);
-  const scale = focal / depth;
-  return { ...point, screenX: width / 2 + yawX * scale, screenY: height / 2 + pitchY * scale, scale, depth };
+  // Distance in front of the camera. Everything the camera can actually see is
+  // here; anything at or behind the near plane is behind the lens.
+  const forward = safeCamera.distance - cameraZ;
+  const visible = forward > NEAR_PLANE;
+  const depth = visible ? forward : NEAR_PLANE;
+  // The projection is the whole story about size: a node's on-screen size is its
+  // fixed world size divided by its distance from the camera. There is no
+  // screen-space correction, so moving the camera closer always makes a node
+  // bigger and pulling back always makes it smaller.
+  const scale = projectionFocal / depth;
+  return {
+    ...safePoint,
+    screenX: viewportWidth / 2 + yawX * scale,
+    screenY: viewportHeight / 2 + pitchY * scale,
+    scale,
+    depth,
+    visible,
+  };
 }
 
 /**
@@ -857,7 +923,7 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
     if (!element) return;
     const update = () => {
       const rect = element.getBoundingClientRect();
-      setSize({ width: Math.max(1, rect.width), height: Math.max(1, rect.height) });
+      setSize({ width: safeViewportDimension(rect.width), height: safeViewportDimension(rect.height) });
     };
     const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : undefined;
     observer?.observe(element);
@@ -915,7 +981,12 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
     const element = viewportRef.current;
     if (!element) return { left: 0, top: 0, width: 1, height: 1 };
     const rect = element.getBoundingClientRect();
-    return { left: rect.left, top: rect.top, width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+    return {
+      left: Number.isFinite(rect.left) ? rect.left : 0,
+      top: Number.isFinite(rect.top) ? rect.top : 0,
+      width: safeViewportDimension(rect.width),
+      height: safeViewportDimension(rect.height),
+    };
   }, []);
 
   // ---- Node repositioning (explicit Move mode only) ------------------------
@@ -1213,6 +1284,128 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
     return visible;
   }, [hiddenSecondaryNodes, nodes]);
 
+  // ---- Connection rendering ------------------------------------------------
+  // Brightness/contrast are resolved once per appearance change and then applied
+  // together with zoom-aware and density-aware de-cluttering.
+  const connection = useMemo(() => resolveConnectionRenderSettings(appearance), [appearance]);
+
+  const visibleEdges = useMemo(() => {
+    const list: Array<{ edge: Edge; source: ProjectedPoint; target: ProjectedPoint }> = [];
+    for (const edge of edges) {
+      if (!visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) continue;
+      const source = projected.get(edge.source);
+      const target = projected.get(edge.target);
+      if (!source || !target || !source.visible || !target.visible) continue;
+      list.push({ edge, source, target });
+    }
+    return list;
+  }, [edges, projected, visibleNodeIds]);
+
+  /** Average projected scale of the visible connections, used for zoom LOD. */
+  const meanConnectionScale = useMemo(() => {
+    if (visibleEdges.length === 0) return focal / Math.max(1, camera.distance);
+    let sum = 0;
+    for (const entry of visibleEdges) sum += (entry.source.scale + entry.target.scale) / 2;
+    return sum / visibleEdges.length;
+  }, [camera.distance, focal, visibleEdges]);
+
+  const screenObstacles = useMemo(() => {
+    const list: ScreenObstacle[] = [];
+    for (const node of nodes) {
+      if (!visibleNodeIds.has(node.id)) continue;
+      const point = projected.get(node.id);
+      if (!point || !point.visible) continue;
+      const half = nodeHalfExtent(node.data.type);
+      list.push({ id: node.id, x: point.screenX, y: point.screenY, radius: Math.max(half.x, half.y) * point.scale + 4 });
+    }
+    return list;
+  }, [nodes, projected, visibleNodeIds]);
+
+  // Routing is a readability win, not a correctness requirement, so it is
+  // skipped on graphs large enough for the extra work to be felt.
+  const routingEnabled = visibleEdges.length <= ROUTING_MAX_EDGES && screenObstacles.length <= ROUTING_MAX_OBSTACLES;
+  const screenGrid = useMemo(
+    () => (routingEnabled ? buildScreenGrid(screenObstacles) : null),
+    [routingEnabled, screenObstacles],
+  );
+
+  /**
+   * Every drawable connection, resolved once per frame: geometry, routing,
+   * brightness/contrast, zoom fade, density damping and selection emphasis.
+   *
+   * Resolving here (instead of inline in JSX) keeps the render body a simple
+   * map and means the whole connection treatment can be reasoned about in one
+   * place. A relationship is only ever dimmed or bowed - never removed.
+   */
+  const renderedConnections = useMemo<RenderedConnection[]>(() => {
+    if (visibleEdges.length === 0) return [];
+    const zoomFade = connectionZoomFade(meanConnectionScale);
+    const widthScale = connectionWidthScale(meanConnectionScale);
+    const density = connectionDensityDamp(visibleEdges.length);
+    // A contrast halo needs an extra element per line, so it is only paid for on
+    // graphs small enough that the router already runs.
+    const casingOpacity = routingEnabled ? connection.casingOpacity : 0;
+    const list: RenderedConnection[] = [];
+
+    for (const { edge, source, target } of visibleEdges) {
+      const isSelectedPath = selectedId === edge.source || selectedId === edge.target;
+      const isBackgroundPath = Boolean(selectedId) && !isSelectedPath;
+      const baseAlpha = Number(edge.style?.strokeOpacity ?? 0.55);
+      const baseWidth = Number(edge.style?.strokeWidth ?? 1.5);
+      const stroke = typeof edge.style?.stroke === 'string' ? edge.style.stroke : '#64748b';
+
+      let alpha = connection.alpha(baseAlpha) * zoomFade * density;
+      if (isBackgroundPath) alpha *= 0.4;
+      // The focused node's own relationships stay the most legible thing on screen.
+      if (isSelectedPath) alpha = Math.min(1, alpha * 1.5 + 0.3);
+
+      const strokeWidth = Math.max(0.6, baseWidth * widthScale + connection.widthBonus) * (isSelectedPath ? 1.45 : 1);
+
+      // `ProjectedPoint.x/y` are intentionally world-space. Routing and SVG are
+      // screen-space, so convert explicitly instead of passing the world point
+      // through under an ambiguous `{ x, y }` shape.
+      const screenSource = { x: source.screenX, y: source.screenY };
+      const screenTarget = { x: target.screenX, y: target.screenY };
+      let path = `M ${screenSource.x} ${screenSource.y} L ${screenTarget.x} ${screenTarget.y}`;
+      if (screenGrid) {
+        // The two nodes a connection belongs to are never obstacles to itself.
+        const obstacles = screenGrid
+          .query(screenSource, screenTarget)
+          .filter((obstacle) => obstacle.id !== edge.source && obstacle.id !== edge.target);
+        path = routeConnection(screenSource, screenTarget, obstacles, Math.max(8, strokeWidth * 3)).path;
+      }
+
+      list.push({
+        id: edge.id,
+        path,
+        stroke,
+        strokeWidth,
+        strokeOpacity: Math.max(0.05, Math.min(1, alpha)),
+        casingOpacity: isBackgroundPath ? casingOpacity * 0.5 : casingOpacity,
+        active: Boolean(edge.animated) || isSelectedPath,
+      });
+    }
+    return list;
+  }, [connection, meanConnectionScale, routingEnabled, screenGrid, selectedId, visibleEdges]);
+
+  /*
+   * Level of detail for the whole mesh, derived from how tall the visible nodes
+   * actually project. Pulling the camera back simplifies each card (labels, then
+   * metadata) so hundreds of nodes stay distinguishable instead of fusing into a
+   * slab of text. Node size in graph space is never changed by this - only the
+   * amount of content drawn inside an already-small node.
+   */
+  const detailLevel = useMemo(() => {
+    const visible: Array<{ type: string; scale: number }> = [];
+    for (const node of nodes) {
+      const point = projected.get(node.id);
+      if (!point || !point.visible) continue;
+      visible.push({ type: node.data.type, scale: point.scale });
+    }
+    const meanHeight = meanNodeScreenHeight(visible);
+    return resolveGraphDetailLevel(meanHeight ?? focal / Math.max(1, camera.distance) * 100);
+  }, [camera.distance, focal, nodes, projected]);
+
   const renderedNodes = nodes
     .filter((node) => visibleNodeIds.has(node.id))
     .sort((a, b) => (projected.get(b.id)?.depth ?? 0) - (projected.get(a.id)?.depth ?? 0));
@@ -1224,6 +1417,9 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
       ref={viewportRef}
       className={`mm-spatial-graph${moveMode ? ' mm-spatial-graph--move' : ''}`}
       data-testid="spatial-graph"
+      data-viewport-width={size.width}
+      data-viewport-height={size.height}
+      data-lod-level={detailLevel}
       data-spatial-active="true"
       data-camera-yaw={camera.yaw}
       data-camera-pitch={camera.pitch}
@@ -1254,29 +1450,50 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
         setSelectedId(null);
         onEmptyClick?.();
       }}
-      style={{ '--mm-spatial-focal': `${focal}px` } as React.CSSProperties}
     >
       <svg className="mm-spatial-connections" viewBox={`0 0 ${size.width} ${size.height}`} preserveAspectRatio="none" aria-hidden="true">
-        {edges.map((edge) => {
-          const source = projected.get(edge.source);
-          const target = projected.get(edge.target);
-          if (!source || !target || !visibleNodeIds.has(edge.source) || !visibleNodeIds.has(edge.target)) return null;
-          const selectedPath = selectedId === edge.source || selectedId === edge.target;
-          const stroke = typeof edge.style?.stroke === 'string' ? edge.style.stroke : '#64748b';
-          const opacity = selectedId && !selectedPath ? 0.26 : Number(edge.style?.strokeOpacity ?? 0.55) * (source.scale + target.scale) * 0.9;
-          return <line key={edge.id} x1={source.screenX} y1={source.screenY} x2={target.screenX} y2={target.screenY} stroke={stroke} strokeWidth={selectedPath ? 3.5 : Number(edge.style?.strokeWidth ?? 1.5) * Math.max(0.7, (source.scale + target.scale) / 1.6)} strokeOpacity={opacity} strokeLinecap="round" className={edge.animated || selectedPath ? 'mm-spatial-edge mm-spatial-edge--active' : 'mm-spatial-edge'} />;
-        })}
+        {renderedConnections.map((line) => (
+          <g key={line.id} data-connection-id={line.id}>
+            {/* Background-aware halo so lines stay separated from the void glow,
+                Matrix code rain and imported photos. */}
+            {line.casingOpacity > 0 && (
+              <path
+                className="mm-spatial-edge-casing"
+                d={line.path}
+                fill="none"
+                stroke={connection.casingColor}
+                strokeWidth={line.strokeWidth + 2.4}
+                strokeOpacity={line.casingOpacity}
+                strokeLinecap="round"
+              />
+            )}
+            <path
+              className={line.active ? 'mm-spatial-edge mm-spatial-edge--active' : 'mm-spatial-edge'}
+              d={line.path}
+              fill="none"
+              stroke={line.stroke}
+              strokeWidth={line.strokeWidth}
+              strokeOpacity={line.strokeOpacity}
+              strokeLinecap="round"
+            />
+          </g>
+        ))}
       </svg>
 
       <div className="mm-spatial-stars" aria-hidden="true" />
       {renderedNodes.map((node) => {
         const point = projected.get(node.id);
         const Component = NODE_COMPONENTS[node.type || ''];
-        if (!point || !Component) return null;
+        if (!point || !point.visible || !Component) return null;
         const isFocused = selectedId === node.id;
+        // The node keeps its fixed size in graph space and is only *projected*:
+        // zooming the camera in brings it closer and visibly larger, zooming out
+        // makes it smaller. No inverse-zoom / constant-screen-size compensation
+        // is applied to the node itself. Only the selection highlight (and the
+        // card's own labels) may scale a little, and never against the camera.
+        const nodeScale = point.scale * (isFocused ? 1.06 : 1); // world-space size
         // The focused node stays obviously highlighted without burying the rest
         // of the network: everything else keeps enough opacity for context.
-        const visibleScale = Math.max(0.42, Math.min(1.28, point.scale * 1.55)) * (isFocused ? 1.06 : 1);
         const isDimmed = Boolean(selectedId && !isFocused && node.data.type !== 'root');
         return (
           <div
@@ -1343,7 +1560,7 @@ export const SpatialGraph: React.FC<SpatialGraphProps> = ({
               event.preventDefault();
               event.stopPropagation();
             }}
-            style={{ left: point.screenX, top: point.screenY, zIndex: Math.round(2000 - point.depth), opacity: isDimmed ? 0.45 : Math.max(0.62, Math.min(1, 1.15 - point.depth / 2100)), filter: point.depth > 1250 ? 'saturate(0.72)' : undefined, transform: `translate(-50%, -50%) scale(${visibleScale})` }}
+            style={{ left: point.screenX, top: point.screenY, zIndex: Math.round(2000 - point.depth), opacity: isDimmed ? 0.45 : Math.max(0.62, Math.min(1, 1.15 - point.depth / 2100)), filter: point.depth > 1250 ? 'saturate(0.72)' : undefined, transform: `translate(-50%, -50%) scale(${nodeScale})` }}
           >
             <Component id={node.id} type={node.type} data={node.data} selected={isFocused} dragging={activeDrag.mode === 'NODE_DRAG' && activeDrag.nodeId === node.id} zIndex={node.zIndex} xPos={node.position.x} yPos={node.position.y} sourcePosition={Position.Bottom} targetPosition={Position.Top} isConnectable={false} />
           </div>

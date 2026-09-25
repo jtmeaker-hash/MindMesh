@@ -3,6 +3,8 @@ import { X, Palette, Droplet, Sparkles, Image as ImageIcon, RotateCcw, Trash2, A
 import { AppearanceSettings } from '../../types/appearance';
 import {
   APPEARANCE_PRESETS,
+  CONNECTION_BRIGHTNESS_RANGE,
+  CONNECTION_CONTRAST_RANGE,
   applyPreset,
   getChromeTheme,
   getDefaultAppearance,
@@ -650,6 +652,28 @@ export const AppearanceModal: React.FC<AppearanceModalProps> = ({ isOpen, onClos
               disabled={appearance.connectionColorMode !== 'custom'}
               onChange={(completed) => patch({ connectionColors: { ...appearance.connectionColors, completed } })}
             />
+            <SliderRow
+              label="Connection brightness"
+              value={appearance.connectionBrightness}
+              min={CONNECTION_BRIGHTNESS_RANGE.min}
+              max={CONNECTION_BRIGHTNESS_RANGE.max}
+              step={CONNECTION_BRIGHTNESS_RANGE.step}
+              display={`${Math.round(appearance.connectionBrightness * 100)}%`}
+              onChange={(connectionBrightness) => patch({ connectionBrightness })}
+            />
+            <SliderRow
+              label="Connection contrast"
+              value={appearance.connectionContrast}
+              min={CONNECTION_CONTRAST_RANGE.min}
+              max={CONNECTION_CONTRAST_RANGE.max}
+              step={CONNECTION_CONTRAST_RANGE.step}
+              display={`${Math.round(appearance.connectionContrast * 100)}%`}
+              onChange={(connectionContrast) => patch({ connectionContrast })}
+            />
+            <div style={{ fontSize: 11, color: '#64748b' }}>
+              Brightness controls how much connections glow overall. Contrast is separate: it lifts dim lines off the
+              background, void glow, Matrix code rain and imported photos. Both update the graph live.
+            </div>
 
             <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', letterSpacing: '0.06em', marginTop: 6 }}>
               CONTRAST & READABILITY

@@ -2,9 +2,15 @@ import { Node, Edge } from '@xyflow/react';
 import { Category, Reminder, MeshNodeData, NodePositionMap } from '../types';
 import { Contact } from '../types/contact';
 import { AppearanceSettings } from '../types/appearance';
-import { accentForNodeType, getDefaultAppearance, resolveNodeTheme, withAlpha } from '../services/appearance';
+import {
+  accentForNodeType,
+  connectionStrokeStyle,
+  getDefaultAppearance,
+  resolveNodeTheme,
+  withAlpha,
+} from '../services/appearance';
 import { getChildCategories } from '../services/categories';
-import { findAvailablePosition } from '../services/nodePositions';
+import { createPlacementGrid } from '../services/nodePositions';
 
 export interface NestedGraphElements { nodes: Node<MeshNodeData>[]; edges: Edge[] }
 
@@ -30,22 +36,27 @@ const NODE_SIZES = {
   subtask: { width: 130, height: 42 },
 } as const;
 
-/** Minimum empty gap kept between the edges of two neighbouring nodes. */
+/**
+ * Minimum empty gap kept between the edges of two neighbouring nodes. This is
+ * deliberately roomy: the gap has to hold node labels, badges and the finger / 
+ * cursor hit area, so neighbouring nodes must never just barely touch.
+ */
 const SPACING = {
-  root: 56,
-  category: 96,
-  reminder: 72,
-  subtask: 42,
+  root: 72,
+  category: 120,
+  reminder: 96,
+  subtask: 56,
 } as const;
 
-const CATEGORY_BASE_RADIUS = 340;
-const CATEGORY_WEIGHT_RADIUS = 36;
-const CATEGORY_MAX_WEIGHT_RADIUS = 1150;
-const NESTED_CATEGORY_MIN_DISTANCE = 260;
-const REMINDER_BASE_DISTANCE = 290;
-const REMINDER_WEIGHT_DISTANCE = 26;
-const REMINDER_MAX_WEIGHT_DISTANCE = 820;
-const SUBTASK_DISTANCE = 170;
+const CATEGORY_BASE_RADIUS = 380;
+const CATEGORY_WEIGHT_RADIUS = 44;
+const CATEGORY_MAX_WEIGHT_RADIUS = 1500;
+const NESTED_CATEGORY_MIN_DISTANCE = 300;
+const REMINDER_BASE_DISTANCE = 330;
+const REMINDER_WEIGHT_DISTANCE = 34;
+const REMINDER_MAX_WEIGHT_DISTANCE = 1100;
+const SUBTASK_DISTANCE = 200;
+const SUBTASK_WEIGHT_DISTANCE = 14;
 
 type Size = { width: number; height: number };
 type Point = { x: number; y: number };
@@ -53,6 +64,21 @@ type Point = { x: number; y: number };
 function themeFor(appearance: AppearanceSettings, accent: string, completed = false) {
   const theme = resolveNodeTheme(appearance, accent);
   return { ...theme, glow: withAlpha(accent, completed ? 0.22 : 0.35), hover: appearance.nodeColors.hover };
+}
+
+/**
+ * Fold the user's connection brightness/contrast into an edge style. Only width
+ * and alpha are touched, so the chosen connection colours and dash patterns are
+ * preserved exactly.
+ */
+function lineStyle(
+  appearance: AppearanceSettings,
+  stroke: string,
+  width: number,
+  opacity: number,
+  extra: Record<string, unknown> = {},
+) {
+  return { stroke, ...connectionStrokeStyle(appearance, width, opacity), ...extra };
 }
 
 /** Total rendered descendants (reminders, their subtasks and nested categories). */
@@ -99,11 +125,19 @@ export function generateNestedActiveMesh(
   const activeReminders = reminders.filter((reminder) => !reminder.completed);
   const customNodes = appearance.nodeColorMode === 'custom';
   const customLines = appearance.connectionColorMode === 'custom';
-  const occupied: Array<{ position: Point; size: Size }> = [];
+  const grid = createPlacementGrid();
 
   // Reserve every manually positioned node up-front so automatic placement can
   // route around it regardless of the order branches are generated in.
   const visibleIds = new Set<string>(['root']);
+  const sizeFor = (id: string): Size => {
+    const reminder = activeReminders.find((entry) => entry.id === id);
+    if (reminder) return NODE_SIZES.reminder;
+    if (activeReminders.some((entry) => entry.subtasks.some((subtask) => subtask.id === id))) {
+      return NODE_SIZES.subtask;
+    }
+    return NODE_SIZES.category;
+  };
   categories.forEach((category) => visibleIds.add(category.id));
   activeReminders.forEach((reminder) => {
     visibleIds.add(reminder.id);
@@ -111,7 +145,7 @@ export function generateNestedActiveMesh(
   });
   for (const [id, position] of Object.entries(manualPositions)) {
     if (position?.manuallyPositioned && visibleIds.has(id)) {
-      occupied.push({ position: { x: position.x, y: position.y }, size: NODE_SIZES.reminder });
+      grid.reserve({ x: position.x, y: position.y }, sizeFor(id));
     }
   }
 
@@ -121,10 +155,9 @@ export function generateNestedActiveMesh(
     size: Size,
     spacing: number,
   ): Point => {
+    // Manual positions were reserved up-front and are never moved.
     if (manual?.manuallyPositioned) return { x: manual.x, y: manual.y };
-    const position = findAvailablePosition(ideal, occupied, size, spacing);
-    occupied.push({ position, size });
-    return position;
+    return grid.place(ideal, size, spacing);
   };
 
   const rootPosition = place(
@@ -150,7 +183,8 @@ export function generateNestedActiveMesh(
 
     reminder.subtasks.forEach((subtask, index) => {
       const angle = count === 1 ? parentAngle : startAngle + index * step;
-      const distance = SUBTASK_DISTANCE + (index % 2) * 26;
+      // Steps of a long checklist push outward instead of crowding one arc.
+      const distance = SUBTASK_DISTANCE + count * SUBTASK_WEIGHT_DISTANCE + (index % 2) * 26;
       const manual = manualPositions[subtask.id];
       const subPosition = place(
         { x: Math.round(x + distance * Math.cos(angle)), y: Math.round(y + distance * Math.sin(angle)) },
@@ -165,10 +199,13 @@ export function generateNestedActiveMesh(
         mutedTextColor: subTheme.mutedText, borderColor: subTheme.border, glowColor: subTheme.glow, hoverColor: subTheme.hover,
         completed: subtask.completed, reminderId: reminder.id, onNodeClick: callbacks.onNodeClick, onSubtaskToggle: callbacks.onSubtaskToggle,
       }});
-      edges.push({ id: `edge-${reminder.id}-${subtask.id}`, source: reminder.id, target: subtask.id, style: {
-        stroke: subtask.completed ? (customLines ? appearance.connectionColors.completed : '#475569') : (customLines ? appearance.connectionColors.subtask : color),
-        strokeWidth: 1.4, strokeOpacity: subtask.completed ? 0.35 : 0.55, strokeDasharray: subtask.completed ? '4 4' : undefined,
-      }});
+      edges.push({ id: `edge-${reminder.id}-${subtask.id}`, source: reminder.id, target: subtask.id, style: lineStyle(
+        appearance,
+        subtask.completed ? (customLines ? appearance.connectionColors.completed : '#475569') : (customLines ? appearance.connectionColors.subtask : color),
+        1.4,
+        subtask.completed ? 0.35 : 0.55,
+        subtask.completed ? { strokeDasharray: '4 4' } : {},
+      )});
     });
   };
 
@@ -204,9 +241,12 @@ export function generateNestedActiveMesh(
       mutedTextColor: catTheme.mutedText, borderColor: catTheme.border, glowColor: catTheme.glow, hoverColor: catTheme.hover,
       count: descendants, isFocused: focused, onNodeClick: callbacks.onNodeClick,
     }});
-    edges.push({ id: `edge-${parentId}-${category.id}`, source: parentId, target: category.id, animated: focused, style: {
-      stroke: customLines ? appearance.connectionColors.branch : category.color, strokeWidth: focused ? 3.5 : 2.2, strokeOpacity: focused ? 0.95 : 0.6,
-    }});
+    edges.push({ id: `edge-${parentId}-${category.id}`, source: parentId, target: category.id, animated: focused, style: lineStyle(
+      appearance,
+      customLines ? appearance.connectionColors.branch : category.color,
+      focused ? 3.5 : 2.2,
+      focused ? 0.95 : 0.6,
+    )});
 
     // Reminders fan outward through the category's angular wedge.
     const reminderCount = branchReminders.length;
@@ -239,9 +279,12 @@ export function generateNestedActiveMesh(
         isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId), onNodeClick: callbacks.onNodeClick,
         onReminderCompleteToggle: callbacks.onReminderCompleteToggle,
       }});
-      edges.push({ id: `edge-${category.id}-${reminder.id}`, source: category.id, target: reminder.id, style: {
-        stroke: customLines ? appearance.connectionColors.reminder : category.color, strokeWidth: focused ? 2.5 : 1.8, strokeOpacity: focused ? 0.85 : 0.5,
-      }});
+      edges.push({ id: `edge-${category.id}-${reminder.id}`, source: category.id, target: reminder.id, style: lineStyle(
+        appearance,
+        customLines ? appearance.connectionColors.reminder : category.color,
+        focused ? 2.5 : 1.8,
+        focused ? 0.85 : 0.5,
+      )});
       renderSubtasks(reminder, reminderX, reminderY, category.color, reminderAngle);
     });
 
@@ -276,11 +319,11 @@ export function generateNestedCompletedOverviewMesh(
   const nodes: Node<MeshNodeData>[] = [];
   const edges: Edge[] = [];
   const completed = reminders.filter((reminder) => reminder.completed);
-  const occupied: Array<{ position: Point; size: Size }> = [];
+  const grid = createPlacementGrid();
 
   for (const position of Object.values(manualPositions)) {
     if (position?.manuallyPositioned) {
-      occupied.push({ position: { x: position.x, y: position.y }, size: NODE_SIZES.category });
+      grid.reserve({ x: position.x, y: position.y }, NODE_SIZES.category);
     }
   }
 
@@ -291,9 +334,7 @@ export function generateNestedCompletedOverviewMesh(
     spacing: number,
   ): Point => {
     if (manual?.manuallyPositioned) return { x: manual.x, y: manual.y };
-    const position = findAvailablePosition(ideal, occupied, size, spacing);
-    occupied.push({ position, size });
-    return position;
+    return grid.place(ideal, size, spacing);
   };
 
   const root = manualPositions['completed-root'];
@@ -323,7 +364,12 @@ export function generateNestedCompletedOverviewMesh(
       textColor: theme.text, mutedTextColor: theme.mutedText, borderColor: theme.border, glowColor: theme.glow, hoverColor: theme.hover,
       onNodeClick: callbacks.onNodeClick,
     }});
-    edges.push({ id: `edge-completed-${parentId}-${category.id}`, source: parentId, target: category.id, style: { stroke: category.color, strokeWidth: 2, strokeOpacity: countFor(category.id) > 0 ? 0.7 : 0.3 } });
+    edges.push({ id: `edge-completed-${parentId}-${category.id}`, source: parentId, target: category.id, style: lineStyle(
+      appearance,
+      appearance.connectionColorMode === 'custom' ? appearance.connectionColors.branch : category.color,
+      2,
+      countFor(category.id) > 0 ? 0.7 : 0.3,
+    ) });
 
     const childCategories = getChildCategories(categories, category.id);
     const childWeights = childCategories.map((child) => Math.max(1, 1 + countFor(child.id)));

@@ -1,0 +1,236 @@
+# MindMesh PR — Build + Test + DEBUG APK
+# ---------------------------------------------------------------------------
+# Pull request validation workflow.
+#
+# Purpose:  "PR = Build + Test + Debug APK"
+#
+# Applies automatically to every pull request that targets `main` - the
+# currently open one and all future ones - when the PR is opened, reopened,
+# synchronised with new commits, or has its branch/description updated.
+#
+# This workflow never builds a RELEASE APK and never edits README.md.
+# Release validation lives in `.github/workflows/main-release.yml`.
+# ---------------------------------------------------------------------------
+
+name: MindMesh PR — Build + Test + DEBUG APK
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, reopened, synchronize, ready_for_review, edited ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One validation per pull request. New pushes cancel the in-flight run
+  # instead of stacking duplicate builds.
+  group: mindmesh-pr-debug-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Pull request build, test and DEBUG APK validation.
+  # -------------------------------------------------------------------------
+  pr-validation:
+    name: Build + Test + DEBUG APK
+    runs-on: ubuntu-latest
+    outputs:
+      lint: ${{ steps.lint.outcome }}
+      typecheck: ${{ steps.typecheck.outcome }}
+      webtests: ${{ steps.webtests.outcome }}
+      webbuild: ${{ steps.webbuild.outcome }}
+      androidtests: ${{ steps.androidtests.outcome }}
+      apk: ${{ steps.apk.outcome }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Run web lint
+        id: lint
+        run: npm --prefix web run lint
+
+      - name: Run web type-check
+        id: typecheck
+        run: npm --prefix web run type-check
+
+      - name: Run required + regression web test suite
+        id: webtests
+        run: npm --prefix web run test -- --run
+
+      - name: Build web bundle for the Android WebView
+        id: webbuild
+        run: npm --prefix web run build
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Ensure Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Run Android unit tests
+        id: androidtests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Build DEBUG APK
+        id: apk
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Verify DEBUG APK and assert no RELEASE APK
+        id: apkverify
+        if: always() && steps.apk.outcome == 'success'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debug_apks=(app/build/outputs/apk/debug/*.apk)
+          if [ "${#debug_apks[@]}" -eq 0 ]; then
+            echo "::error title=DEBUG APK missing::Gradle reported success but no debug APK was produced."
+            exit 1
+          fi
+          printf 'DEBUG APK: %s\n' "${debug_apks[@]}"
+          ls -lh app/build/outputs/apk/debug/
+          release_apks=(app/build/outputs/apk/release/*.apk)
+          if [ "${#release_apks[@]}" -ne 0 ]; then
+            echo "::error title=Unexpected RELEASE APK::The pull request workflow must never build a RELEASE APK."
+            exit 1
+          fi
+          echo "Confirmed: pull request build produced the DEBUG APK only."
+
+      - name: Upload DEBUG APK artifact
+        if: always() && steps.apkverify.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mindmesh-debug-apk-pr${{ github.event.pull_request.number || github.run_number }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+
+  # -------------------------------------------------------------------------
+  # Pending documentation summary.
+  #
+  # The summary is stored as a single sticky pull request comment that is
+  # refreshed in place on every push (never duplicated), plus a workflow
+  # artifact and the GitHub Actions job summary. README.md is NOT touched
+  # while the pull request is open.
+  # -------------------------------------------------------------------------
+  pending-docs:
+    name: Pending documentation summary
+    runs-on: ubuntu-latest
+    needs: [ pr-validation ]
+    if: always()
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect pull request change context
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          : > changed-files.txt
+          : > commit-subjects.txt
+          if git fetch --no-tags --quiet origin "${BASE_REF}"; then
+            git diff --name-only "origin/${BASE_REF}...${HEAD_SHA}" > changed-files.txt 2>/dev/null || true
+            git log --no-merges --format=%s "origin/${BASE_REF}..${HEAD_SHA}" > commit-subjects.txt 2>/dev/null || true
+          fi
+          echo "Changed files: $(wc -l < changed-files.txt)"
+          echo "Commits: $(wc -l < commit-subjects.txt)"
+
+      - name: Generate pending documentation summary
+        if: github.event_name == 'pull_request'
+        env:
+          MODE: pr
+          BUILD_TYPE: DEBUG
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CHANGED_FILES: changed-files.txt
+          COMMIT_SUBJECTS: commit-subjects.txt
+          LINT_OUTCOME: ${{ needs.pr-validation.outputs.lint }}
+          TYPECHECK_OUTCOME: ${{ needs.pr-validation.outputs.typecheck }}
+          WEB_TESTS_OUTCOME: ${{ needs.pr-validation.outputs.webtests }}
+          WEB_BUILD_OUTCOME: ${{ needs.pr-validation.outputs.webbuild }}
+          ANDROID_TESTS_OUTCOME: ${{ needs.pr-validation.outputs.androidtests }}
+          APK_OUTCOME: ${{ needs.pr-validation.outputs.apk }}
+        run: python3 .github/scripts/pending_docs.py
+
+      - name: Write manual-run summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "# MindMesh PR — Build + Test + DEBUG APK"
+            echo ""
+            echo "Manual run: no pull request context, so no pending documentation was generated."
+            echo ""
+            echo "**Build type:** DEBUG"
+            echo ""
+            echo "## README Status"
+            echo ""
+            echo "README pending update — actual README.md will be updated after merge."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload pending documentation summary
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pending-docs-pr${{ github.event.pull_request.number || github.run_number }}
+          path: |
+            pending-docs.md
+            pending-comment.md
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
+      - name: Refresh the sticky pending documentation comment
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          existing="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            --jq '.[] | select(.body | contains("<!-- mindmesh-pending-docs -->")) | .id' 2>/dev/null | tail -n1 || true)"
+          if [ -n "${existing}" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+              --input comment-payload.json >/dev/null
+            echo "Refreshed the existing pending documentation comment (${existing})."
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --input comment-payload.json >/dev/null
+            echo "Created the pending documentation comment."
+          fi

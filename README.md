@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/jtmeaker-hash/MindMesh/actions/workflows/build.yml">
-    <img src="https://github.com/jtmeaker-hash/MindMesh/actions/workflows/build.yml/badge.svg" alt="MindMesh CI" />
+  <a href="https://github.com/jtmeaker-hash/MindMesh/actions/workflows/main-release.yml">
+    <img src="https://github.com/jtmeaker-hash/MindMesh/actions/workflows/main-release.yml/badge.svg" alt="Release" />
   </a>
-  <a href="https://github.com/jtmeaker-hash/MindMesh/actions/workflows/mindmesh-routine-regression.yml">
-    <img src="https://github.com/jtmeaker-hash/MindMesh/actions/workflows/mindmesh-routine-regression.yml/badge.svg" alt="Regression" />
+  <a href="https://github.com/jtmeaker-hash/MindMesh/actions/workflows/pr-debug.yml">
+    <img src="https://github.com/jtmeaker-hash/MindMesh/actions/workflows/pr-debug.yml/badge.svg" alt="PR Validation" />
   </a>
   <img src="https://img.shields.io/badge/Android-7.0%2B-brightgreen" alt="Android 7.0+" />
   <img src="https://img.shields.io/badge/App-1.4.0-7c3aed" alt="MindMesh 1.4.0" />
@@ -98,6 +98,36 @@ The Android layer contains a dedicated native notification bridge and scheduler 
 - Open the relevant reminder from a notification.
 - Pass notification actions back into the MindMesh web UI.
 - Keep notification events queued until the embedded app is ready.
+
+---
+
+## Smart Assistance (local Smart Engine)
+
+MindMesh has a built-in Smart Engine that provides the app's AI-like assistance without an external AI service.
+
+It is deliberately **not** a generative model. It is a deterministic, rule-based interpreter that:
+
+- Runs entirely on-device and works offline.
+- Needs no API key and makes no network request for interpretation.
+- Never writes anything on its own: every change is proposed first, shown as a preview, and applied only after the user confirms it.
+- Asks for missing or ambiguous details instead of guessing, and refuses to write a low-confidence proposal.
+- Never silently alters reminders, contacts, financial entries, categories, settings or notifications.
+
+Smart Engine behaviour is unit-tested and separate from the UI so it stays predictable, and its preferences are stored and backed up with the rest of the app state.
+
+What it supports today:
+
+- Reminder title/description enhancement for the existing enhancement UI.
+- Reminder summaries and structured graph-view summary facts.
+- Natural-language reminder creation and editing proposals.
+- Date, relative-date and recurrence parsing (weekly, fortnightly, monthly, quarterly, yearly and every-X).
+- Category, subcategory and subtask suggestions.
+- Category and subcategory creation proposals.
+- Bill/direct-debit creation proposals, money-entry classification and bill-category suggestion.
+- Pay-cycle, upcoming-bills and remaining-money calculations from stored money data.
+- Dashboard, contact and diagnostics answers built only from data already on the device.
+
+Assistance is reachable from the header menu under **Smart Assistance**, where it can be previewed, confirmed or cancelled. Each capability has its own toggle in **Settings → Smart**, and confirmation for writes is always required and cannot be turned off.
 
 ---
 
@@ -252,6 +282,7 @@ The current backup format stores the wider application state, including:
 - Preferences.
 - Diagnostics preferences.
 - Statistics.
+- Smart Assistance preferences.
 
 Current backup format version: **3**
 
@@ -317,6 +348,9 @@ Appearance work includes:
 
 - Custom node colours.
 - Custom branch / connection colours.
+- Separate connection brightness and contrast controls.
+- Collision-aware graph layout that keeps nodes and their labels from overlapping.
+- Zoom-aware level of detail that simplifies node content and connection intensity as the camera pulls back.
 - Aqua styling.
 - Orange styling.
 - Matrix-green styling.
@@ -488,47 +522,61 @@ The APK will be created under:
 app/build/outputs/apk/debug/
 ```
 
+Build a signed release APK:
+
+```bash
+./gradlew assembleRelease
+```
+
+The release build reuses the repository's existing signing configuration (`app/build.gradle.kts` → `signingConfigs.release`), which reads the `KEYSTORE_PATH`, `STORE_PASSWORD` and `KEY_PASSWORD` environment variables and defaults the keystore to `my-upload-key.jks` in the repository root. The signed APK is created under:
+
+```text
+app/build/outputs/apk/release/
+```
+
 On Windows, use `gradlew.bat` instead of `./gradlew`.
 
 ---
 
 ## CI / GitHub Actions
 
-MindMesh currently includes multiple GitHub Actions workflows.
+MindMesh separates release validation from pull request validation. Debug APKs are never built on `main`, and release APKs are never built for pull requests.
 
-### Main CI
+### Main — Build + Test + Release APK
 
 ```text
-.github/workflows/build.yml
+.github/workflows/main-release.yml
 ```
 
-The primary workflow runs on pushes and pull requests targeting `main` and performs:
+Triggered by pushes to `main` (merged pull requests) and by manual dispatch. This is the authoritative release validation workflow and the only workflow that builds a release APK. It performs:
 
 1. Dependency installation.
 2. ESLint.
 3. TypeScript type checking.
-4. Environment diagnostics.
-5. Vitest unit tests.
-6. Production Vite build.
-7. Android unit tests.
-8. Android debug APK build.
-9. Debug APK artifact upload.
+4. Required and full regression web test suite (Vitest).
+5. Production Vite build, bundled into the Android WebView assets.
+6. Android unit tests.
+7. Release signing validation using repository secrets, which are never printed.
+8. Signed release APK build plus signature verification.
+9. Release APK artifact upload.
 
-### Routine Builder CI
+Documentation-only pushes are ignored, so an automated README commit cannot trigger a repeated release build.
 
-```text
-.github/workflows/routine-builder-ci.yml
-```
-
-Used for focused Routine Builder validation.
-
-### Regression Workflow
+### Pull Requests — Build + Test + Debug APK
 
 ```text
-.github/workflows/mindmesh-routine-regression.yml
+.github/workflows/pr-debug.yml
 ```
 
-Regression coverage exists to catch wider behavioural breakage alongside feature-specific CI.
+Applies automatically to every pull request that targets `main` when the pull request is opened, reopened, synchronised with new commits, or updated. It runs web lint, type checking, the required and regression test suites, the production web bundle build, Android unit tests and a debug APK build, then uploads the debug APK as a workflow artifact. It never builds a release APK and never edits `README.md`.
+
+### README — Update After Merge
+
+```text
+.github/workflows/readme-update.yml
+```
+
+Runs once when a pull request is merged into `main`. While a pull request is open the README is left alone: the pull request workflow keeps a pending documentation summary in a single sticky pull request comment that is refreshed in place on every push instead of being duplicated. After the merge, this workflow takes the final summary and inserts one entry into the managed **Recent Merged Changes** section, preserving every other README section.
 
 ---
 
@@ -600,6 +648,7 @@ Recent development has focused heavily on:
 - General expenses.
 - Dashboard statistics.
 - Visual customisation and 3D-inspired presentation.
+- The local Smart Engine and Smart Assistance surface.
 - Preserving compatibility while the storage schema grows.
 
 Bug reports are most useful when they include:
@@ -610,6 +659,15 @@ Bug reports are most useful when they include:
 - Exported diagnostics.
 - Relevant screenshots.
 - Whether the problem survives an app restart.
+
+---
+
+## Recent Merged Changes
+
+This section is maintained automatically. When a pull request is merged into `main`, the repository's README workflow inserts one entry describing the merged change, grouped from the pull request rather than from individual commits. Entries are never duplicated, and no other part of this README is rewritten.
+
+<!-- mindmesh-release-notes:start -->
+<!-- mindmesh-release-notes:end -->
 
 ---
 

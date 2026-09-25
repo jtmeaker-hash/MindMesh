@@ -96,6 +96,20 @@ function renderGraph(options: {
 const attr = (element: HTMLElement, name: string) => Number(element.getAttribute(name));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The on-screen scale the graph applies to a node's fixed world-space box. The
+ * node is never resized to compensate for the camera, so this number is the
+ * projected perspective size of a constant-size object.
+ */
+function nodeScale(container: HTMLElement, nodeId: string): number {
+  const element = container.querySelector(`[data-node-id="${nodeId}"]`) as HTMLElement | null;
+  if (!element) return Number.NaN;
+  const match = /scale\(\s*([-\d.]+)\s*\)/.exec(element.style.transform);
+  return match ? Number(match[1]) : Number.NaN;
+}
+
+const relativeDifference = (a: number, b: number) => Math.abs(a - b) / Math.abs(b);
+
 /** Drags across the empty graph with one finger (touch). */
 function touchDrag(element: HTMLElement, options: { from?: [number, number]; to?: [number, number]; id?: number } = {}) {
   const [fromX, fromY] = options.from ?? [100, 100];
@@ -133,6 +147,16 @@ describe('camera safety limits', () => {
     expect(result.pitch).toBeLessThan(Math.PI / 2);
     expect(result.distance).toBe(90);
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 0, 1e30])(
+    'normalizes invalid or extreme initial zoom %s into a usable distance',
+    (distance) => {
+      const result = clampSpatialCamera(camera({ distance }));
+      expect(Number.isFinite(result.distance)).toBe(true);
+      expect(result.distance).toBeGreaterThanOrEqual(90);
+      expect(result.distance).toBeLessThanOrEqual(160_000);
+    },
+  );
 
   it('never imposes an artificial world box on the camera target', () => {
     const far = clampSpatialCamera(camera({ target: { x: 250_000, y: -180_000, z: 42_000 } }));
@@ -325,6 +349,90 @@ describe('screen-to-world node dragging', () => {
 });
 
 // ============================================================================
+// World-space node size (the camera moves, the nodes do not)
+// ============================================================================
+
+describe('fixed world-space node scaling', () => {
+  it('draws a node at its true projected size: closer looks larger, further looks smaller', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = renderGraph({ nodes: [root], edges: [], surfaceKey: 'world-size' });
+    const graph = getByTestId('spatial-graph');
+
+    // Wait for the opening fit to replace the pre-measurement default camera.
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+    const framed = { scale: nodeScale(container, 'root'), distance: attr(graph, 'data-camera-distance') };
+    expect(framed.scale).toBeGreaterThan(0);
+
+    // Pull the camera back: the node keeps its size in graph space, so it must
+    // cover less of the screen.
+    fireEvent.wheel(graph, { deltaY: 800 });
+    await waitFor(() => expect(nodeScale(container, 'root')).toBeLessThan(framed.scale));
+    const far = { scale: nodeScale(container, 'root'), distance: attr(graph, 'data-camera-distance') };
+
+    // A fixed world size means on-screen size is exactly focal / distance, so a
+    // camera 3x further away renders the node 3x smaller. Any inverse camera
+    // scaling would break this relationship.
+    expect(relativeDifference(framed.distance / far.distance, far.scale / framed.scale)).toBeLessThan(0.02);
+
+    // Move back in: the node visibly grows again.
+    fireEvent.wheel(graph, { deltaY: -400 });
+    await waitFor(() => expect(nodeScale(container, 'root')).toBeGreaterThan(far.scale * 1.5));
+  });
+
+  it('never caps a node to a constant screen size as the camera moves in close', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = renderGraph({ nodes: [root], edges: [], surfaceKey: 'no-screen-size-cap' });
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+
+    const framed = nodeScale(container, 'root');
+    fireEvent.wheel(graph, { deltaY: -600 });
+    await waitFor(() => expect(nodeScale(container, 'root')).toBeGreaterThan(framed));
+    const mid = nodeScale(container, 'root');
+
+    fireEvent.wheel(graph, { deltaY: -900 });
+    await waitFor(() => expect(nodeScale(container, 'root')).toBeGreaterThan(mid));
+
+    // A zoom-compensated node would stop growing at its constant-screen-size
+    // ceiling; a real one keeps filling the view as the camera arrives.
+    expect(nodeScale(container, 'root')).toBeGreaterThan(2);
+    expect(attr(graph, 'data-camera-distance')).toBeGreaterThanOrEqual(attr(graph, 'data-camera-min-distance'));
+  });
+
+  it('keeps projected coordinates finite for malformed world positions', () => {
+    const point = projectSpatialPoint(
+      { x: Number.NaN, y: Number.POSITIVE_INFINITY, z: 0 },
+      camera(),
+      900,
+      700,
+      650,
+    );
+
+    expect(Number.isFinite(point.screenX)).toBe(true);
+    expect(Number.isFinite(point.screenY)).toBe(true);
+  });
+
+  it('culls a node that is behind the camera instead of projecting it as a smear', () => {
+    const cam = camera({ distance: 400, yaw: 0, pitch: 0 });
+    const width = 900;
+    const height = 700;
+    const focal = 700;
+
+    // 400 units of camera distance plus 200 units of travel toward the lens.
+    const inFront = projectSpatialPoint({ x: 0, y: 0, z: -200 }, cam, width, height, focal);
+    expect(inFront.visible).toBe(true);
+    expect(inFront.scale).toBeCloseTo(focal / 600, 6);
+
+    const behind = projectSpatialPoint({ x: 0, y: 0, z: 900 }, cam, width, height, focal);
+    expect(behind.visible).toBe(false);
+    // Culled nodes still report finite numbers so nothing downstream is NaN.
+    expect(Number.isFinite(behind.scale)).toBe(true);
+    expect(Number.isFinite(behind.screenX)).toBe(true);
+    expect(Number.isFinite(behind.screenY)).toBe(true);
+  });
+});
+
+// ============================================================================
 // Touch camera behaviour
 // ============================================================================
 
@@ -452,6 +560,72 @@ describe('Android-first touch camera', () => {
     expect(attr(graph, 'data-camera-yaw')).toBe(0);
   });
 
+  it('keeps world coordinates unchanged when the graph viewport is resized', async () => {
+    let width = 900;
+    let height = 700;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () => ({ width, height, left: 0, top: 0, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect,
+    );
+    let resize: (() => void) | undefined;
+    const originalObserver = globalThis.ResizeObserver;
+    class TestResizeObserver {
+      constructor(callback: () => void) { resize = callback; }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
+
+    try {
+      const { getByTestId, container } = renderGraph({ nodes: mesh, edges, surfaceKey: 'resize-coordinate-system' });
+      const graph = getByTestId('spatial-graph');
+      await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+      const originalWorld = mesh.map((node) => [node.id, node.position.x, node.position.y]);
+
+      width = 390;
+      height = 780;
+      resize?.();
+      await waitFor(() => expect(attr(graph, 'data-viewport-width')).toBe(width));
+
+      expect(mesh.map((node) => [node.id, node.position.x, node.position.y])).toEqual(originalWorld);
+      const screenPosition = (nodeId: string) => {
+        const node = container.querySelector(`[data-node-id="${nodeId}"]`) as HTMLElement;
+        return [Number.parseFloat(node.style.left), Number.parseFloat(node.style.top)];
+      };
+      const activeCamera = camera({
+        target: {
+          x: attr(graph, 'data-camera-target-x'),
+          y: attr(graph, 'data-camera-target-y'),
+          z: attr(graph, 'data-camera-target-z'),
+        },
+        yaw: attr(graph, 'data-camera-yaw'),
+        pitch: attr(graph, 'data-camera-pitch'),
+        distance: attr(graph, 'data-camera-distance'),
+      });
+      const focal = Math.min(width, height) * 1.05;
+      for (const node of mesh) {
+        const element = container.querySelector(`[data-node-id="${node.id}"]`) as HTMLElement;
+        const depth = Number(element.dataset.depth);
+        const expected = projectSpatialPoint(
+          { x: node.position.x, y: node.position.y, z: depth },
+          activeCamera,
+          width,
+          height,
+          focal,
+        );
+        expect(screenPosition(node.id)).toEqual([expected.screenX, expected.screenY]);
+      }
+      for (const edge of edges) {
+        const path = container.querySelector(`[data-connection-id="${edge.id}"] .mm-spatial-edge`) as SVGPathElement;
+        const coordinates = path.getAttribute('d')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number);
+        expect(coordinates.slice(0, 2)).toEqual(screenPosition(edge.source));
+        expect(coordinates.slice(-2)).toEqual(screenPosition(edge.target));
+      }
+    } finally {
+      globalThis.ResizeObserver = originalObserver;
+    }
+  });
+
   it('keeps a node press clickable by not stealing pointer capture from it', () => {
     // Capturing on the canvas retargets the pointer sequence in real browsers,
     // which would move the tap's click off the node and break tap-to-focus.
@@ -544,6 +718,22 @@ describe('two-tap node navigation', () => {
 
     fireEvent.click(node());
     await waitFor(() => expect(getByTestId('opened').textContent).toBe('rem-1'));
+  });
+
+  it('makes the focused node visibly larger as the camera travels to it', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = render(<FocusHarness nodes={[root, reminder, subtask]} edges={[edges[2]]} />);
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+    const before = nodeScale(container, 'rem-1');
+
+    fireEvent.click(container.querySelector('[data-node-id="rem-1"]') as HTMLElement);
+    await waitFor(() => expect(attr(graph, 'data-camera-target-x')).toBeCloseTo(420, 1), { timeout: 3000 });
+
+    // Arriving at the node grows it on screen, and the camera stops at a
+    // viewing distance instead of travelling through it.
+    expect(nodeScale(container, 'rem-1')).toBeGreaterThan(before);
+    expect(attr(graph, 'data-camera-distance')).toBeGreaterThanOrEqual(attr(graph, 'data-camera-min-distance'));
   });
 
   it('never opens options for a different node that was only focused', async () => {
@@ -703,6 +893,37 @@ describe('camera stability', () => {
     expect(Number.isFinite(attr(graph, 'data-camera-distance'))).toBe(true);
   });
 
+  it('restores the same node scale after repeated graph opens', async () => {
+    withViewport(900, 700);
+    const renderSurface = () => render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={mesh} edges={edges} appearance={getDefaultAppearance()} surfaceKey="reopen-scale" />
+      </ReactFlowProvider>
+    );
+
+    const first = renderSurface();
+    const graph = first.getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-target-x')).toBeCloseTo(270, 1));
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+    const firstScale = nodeScale(first.container, 'root');
+    first.unmount();
+
+    const second = renderSurface();
+    const secondGraph = second.getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(secondGraph, 'data-camera-target-x')).toBeCloseTo(270, 1));
+    await waitFor(() => expect(attr(secondGraph, 'data-camera-distance')).toBeGreaterThan(0));
+    const secondScale = nodeScale(second.container, 'root');
+    second.unmount();
+
+    const third = renderSurface();
+    const thirdGraph = third.getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(thirdGraph, 'data-camera-target-x')).toBeCloseTo(270, 1));
+    await waitFor(() => expect(attr(thirdGraph, 'data-camera-distance')).toBeGreaterThan(0));
+    expect(nodeScale(third.container, 'root')).toBeCloseTo(secondScale, 6);
+    expect(secondScale).toBeCloseTo(firstScale, 6);
+    third.unmount();
+  });
+
   it('restores the session camera view when the graph surface is reopened', async () => {
     withViewport(900, 700);
     const first = render(
@@ -801,11 +1022,30 @@ describe('camera stability', () => {
       expect(graph.getAttribute('data-camera-yaw')).toBe(before.yaw);
       expect(attr(graph, 'data-camera-distance')).toBeCloseTo(Number(before.distance), 3);
       expect(Number.isFinite(attr(graph, 'data-camera-target-y'))).toBe(true);
-      // Nodes still project into the new viewport.
+      // Nodes and edges are recomputed in the resized viewport's screen space.
       expect(container.querySelector('[data-node-id="rem-1"]')).not.toBeNull();
+      const endpointNumbers = Array.from(container.querySelectorAll<SVGPathElement>('.mm-spatial-edge'))
+        .flatMap((path) => path.getAttribute('d')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? []);
+      expect(endpointNumbers.length).toBeGreaterThan(0);
+      expect(endpointNumbers.every(Number.isFinite)).toBe(true);
+      expect(endpointNumbers.every((coordinate) => Math.abs(coordinate) < 10_000)).toBe(true);
     } finally {
       globalThis.ResizeObserver = originalObserver;
     }
+  });
+
+  it('starts a real-size graph with a visible distribution instead of a centre pile', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = renderGraph({ nodes: mesh, edges, surfaceKey: 'visible-distribution' });
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+
+    const screenPoints = Array.from(container.querySelectorAll<HTMLElement>('[data-node-id]'))
+      .map((node) => ({ x: Number.parseFloat(node.style.left), y: Number.parseFloat(node.style.top) }));
+    expect(screenPoints).toHaveLength(mesh.length);
+    expect(screenPoints.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))).toBe(true);
+    expect(Math.max(...screenPoints.map((point) => point.x)) - Math.min(...screenPoints.map((point) => point.x))).toBeGreaterThan(80);
+    expect(Math.max(...screenPoints.map((point) => point.y)) - Math.min(...screenPoints.map((point) => point.y))).toBeGreaterThan(5);
   });
 
   it('frames a small and a very large graph correctly', async () => {
@@ -855,8 +1095,14 @@ describe('on-canvas gesture guide', () => {
     expect(legend.textContent).toContain('Move through the graph');
     expect(legend.textContent).toContain('Tap focused node again');
     expect(legend.textContent).toContain('Return to the centre of the graph');
+    // The guide describes the corrected camera: nodes have a fixed size in the
+    // mesh, so getting closer makes them larger instead of staying screen-sized.
+    expect(legend.textContent).toContain('closer nodes grow, distant ones shrink');
+    expect(legend.textContent).toContain('watch it grow as the camera arrives');
+    expect(legend.textContent).toContain('Nodes keep their real size in the mesh');
     // No obsolete control advice survives.
     expect(legend.textContent).not.toMatch(/orbit the network|drag to orbit|jump to node/i);
+    expect(legend.textContent).not.toMatch(/same size on screen|stay(s)? the same size|fixed screen size/i);
   });
 
   it('stays dismissed, records that choice, and reopens from the HUD', () => {
@@ -947,8 +1193,179 @@ describe('zoomed-out secondary node visibility', () => {
     expect(node('root')).not.toBeNull();
     expect(node('cat-1')).not.toBeNull();
 
-    fireEvent.wheel(graph, { deltaY: -30_000 });
+    // Zooming back in restores the hidden nodes exactly (the camera stays in
+    // front of them, so they project into the view instead of being culled).
+    fireEvent.wheel(graph, { deltaY: -4_000 });
     await waitFor(() => expect(graph.getAttribute('data-reminders-hidden')).toBe('false'));
     expect(node('rem-1')).not.toBeNull();
+  });
+});
+
+// ============================================================================
+// Zoomed-out readability: level of detail + connection treatment
+// ============================================================================
+
+describe('zoomed-out readability', () => {
+  it('routes each connection between its nodes in the same projected screen coordinates', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = renderGraph({ nodes: mesh, edges, surfaceKey: 'edge-coordinate-regression' });
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+
+    const endpoints = (path: SVGPathElement) => path.getAttribute('d')!
+      .match(/-?\d+(?:\.\d+)?/g)!
+      .map(Number);
+
+    const activeCamera = camera({
+      target: {
+        x: attr(graph, 'data-camera-target-x'),
+        y: attr(graph, 'data-camera-target-y'),
+        z: attr(graph, 'data-camera-target-z'),
+      },
+      yaw: attr(graph, 'data-camera-yaw'),
+      pitch: attr(graph, 'data-camera-pitch'),
+      distance: attr(graph, 'data-camera-distance'),
+    });
+    const expectedScreenPoint = (nodeId: string) => {
+      const node = mesh.find((entry) => entry.id === nodeId)!;
+      const depth = Number((container.querySelector(`[data-node-id="${nodeId}"]`) as HTMLElement).dataset.depth);
+      const projected = projectSpatialPoint(
+        { x: node.position.x, y: node.position.y, z: depth },
+        activeCamera,
+        900,
+        700,
+        735,
+      );
+      return { x: projected.screenX, y: projected.screenY };
+    };
+
+    for (const edge of edges) {
+      const connection = container.querySelector(`[data-connection-id="${edge.id}"] .mm-spatial-edge`) as SVGPathElement;
+      const values = endpoints(connection);
+      const source = expectedScreenPoint(edge.source);
+      const target = expectedScreenPoint(edge.target);
+      expect(values.slice(0, 2)).toEqual([source.x, source.y]);
+      expect(values.slice(-2)).toEqual([target.x, target.y]);
+      expect(values.every(Number.isFinite)).toBe(true);
+    }
+  });
+
+  it('keeps the measured viewport non-zero and finite when the container reports invalid dimensions', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () => ({ width: Number.NaN, height: 0, left: 0, top: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect,
+    );
+    const { getByTestId, container } = renderGraph({ nodes: [root], edges: [], surfaceKey: 'invalid-viewport' });
+    const graph = getByTestId('spatial-graph');
+
+    await waitFor(() => {
+      expect(Number.isFinite(attr(graph, 'data-viewport-width'))).toBe(true);
+      expect(Number.isFinite(attr(graph, 'data-viewport-height'))).toBe(true);
+      expect(attr(graph, 'data-viewport-width')).toBeGreaterThan(0);
+      expect(attr(graph, 'data-viewport-height')).toBeGreaterThan(0);
+      expect(Array.from(container.querySelectorAll<HTMLElement>('[data-node-id]')).every((node) =>
+        Number.isFinite(Number.parseFloat(node.style.left)) && Number.isFinite(Number.parseFloat(node.style.top)),
+      )).toBe(true);
+    });
+  });
+
+  it('simplifies what is drawn inside a node as the camera pulls back, without hiding the node', async () => {
+    withViewport(900, 700);
+    const { getByTestId, container } = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={[root, category]} edges={[]} appearance={getDefaultAppearance()} surfaceKey="lod" />
+      </ReactFlowProvider>
+    );
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+    expect(graph.getAttribute('data-lod-level')).toBe('full');
+
+    const framedScale = nodeScale(container, 'root');
+
+    // Pulling the camera back drops content detail rather than the node itself.
+    fireEvent.wheel(graph, { deltaY: 4_000 });
+    await waitFor(() => expect(graph.getAttribute('data-lod-level')).not.toBe('full'));
+
+    // The node still exists at its fixed world size, now projected smaller.
+    expect(container.querySelector('[data-node-id="root"]')).not.toBeNull();
+    expect(nodeScale(container, 'root')).toBeLessThan(framedScale);
+  });
+
+  it('projects malformed node positions to finite screen coordinates instead of poisoning the graph', async () => {
+    withViewport(900, 700);
+    const malformed = { ...category, position: { x: Number.NaN, y: Number.POSITIVE_INFINITY } };
+    const { getByTestId, container } = renderGraph({ nodes: [root, malformed], edges: [], surfaceKey: 'finite-world-positions' });
+    const graph = getByTestId('spatial-graph');
+    await waitFor(() => expect(attr(graph, 'data-camera-distance')).not.toBe(1180));
+
+    for (const node of Array.from(container.querySelectorAll<HTMLElement>('[data-node-id]'))) {
+      expect(Number.isFinite(Number.parseFloat(node.style.left))).toBe(true);
+      expect(Number.isFinite(Number.parseFloat(node.style.top))).toBe(true);
+      expect(Number.isFinite(nodeScale(container, node.dataset.nodeId!))).toBe(true);
+    }
+  });
+
+  it('never renders a screen-space zoom-compensation transform on a node', () => {
+    // A constant-screen-size node would need a 1/zoom factor. Nothing the graph
+    // renders may contain one, otherwise zooming in would not grow the node.
+    const { container } = renderGraph({ nodes: [root], edges: [], surfaceKey: 'no-compensation' });
+    container.querySelectorAll('[data-node-id]').forEach((element) => {
+      const transform = (element as HTMLElement).style.transform;
+      expect(transform).not.toMatch(/1\s*\/|calc\(|invert/i);
+    });
+  });
+
+  it('draws a background-separating halo only once connection contrast is raised', () => {
+    const base = getDefaultAppearance();
+    const flat = render(
+      <ReactFlowProvider>
+        <SpatialGraph
+          nodes={mesh}
+          edges={edges}
+          appearance={{ ...base, connectionContrast: 0 }}
+          surfaceKey="contrast-off"
+        />
+      </ReactFlowProvider>
+    );
+    expect(flat.container.querySelector('.mm-spatial-edge-casing')).toBeNull();
+    flat.unmount();
+
+    const punchy = render(
+      <ReactFlowProvider>
+        <SpatialGraph
+          nodes={mesh}
+          edges={edges}
+          appearance={{ ...base, connectionContrast: 0.9 }}
+          surfaceKey="contrast-on"
+        />
+      </ReactFlowProvider>
+    );
+    expect(punchy.container.querySelector('.mm-spatial-edge-casing')).not.toBeNull();
+  });
+
+  it('brightens every rendered connection live as the brightness slider rises', () => {
+    const base = getDefaultAppearance();
+    const opacityOf = (container: HTMLElement) => {
+      const path = container.querySelector('.mm-spatial-edge') as SVGPathElement | null;
+      return path ? Number(path.getAttribute('stroke-opacity')) : Number.NaN;
+    };
+
+    const dim = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={mesh} edges={edges} appearance={{ ...base, connectionBrightness: 0.2 }} surfaceKey="dim" />
+      </ReactFlowProvider>
+    );
+    const dimOpacity = opacityOf(dim.container);
+    dim.unmount();
+
+    const bright = render(
+      <ReactFlowProvider>
+        <SpatialGraph nodes={mesh} edges={edges} appearance={{ ...base, connectionBrightness: 2 }} surfaceKey="bright" />
+      </ReactFlowProvider>
+    );
+    const brightOpacity = opacityOf(bright.container);
+
+    // Neither end of the range removes a relationship entirely.
+    expect(dimOpacity).toBeGreaterThan(0);
+    expect(brightOpacity).toBeGreaterThan(dimOpacity);
   });
 });

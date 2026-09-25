@@ -102,6 +102,18 @@ export interface AppearanceSettings {
   connectionColorMode: ConnectionColorMode;
   nodeColors: NodeColorPalette;
   connectionColors: ConnectionColorPalette;
+  /**
+   * Multiplier on every connection line's opacity. 1 keeps the palette's own
+   * alphas; lower is dimmer/subtler, higher is brighter and more prominent.
+   */
+  connectionBrightness: number;
+  /**
+   * How strongly connection lines separate from whatever sits behind them
+   * (flat background, void glow, Matrix code rain, imported photo). 0 leaves
+   * lines flush with the background; 1 gives them a strong separating halo.
+   * Deliberately independent of `connectionBrightness`.
+   */
+  connectionContrast: number;
   surfaceMode: UISurfaceMode;
   background: BackgroundSettings;
   matrix: MatrixSettings;

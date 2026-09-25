@@ -76,6 +76,7 @@ export const SubtaskNode = memo(({ data }: NodeProps) => {
       </div>
 
       <span
+        className="mm-node-label"
         style={{
           fontSize: 11,
           fontWeight: 500,
