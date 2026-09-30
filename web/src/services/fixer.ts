@@ -15,6 +15,7 @@ import {
   saveNotificationHistory,
   loadDiagnosticPreferences,
   saveDiagnosticPreferences,
+  readStoredPayload,
 } from './storage';
 import { getDefaultAppearance, validateAppearance } from './appearance';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
@@ -28,6 +29,7 @@ import { openDeviceNotificationSettings, syncNotificationSchedules } from './not
 import { runDiagnostics } from './diagnostics';
 import { logger } from './logger';
 import { clearStaleRoutineSession, diagnoseRoutines, repairRoutineLinks, rebuildRoutineSchedules } from './routineSafety';
+import { enforceSequentialCompletion, normalizeSteps, reindexSteps, validateStepSequence } from './steps';
 
 /**
  * Diagnostics fixer.
@@ -100,6 +102,15 @@ export const FIX_DEFINITIONS: FixDefinition[] = [
     description: 'Removes pointers to direct debits or income entries that no longer exist. Records are not changed.',
     affectsUserData: false,
     targetChecks: ['deep.financialLinks'],
+  },
+  {
+    id: 'fix.repairStepSequence',
+    title: 'Repair sequential Step order',
+    kind: 'safe',
+    description:
+      'Resets invalid Step completion flags so no completed Step follows an incomplete one, and normalises Step ids and ordering. Step titles, descriptions and content are kept.',
+    affectsUserData: false,
+    targetChecks: ['deep.stepIntegrity'],
   },
   {
     id: 'fix.repairDefaults',
@@ -243,6 +254,34 @@ const repairs: Record<string, RepairFn> = {
     return {
       ok: true,
       message: `Recomputed dashboard statistics from ${reminders.length} reminder(s) and ${state.categories.length} category(ies).`,
+    };
+  },
+
+  'fix.repairStepSequence': () => {
+    // Compare the raw stored payload so the reported count reflects what was
+    // actually wrong before hydration normalised it.
+    const raw = readStoredPayload();
+    const rawReminders =
+      raw && typeof raw === 'object' && Array.isArray((raw as { reminders?: unknown }).reminders)
+        ? ((raw as { reminders: Reminder[] }).reminders)
+        : [];
+    const sequenceIssues = rawReminders
+      .flatMap((reminder) => validateStepSequence(reminder))
+      .filter((issue) => issue.kind === 'completed-after-incomplete').length;
+
+    mutateState((state) => {
+      state.reminders = (state.reminders || []).map((reminder) => {
+        const steps = reminder.steps ?? [];
+        if (steps.length === 0) return reminder;
+        const repaired = enforceSequentialCompletion(reindexSteps(normalizeSteps(steps, reminder.id)));
+        return { ...reminder, steps: repaired };
+      });
+    });
+
+    logger.info('Fixer', 'Repaired sequential Step order', { sequenceIssues });
+    return {
+      ok: true,
+      message: `Re-normalised Step sequencing; ${sequenceIssues} invalid completion flag(s) reset. Step content was not deleted.`,
     };
   },
 

@@ -90,7 +90,7 @@ import { generateCompletedCategoryMesh } from './utils/layout';
 import { generateNestedActiveMesh, generateNestedCompletedOverviewMesh } from './utils/nestedLayout';
 import { normalizeCategories, validateCategoryParent, getCategoryDescendantIds, applyCategoryDelete } from './services/categories';
 import { handleReminderCompletion } from './services/recurrence';
-import { upsertReminder } from './services/reminders';
+import { resolveEnableSteps, upsertReminder } from './services/reminders';
 import { commitNodePosition, resetNodePosition } from './services/nodePositions';
 import { didNodeDrag, focusZoomForNodeType, nodeCentre, resolveNodeTap } from './services/graphNavigation';
 
@@ -698,6 +698,19 @@ function MindMeshFlow() {
     });
   };
 
+  // When the final Step of a Steps-enabled reminder is completed, let the parent
+  // reminder complete through the existing reminder rules (including recurrence).
+  // Steps never touch Subtask completion.
+  const completeReminderIfStepsDone = (list: Reminder[], reminderId: string): Reminder[] => {
+    const reminder = list.find((r) => r.id === reminderId);
+    if (!reminder || reminder.completed) return list;
+    const steps = reminder.steps ?? [];
+    if (!resolveEnableSteps(reminder) || steps.length === 0) return list;
+    if (!steps.every((step) => step.completed)) return list;
+    logger.info('Reminders', 'All Steps complete; completing parent reminder', { reminderId });
+    return handleReminderCompletion(reminderId, list);
+  };
+
   // CRUD for Reminders
   const handleSaveReminder = (rem: Reminder) => {
     setReminders((prev) => {
@@ -722,7 +735,7 @@ function MindMeshFlow() {
             notificationsEnabled: rem.notifications?.enabled === true,
           });
         }
-        return next;
+        return completeReminderIfStepsDone(next, rem.id);
       }
       logger.info('Reminders', 'Reminder created', {
         categoryId: rem.categoryId,
@@ -730,7 +743,7 @@ function MindMeshFlow() {
         notificationsEnabled: rem.notifications?.enabled === true,
         advanceCount: rem.notifications?.advanceMinutes.length ?? 0,
       });
-      return [rem, ...prev];
+      return completeReminderIfStepsDone([rem, ...prev], rem.id);
     });
   };
 

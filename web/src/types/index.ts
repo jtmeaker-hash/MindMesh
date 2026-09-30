@@ -11,6 +11,25 @@ export interface Subtask {
   completedAt?: string;
 }
 
+/**
+ * A Step is a strict, ordered process item. Unlike an independent Subtask, Steps
+ * must be completed sequentially: only the first incomplete Step is actionable.
+ * Steps live in their own persisted array and share no business logic with
+ * Subtasks beyond both hanging off a Reminder.
+ */
+export interface Step {
+  id: string;
+  reminderId: string;
+  title: string;
+  description?: string;
+  /** Position in the ordered sequence. Stable identity is `id`, not this index. */
+  order: number;
+  completed: boolean;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type RecurrenceFrequency = 'none' | 'daily' | 'weekly' | 'monthly' | 'custom';
 
 export type CustomRecurrenceUnit = 'day' | 'week' | 'month';
@@ -43,6 +62,21 @@ export interface Reminder {
   recurringSeriesId?: string;
   occurrenceCount?: number;
   subtasks: Subtask[];
+  /**
+   * Ordered sequential process items. Optional for backwards compatibility with
+   * reminders stored before Steps existed; normalized to an array on load.
+   */
+  steps?: Step[];
+  /**
+   * Independent enable switch for the Subtask checklist system. Absent on legacy
+   * reminders and derived from whether subtasks exist during normalization.
+   */
+  enableSubtasks?: boolean;
+  /**
+   * Independent enable switch for the sequential Steps system. Enabling Steps
+   * never enables Subtasks and vice versa.
+   */
+  enableSteps?: boolean;
   linkedBillId?: string;
   linkedExtraIncomeId?: string;
   linkedContactId?: string;
@@ -122,6 +156,12 @@ export interface MeshNodeData extends Record<string, unknown> {
   isRecurring?: boolean;
   subtaskCount?: number;
   completedSubtaskCount?: number;
+  /** Sequential Step progress surfaced in reminder/node detail information. */
+  hasSteps?: boolean;
+  stepCount?: number;
+  completedStepCount?: number;
+  /** 1-based number of the current (first incomplete) Step, 0 when all complete. */
+  currentStepNumber?: number;
   categoryId?: string;
   reminderId?: string;
   isFocused?: boolean;

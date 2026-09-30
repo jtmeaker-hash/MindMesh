@@ -66,6 +66,8 @@ export interface RestoreSummary {
   categoriesCount: number;
   remindersCount: number;
   completedRemindersCount: number;
+  /** Total sequential Steps across all reminders (optional for older payloads). */
+  stepCount?: number;
   /** Custom node positions included in the backup (optional for older payloads). */
   nodePositionsCount?: number;
   contactsCount: number;

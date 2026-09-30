@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createEmptyRoutine, createRoutineStep, Routine } from '../types/routine';
-import { loadAllData, loadRoutines, saveAllData, saveRoutines } from '../services/storage';
+import { CURRENT_STORAGE_VERSION, loadAllData, loadRoutines, saveAllData, saveRoutines } from '../services/storage';
 import {
   archiveRoutine,
   createRoutine,
@@ -49,7 +49,7 @@ describe('Routine Builder Stage 1 foundation', () => {
     const loaded = loadRoutines();
     expect(loaded).toHaveLength(1);
     expect(loaded[0].steps.find((step) => step.id === 'step-child')?.parentStepId).toBe('step-parent');
-    expect(loadAllData().version).toBe(9);
+    expect(loadAllData().version).toBe(CURRENT_STORAGE_VERSION);
   });
 
   it('duplicates a routine with new ids and no history, stats, or active session', () => {
@@ -92,7 +92,7 @@ describe('Routine Builder Stage 1 foundation', () => {
     const prior = loadAllData();
     saveAllData({ ...prior, version: 8, routines: undefined });
     const migrated = loadAllData();
-    expect(migrated.version).toBe(9);
+    expect(migrated.version).toBe(CURRENT_STORAGE_VERSION);
     expect(migrated.routines).toEqual([]);
     expect(migrated.categories.map((category) => category.id)).toEqual(prior.categories.map((category) => category.id));
     expect(migrated.reminders).toEqual(prior.reminders);

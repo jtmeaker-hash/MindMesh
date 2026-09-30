@@ -162,4 +162,24 @@ export const INITIAL_REMINDERS: Reminder[] = [
     completedAt: new Date(Date.now() - 86400000 * 1).toISOString(),
     subtasks: [],
   },
+  {
+    id: 'rem-steps-sample',
+    categoryId: 'cat-home',
+    title: 'Cook dinner',
+    notes: 'Sequential Steps example: only the current Step is actionable.',
+    priority: 'medium',
+    completed: false,
+    createdAt: new Date().toISOString(),
+    // Independent systems: Steps are enabled, Subtasks are not.
+    enableSubtasks: false,
+    enableSteps: true,
+    subtasks: [],
+    steps: [
+      { id: 'step-sample-1', reminderId: 'rem-steps-sample', title: 'Gather ingredients', order: 0, completed: true, createdAt: new Date().toISOString(), completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: 'step-sample-2', reminderId: 'rem-steps-sample', title: 'Prepare ingredients', order: 1, completed: true, createdAt: new Date().toISOString(), completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: 'step-sample-3', reminderId: 'rem-steps-sample', title: 'Cook meal', order: 2, completed: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: 'step-sample-4', reminderId: 'rem-steps-sample', title: 'Plate meal', order: 3, completed: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+      { id: 'step-sample-5', reminderId: 'rem-steps-sample', title: 'Clean workspace', order: 4, completed: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    ],
+  },
 ];

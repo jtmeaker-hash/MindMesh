@@ -12,8 +12,10 @@ import {
   BellRing,
   AlertTriangle,
   Sparkles,
+  ListChecks,
+  ListOrdered,
 } from 'lucide-react';
-import { Reminder, Category, Priority, Subtask, RecurrenceRule, RecurrenceFrequency, CustomRecurrenceUnit, DirectDebit, ExtraIncome } from '../../types';
+import { Reminder, Category, Priority, Subtask, Step, RecurrenceRule, RecurrenceFrequency, CustomRecurrenceUnit, DirectDebit, ExtraIncome } from '../../types';
 import { Contact } from '../../types/contact';
 import { formatRecurrenceLabel } from '../../services/recurrence';
 import {
@@ -27,6 +29,8 @@ import {
   ReminderNotificationSettings,
 } from '../../types/notifications';
 import { getReminderNotificationStatus } from '../../services/notifications';
+import { resolveEnableSteps, resolveEnableSubtasks } from '../../services/reminders';
+import { StepEditor } from './StepEditor';
 import { enhanceReminderTextLocally, reminderAiRequest, ReminderAiOperation } from '../../services/reminderAi';
 
 const WEEKDAYS = [
@@ -85,6 +89,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [priority, setPriority] = useState<Priority>('medium');
   const [subtasks, setSubtasks] = useState<Subtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
+  const [enableSubtasks, setEnableSubtasks] = useState(false);
+  const [enableSteps, setEnableSteps] = useState(false);
+  const [steps, setSteps] = useState<Step[]>([]);
   const [linkedBillId, setLinkedBillId] = useState('');
   const [linkedExtraIncomeId, setLinkedExtraIncomeId] = useState('');
   const [linkedContactId, setLinkedContactId] = useState('');
@@ -131,6 +138,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setDueTime(reminder.dueTime || '');
       setPriority(reminder.priority);
       setSubtasks(reminder.subtasks ? [...reminder.subtasks] : []);
+      setEnableSubtasks(resolveEnableSubtasks(reminder));
+      setEnableSteps(resolveEnableSteps(reminder));
+      setSteps(reminder.steps ? [...reminder.steps] : []);
       setLinkedBillId(reminder.linkedBillId || '');
       setLinkedExtraIncomeId(reminder.linkedExtraIncomeId || '');
       setLinkedContactId(reminder.linkedContactId || '');
@@ -183,6 +193,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setDueTime('');
       setPriority('medium');
       setSubtasks([]);
+      setEnableSubtasks(false);
+      setEnableSteps(false);
+      setSteps([]);
       setLinkedBillId('');
       setLinkedExtraIncomeId('');
       setLinkedContactId('');
@@ -287,7 +300,13 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       linkedExtraIncomeId: linkedExtraIncomeId || undefined,
       linkedContactId: linkedContactId || undefined,
       notifications: buildNotificationSettings(),
+      enableSubtasks,
+      enableSteps,
       subtasks: subtasks.map((s) => ({
+        ...s,
+        reminderId: reminder?.id || s.reminderId,
+      })),
+      steps: steps.map((s) => ({
         ...s,
         reminderId: reminder?.id || s.reminderId,
       })),
@@ -1321,11 +1340,94 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
             </div>
           )}
 
+          {/* Reminder systems: Subtasks and Steps are independent capabilities */}
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 14,
+              backgroundColor: 'rgba(30, 41, 59, 0.6)',
+              border: '1px solid #334155',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>REMINDER SYSTEMS</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: -4 }}>
+              Subtasks are an independent checklist. Steps are a strict sequential process. Enable either or both.
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ListChecks size={15} color={enableSubtasks ? '#a5b4fc' : '#64748b'} />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>Subtasks</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8' }}>Independent checklist items, completable in any order.</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={enableSubtasks}
+                aria-label="Enable Subtasks"
+                onClick={() => setEnableSubtasks((prev) => !prev)}
+                style={{
+                  flexShrink: 0,
+                  padding: '6px 12px',
+                  borderRadius: 999,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  backgroundColor: enableSubtasks ? '#6366f1' : 'rgba(255,255,255,0.08)',
+                  color: enableSubtasks ? '#ffffff' : '#94a3b8',
+                }}
+              >
+                {enableSubtasks ? 'On' : 'Off'}
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ListOrdered size={15} color={enableSteps ? '#67e8f9' : '#64748b'} />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>Steps</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8' }}>Ordered process completed strictly one after another.</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={enableSteps}
+                aria-label="Enable Steps"
+                onClick={() => setEnableSteps((prev) => !prev)}
+                style={{
+                  flexShrink: 0,
+                  padding: '6px 12px',
+                  borderRadius: 999,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  backgroundColor: enableSteps ? '#06b6d4' : 'rgba(255,255,255,0.08)',
+                  color: enableSteps ? '#ffffff' : '#94a3b8',
+                }}
+              >
+                {enableSteps ? 'On' : 'Off'}
+              </button>
+            </div>
+          </div>
+
+          {/* Steps (strict sequential process) */}
+          {enableSteps && (
+            <StepEditor steps={steps} reminderId={reminder?.id || ''} onChange={setSteps} />
+          )}
+
           {/* Subtasks (Mesh branches) */}
-          <div>
+          <div style={{ display: enableSubtasks ? 'flex' : 'none', flexDirection: 'column' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8' }}>
-                SUBTASKS / STEPS ({subtasks.filter((s) => s.completed).length}/{subtasks.length})
+                SUBTASKS ({subtasks.filter((s) => s.completed).length}/{subtasks.length})
               </label>
               <span style={{ fontSize: 11, color: '#64748b' }}>Branch outward in the mesh</span>
             </div>
@@ -1395,7 +1497,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
             <div style={{ display: 'flex', gap: 8 }}>
               <input
                 type="text"
-                placeholder="Add next subtask step..."
+                placeholder="Add next subtask..."
                 value={newSubtaskTitle}
                 onChange={(e) => setNewSubtaskTitle(e.target.value)}
                 onKeyDown={(e) => {
