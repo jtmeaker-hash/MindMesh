@@ -35,6 +35,7 @@ import { loadDiagnosticsStore, recordBackup, recordRestore } from './diagnostics
 import { getLogs } from './logging';
 import { logger } from './logger';
 import { normalizeRoutines } from '../types/routine';
+import { normalizeReminder, normalizeReminders } from './reminders';
 import { normalizeSmartEngineSettings } from '../types/smartEngine';
 import { normalizeNodePositions } from './nodePositions';
 
@@ -259,6 +260,35 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
         error: `Reminder "${r.id}" has invalid title property`,
       };
     }
+    // Steps are validated non-fatally: malformed step records are normalized or
+    // ignored during restore rather than failing the whole backup.
+    if (r.steps !== undefined) {
+      if (!Array.isArray(r.steps)) {
+        warnings.push(`Reminder "${r.id}" has an unreadable steps list; it will be reset to an empty sequence.`);
+      } else {
+        const stepIds = new Set<string>();
+        for (const step of r.steps) {
+          if (!step || typeof step !== 'object') {
+            warnings.push(`Reminder "${r.id}" contains a malformed Step that will be skipped.`);
+            continue;
+          }
+          const st = step as Record<string, unknown>;
+          if (typeof st.id !== 'string' || !st.id.trim()) {
+            warnings.push(`Reminder "${r.id}" has a Step without an id; a stable id will be generated on restore.`);
+          } else if (stepIds.has(st.id)) {
+            warnings.push(`Reminder "${r.id}" has duplicate Step id "${st.id}"; ids will be regenerated on restore.`);
+          } else {
+            stepIds.add(st.id);
+          }
+        }
+      }
+    }
+    if (r.enableSteps !== undefined && typeof r.enableSteps !== 'boolean') {
+      warnings.push(`Reminder "${r.id}" has an invalid enableSteps flag; it will be derived from its Steps.`);
+    }
+    if (r.enableSubtasks !== undefined && typeof r.enableSubtasks !== 'boolean') {
+      warnings.push(`Reminder "${r.id}" has an invalid enableSubtasks flag; it will be derived from its Subtasks.`);
+    }
   }
 
   // Check contacts if present
@@ -370,6 +400,10 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
   }
 
   const completedReminders = (data.reminders as Reminder[]).filter((r) => r.completed).length;
+  const stepCount = (data.reminders as Reminder[]).reduce(
+    (sum, r) => sum + (Array.isArray(r.steps) ? r.steps.length : 0),
+    0
+  );
 
   const rawNodePositions = data.nodePositions;
   const readableNodePositions =
@@ -389,6 +423,7 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     categoriesCount: data.categories.length,
     remindersCount: data.reminders.length,
     completedRemindersCount: completedReminders,
+    stepCount,
     nodePositionsCount,
     contactsCount,
     directDebitsCount,
@@ -429,16 +464,16 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     Array.isArray(rawData.categories) && rawData.categories.length > 0 ? rawData.categories : INITIAL_CATEGORIES
   );
 
-  // Validate reminders and ensure all subtasks & clean properties
-  const reminders: Reminder[] = (rawData.reminders || []).map((rem) => {
-    return {
+  // Validate reminders and ensure all subtasks, sequential steps & clean properties
+  const reminders: Reminder[] = (rawData.reminders || []).map((rem) =>
+    normalizeReminder({
       ...rem,
       subtasks: Array.isArray(rem.subtasks) ? rem.subtasks : [],
       priority: rem.priority || 'medium',
       completed: Boolean(rem.completed),
       createdAt: rem.createdAt || new Date().toISOString(),
-    };
-  });
+    }),
+  );
 
   const nodePositions = normalizeNodePositions(rawData.nodePositions);
 
@@ -530,7 +565,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
   return {
     version: targetSchema,
     categories,
-    reminders: fullySanitizedReminders,
+    reminders: normalizeReminders(fullySanitizedReminders),
     routines: normalizeRoutines(rawData.routines).routines,
     nodePositions,
     money,

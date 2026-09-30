@@ -1,5 +1,7 @@
 import { Reminder, RecurrenceRule } from '../types';
 import { logger } from './logger';
+import { generateStepId } from './steps';
+import { canCompleteReminder } from './reminders';
 
 const DAYS_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -161,6 +163,17 @@ export function handleReminderCompletion(
   const rule = reminder.recurrence;
   const isRecurring = rule && rule.frequency !== 'none';
 
+  // A reminder with incomplete sequential Steps can never be marked complete.
+  // Un-completing is always allowed. This is enforced here in the data layer so
+  // every completion path (node tap, notification action, editor) obeys it.
+  if (!reminder.completed && !canCompleteReminder(reminder)) {
+    logger.info('Recurrence', 'Reminder completion refused: incomplete Steps remain', {
+      reminderId: targetId,
+      steps: (reminder.steps ?? []).length,
+    });
+    return reminders;
+  }
+
   if (!isRecurring) {
     // Standard non-recurring reminder completion toggle
     const nextCompleted = !reminder.completed;
@@ -204,6 +217,13 @@ export function handleReminderCompletion(
       completed: true,
       completedAt: s.completedAt || nowIso,
     })),
+    // The historical occurrence keeps every Step marked complete for its record.
+    steps: (reminder.steps ?? []).map((step) => ({
+      ...step,
+      completed: true,
+      completedAt: step.completedAt || nowIso,
+      updatedAt: nowIso,
+    })),
   };
 
   if (!shouldSpawnNext) {
@@ -229,6 +249,17 @@ export function handleReminderCompletion(
       title: s.title,
       completed: false,
       createdAt: nowIso,
+    })),
+    // Steps are a separate system and are reset to a fresh, sequential cycle.
+    steps: (reminder.steps ?? []).map((step, idx) => ({
+      id: generateStepId(),
+      reminderId: reminder.id,
+      title: step.title,
+      description: step.description,
+      order: idx,
+      completed: false,
+      createdAt: nowIso,
+      updatedAt: nowIso,
     })),
   };
 

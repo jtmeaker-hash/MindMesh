@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
-import { enhanceReminderText } from '../services/reminderAi';
+import { describe, expect, it } from 'vitest';
+import { enhanceReminderTextLocally, reminderAiRequest } from '../services/reminderAi';
 import { generateActiveMesh } from '../utils/layout';
 import { upsertReminder } from '../services/reminders';
 import { Category, Reminder } from '../types';
@@ -12,27 +12,19 @@ const reminder: Reminder = {
   createdAt: '2026-01-01T00:00:00.000Z', subtasks: [],
 };
 
-afterEach(() => vi.restoreAllMocks());
-
-describe('reminder AI adapter', () => {
-  it('returns server text without exposing provider details to the editor', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ text: 'Book the service and ask about brakes.' }), { status: 200 })));
-    await expect(enhanceReminderText({ operation: 'enhance-description', title: reminder.title })).resolves.toBe('Book the service and ask about brakes.');
+describe('local reminder enhancement adapter', () => {
+  it('keeps the editor request shape and creates deterministic local text', () => {
+    const request = reminderAiRequest(reminder, 'enhance-description');
+    expect(enhanceReminderTextLocally(request)).toBe('Service Car: Book the scheduled service and ask about the brakes.');
   });
 
-  it('reports unavailable AI without breaking the normal workflow', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
-    await expect(enhanceReminderText({ operation: 'generate-summary', title: reminder.title })).rejects.toMatchObject({ code: 'unavailable' });
-  });
-
-  it('supports cancellation', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
-      if (init?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      return new Response('{}', { status: 200 });
-    }));
-    await expect(enhanceReminderText({ operation: 'generate-summary', title: reminder.title }, controller.signal)).rejects.toMatchObject({ code: 'cancelled' });
+  it('generates summaries only from text already supplied', () => {
+    expect(enhanceReminderTextLocally({
+      operation: 'generate-summary',
+      title: reminder.title,
+      description: 'Book the scheduled service. Ask about the brakes.',
+    })).toBe('Book the scheduled service');
+    expect(enhanceReminderTextLocally({ operation: 'generate-summary', title: reminder.title })).toBe(reminder.title);
   });
 });
 

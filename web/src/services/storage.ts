@@ -19,8 +19,9 @@ import { logger } from './logger';
 import { normalizeRoutines, Routine } from '../types/routine';
 import { DEFAULT_SMART_ENGINE_SETTINGS, normalizeSmartEngineSettings, SmartEngineSettings } from '../types/smartEngine';
 import { normalizeNodePositions } from './nodePositions';
+import { normalizeReminders } from './reminders';
 
-export const CURRENT_STORAGE_VERSION = 9;
+export const CURRENT_STORAGE_VERSION = 10;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
@@ -37,7 +38,7 @@ export function getDefaultState(): MindMeshStorageData {
   return {
     version: CURRENT_STORAGE_VERSION,
     categories: INITIAL_CATEGORIES,
-    reminders: INITIAL_REMINDERS,
+    reminders: normalizeReminders(INITIAL_REMINDERS),
     nodePositions: {},
     lastUpdated: new Date().toISOString(),
     money: getDefaultMoneyState(),
@@ -73,7 +74,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
     logger.info('Storage', `Migrating legacy v1 storage to v${CURRENT_STORAGE_VERSION} schema`);
 
     let categories: Category[] = INITIAL_CATEGORIES;
-    let reminders: Reminder[] = INITIAL_REMINDERS;
+    let reminders: Reminder[] = normalizeReminders(INITIAL_REMINDERS);
     let nodePositions: NodePositionMap = {};
 
     if (rawLegacyCats) {
@@ -86,7 +87,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
     if (rawLegacyRems) {
       const parsedRems = JSON.parse(rawLegacyRems);
       if (Array.isArray(parsedRems)) {
-        reminders = parsedRems;
+        reminders = normalizeReminders(parsedRems);
       }
     }
 
@@ -151,9 +152,9 @@ export function loadAllData(): MindMeshStorageData {
       Array.isArray(parsed.categories) && parsed.categories.length > 0 ? parsed.categories : INITIAL_CATEGORIES
     );
 
-    const reminders = Array.isArray(parsed.reminders)
-      ? parsed.reminders
-      : INITIAL_REMINDERS;
+    const reminders = normalizeReminders(
+      Array.isArray(parsed.reminders) ? parsed.reminders : INITIAL_REMINDERS
+    );
 
     const nodePositions = normalizeNodePositions(parsed.nodePositions);
 
@@ -263,6 +264,22 @@ export interface StorageReadability {
   /** True when that payload parses as a JSON object. */
   readable: boolean;
   rawBytes: number;
+}
+
+/**
+ * Reads the raw persisted MindMesh payload exactly as stored, without any
+ * normalization or migration. Diagnostics uses this to observe stored Step
+ * integrity (duplicate ordering, broken sequences) before hydration repairs it.
+ * Returns null when nothing is stored or the payload cannot be parsed.
+ */
+export function readStoredPayload(): unknown {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_V2);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -649,7 +666,7 @@ export function importStorageJson(json: string): boolean {
     const state: MindMeshStorageData = {
       version: CURRENT_STORAGE_VERSION,
       categories: normalizeCategories(parsed.categories),
-      reminders: parsed.reminders,
+      reminders: normalizeReminders(parsed.reminders),
       nodePositions: normalizeNodePositions(parsed.nodePositions),      lastUpdated: new Date().toISOString(),
       money: parsed.money || getDefaultMoneyState(),
       contacts: Array.isArray(parsed.contacts) ? parsed.contacts.filter((contact: unknown): contact is Contact => Boolean(contact && typeof contact === 'object' && typeof (contact as Contact).id === 'string' && typeof (contact as Contact).fullName === 'string')).map((contact: Contact) => ({

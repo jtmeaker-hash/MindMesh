@@ -10,6 +10,7 @@ import {
   withAlpha,
 } from '../services/appearance';
 import { PlacementGrid } from '../services/nodePositions';
+import { stepNodeFields } from '../services/steps';
 
 export interface GraphElements {
   nodes: Node<MeshNodeData>[];
@@ -283,6 +284,7 @@ export function generateActiveMesh(
             categoryId: category.id,
             subtaskCount: reminder.subtasks.length,
             completedSubtaskCount: completedSubtasks,
+            ...stepNodeFields(reminder),
             isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId),
             linkedContactId: reminder.linkedContactId,
             linkedContactName: linkedContact ? (linkedContact.displayName || linkedContact.fullName) : undefined,
@@ -631,6 +633,7 @@ export function generateCompletedCategoryMesh(
         categoryId: category.id,
         subtaskCount: reminder.subtasks.length,
         completedSubtaskCount: reminder.subtasks.filter((s) => s.completed).length,
+        ...stepNodeFields(reminder),
         isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId),
         linkedContactId: reminder.linkedContactId,
         linkedContactName: linkedContact ? (linkedContact.displayName || linkedContact.fullName) : undefined,

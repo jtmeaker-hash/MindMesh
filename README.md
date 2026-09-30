@@ -148,7 +148,7 @@ Routine support includes:
 - Routine transfer/import-export support.
 - Trash and recovery handling.
 - Diagnostics and quarantine support for malformed routine data.
-- AI proposal architecture for assisted routine editing.
+- Deterministic local routine-step suggestions that are reviewed before applying.
 - Visual routine graph generation using the MindMesh node system.
 
 The Routine Builder has its own CI coverage while also remaining part of the wider app regression surface.
@@ -442,7 +442,7 @@ MindMesh currently uses:
 - Android 7.0 / API 24 or newer.
 - Notification permission on Android versions that require it.
 - Local storage available to the app.
-- Internet access only for features that use external services; core local MindMesh data is designed around device storage.
+- Internet access is not required for local MindMesh data, reminders or Smart Assistance; any unrelated external-service features operate independently.
 
 The Android project currently targets API 36.
 

@@ -11,7 +11,8 @@ import {
   summarizeDiagnostics,
 } from '../types/diagnostics';
 import { NotificationHistoryEntry } from '../types/notifications';
-import { CURRENT_STORAGE_VERSION, loadAllData } from './storage';
+import { CURRENT_STORAGE_VERSION, loadAllData, readStoredPayload } from './storage';
+import { validateStepSequence } from './steps';
 import { APPEARANCE_PRESETS, getDefaultAppearance, validateAppearance } from './appearance';
 import { APP_VERSION, BACKUP_FORMAT_VERSION, createBackup, serializeBackup, validateBackup } from './backup';
 import { computeNextDueDate, formatDateIso, parseIsoDate } from './recurrence';
@@ -332,6 +333,7 @@ const checkReminderStorage: DiagnosticCheck = ({ state }) => {
       active: reminders.filter((r) => !r.completed).length,
       completed: reminders.filter((r) => r.completed).length,
       subtasks: reminders.reduce((sum, r) => sum + (r.subtasks?.length ?? 0), 0),
+      steps: reminders.reduce((sum, r) => sum + (r.steps?.length ?? 0), 0),
       duplicateIds: duplicates.slice(0, 10),
       malformedIds: malformed.slice(0, 10),
       missingCategoryIds: orphanCategory.slice(0, 10),
@@ -1364,6 +1366,52 @@ const checkSubtaskOwnership: DiagnosticCheck = ({ state }) => {
   });
 };
 
+const checkStepIntegrity: DiagnosticCheck = ({ state }) => {
+  // Validate the raw stored payload first so a broken sequence that hydration
+  // would normalise away is still reported; fall back to the hydrated state.
+  const raw = readStoredPayload();
+  const rawReminders =
+    raw && typeof raw === 'object' && Array.isArray((raw as { reminders?: unknown }).reminders)
+      ? ((raw as { reminders: Reminder[] }).reminders)
+      : null;
+  const source = rawReminders ?? state.reminders ?? [];
+  const remindersWithSteps = source.filter(
+    (reminder) => Array.isArray(reminder.steps) && (reminder.steps?.length ?? 0) > 0
+  );
+
+  const issues = remindersWithSteps.flatMap((reminder) => validateStepSequence(reminder));
+  const byKind = issues.reduce<Record<string, number>>((acc, issue) => {
+    acc[issue.kind] = (acc[issue.kind] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const status: DiagnosticStatus = issues.length === 0 ? 'pass' : issues.some((i) => i.kind === 'completed-after-incomplete') ? 'fail' : 'warning';
+
+  return makeResult({
+    id: 'deep.stepIntegrity',
+    name: 'Sequential Step integrity',
+    category: 'reminders',
+    status,
+    explanation:
+      issues.length === 0
+        ? 'Every sequential Step sequence is valid (no completed Step follows an incomplete Step, ids and ordering are sound).'
+        : `${issues.length} sequential Step issue(s) detected across ${remindersWithSteps.length} reminder(s).`,
+    details: {
+      remindersWithSteps: remindersWithSteps.length,
+      totalSteps: remindersWithSteps.reduce((sum, reminder) => sum + (reminder.steps?.length ?? 0), 0),
+      issues: issues.slice(0, 10).map((issue) => `${issue.reminderId}:${issue.kind}`),
+      issueCounts: byKind,
+    },
+    ...(issues.length > 0
+      ? {
+          suggestedFix:
+            'Repair Step sequencing so no completed Step follows an incomplete one. Step titles, descriptions and order are kept; only invalid completion flags are reset.',
+          fixId: 'fix.repairStepSequence',
+        }
+      : {}),
+  });
+};
+
 const checkDuplicateRecordIds: DiagnosticCheck = ({ state }) => {
   const duplicates: string[] = [];
   const collect = (ids: string[], label: string) => {
@@ -1502,6 +1550,7 @@ const DEEP_CHECKS: DiagnosticCheck[] = [
   checkContactLinks,
   checkBillLinks,
   checkSubtaskOwnership,
+  checkStepIntegrity,
   checkDuplicateRecordIds,
   checkMoneyTimeline,
 ];

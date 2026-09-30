@@ -2,5 +2,5 @@
   "name": "MindMesh",
   "description": "Mobile-first ADHD visual node network task management app",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Reminder, Category } from '../../types';
+import { resolveEnableSteps } from '../../services/reminders';
 import { Routine } from '../../types/routine';
 import { analyzeRoutine, buildTodayPlan } from '../../services/routineAnalytics';
 import { MoneyState, DashboardTimeFilter } from '../../types/finance';
@@ -722,6 +723,9 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {metrics.overdueRemindersList.map((rem) => {
                   const cat = categories.find((c) => c.id === rem.categoryId);
+                  const steps = rem.steps ?? [];
+                  const showSteps = resolveEnableSteps(rem) && steps.length > 0;
+                  const doneSteps = steps.filter((step) => step.completed).length;
                   return (
                     <div
                       key={rem.id}
@@ -740,6 +744,14 @@ export const DashboardModule: React.FC<DashboardModuleProps> = ({
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: cat?.color || '#ef4444' }} />
                         <span style={{ fontSize: 14, fontWeight: 600, color: '#f8fafc' }}>{rem.title}</span>
+                        {showSteps && (
+                          <span
+                            title={doneSteps === steps.length ? 'All steps complete' : 'Sequential Step progress'}
+                            style={{ fontSize: 11, fontWeight: 600, color: doneSteps === steps.length ? '#34d399' : '#67e8f9', background: 'rgba(103,232,249,0.1)', padding: '2px 6px', borderRadius: 6 }}
+                          >
+                            Steps {doneSteps}/{steps.length}
+                          </span>
+                        )}
                       </div>
 
                       <span style={{ fontSize: 12, color: '#ef4444', fontWeight: 700 }}>

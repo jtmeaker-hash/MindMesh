@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Check, ListChecks, Calendar, Repeat, DollarSign, User, Bell, BellOff, AlertTriangle } from 'lucide-react';
+import { Check, ListChecks, ListOrdered, Calendar, Repeat, DollarSign, User, Bell, BellOff, AlertTriangle } from 'lucide-react';
 import { MeshNodeData } from '../../types';
 import { withAlpha } from '../../services/appearance';
 
@@ -26,6 +26,10 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
       : '#10b981';
 
   const hasSubtasks = (nodeData.subtaskCount ?? 0) > 0;
+  const stepCount = nodeData.stepCount ?? 0;
+  const completedStepCount = nodeData.completedStepCount ?? 0;
+  const hasSteps = Boolean(nodeData.hasSteps) && stepCount > 0;
+  const allStepsDone = hasSteps && completedStepCount === stepCount;
 
   // Compact notification indicator: never more than a single small glyph.
   const notificationState = nodeData.notificationState;
@@ -245,24 +249,54 @@ export const ReminderNode = memo(({ data }: NodeProps) => {
         className="mm-node-detail"
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}
       >
-        {hasSubtasks ? (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              fontSize: 10,
-              fontWeight: 600,
-              color: nodeData.completedSubtaskCount === nodeData.subtaskCount ? '#10b981' : '#a5b4fc',
-              background: 'rgba(255,255,255,0.06)',
-              padding: '2px 5px',
-              borderRadius: 6,
-            }}
-          >
-            <ListChecks size={11} />
-            <span>
-              {nodeData.completedSubtaskCount}/{nodeData.subtaskCount}
-            </span>
+        {(hasSubtasks || hasSteps) ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {hasSubtasks && (
+              <div
+                title={`Subtasks ${nodeData.completedSubtaskCount}/${nodeData.subtaskCount}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: nodeData.completedSubtaskCount === nodeData.subtaskCount ? '#10b981' : '#a5b4fc',
+                  background: 'rgba(255,255,255,0.06)',
+                  padding: '2px 5px',
+                  borderRadius: 6,
+                }}
+              >
+                <ListChecks size={11} />
+                <span>
+                  {nodeData.completedSubtaskCount}/{nodeData.subtaskCount}
+                </span>
+              </div>
+            )}
+            {hasSteps && (
+              <div
+                title={
+                  nodeData.currentStepNumber
+                    ? `Step ${nodeData.currentStepNumber} of ${stepCount}`
+                    : 'All steps complete'
+                }
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: allStepsDone ? '#10b981' : '#67e8f9',
+                  background: 'rgba(103,232,249,0.1)',
+                  padding: '2px 5px',
+                  borderRadius: 6,
+                }}
+              >
+                <ListOrdered size={11} />
+                <span>
+                  {completedStepCount}/{stepCount}
+                </span>
+              </div>
+            )}
           </div>
         ) : (
           <div />

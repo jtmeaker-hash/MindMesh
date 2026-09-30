@@ -11,6 +11,7 @@ import {
 } from '../services/appearance';
 import { getChildCategories } from '../services/categories';
 import { createPlacementGrid } from '../services/nodePositions';
+import { stepNodeFields } from '../services/steps';
 
 export interface NestedGraphElements { nodes: Node<MeshNodeData>[]; edges: Edge[] }
 
@@ -274,7 +275,7 @@ export function generateNestedActiveMesh(
         textColor: remTheme.text, mutedTextColor: remTheme.mutedText, borderColor: remTheme.border, glowColor: remTheme.glow, hoverColor: remTheme.hover,
         priority: reminder.priority, completed: reminder.completed, dueDate: reminder.dueDate, dueTime: reminder.dueTime, recurrence: reminder.recurrence,
         isRecurring: reminder.recurrence?.frequency !== 'none', categoryId: category.id, subtaskCount: reminder.subtasks.length,
-        completedSubtaskCount: reminder.subtasks.filter((subtask) => subtask.completed).length, linkedContactId: reminder.linkedContactId,
+        completedSubtaskCount: reminder.subtasks.filter((subtask) => subtask.completed).length, ...stepNodeFields(reminder), linkedContactId: reminder.linkedContactId,
         linkedContactName: linkedContact ? (linkedContact.displayName || linkedContact.fullName) : undefined,
         isFinancialLinked: Boolean(reminder.linkedBillId || reminder.linkedExtraIncomeId), onNodeClick: callbacks.onNodeClick,
         onReminderCompleteToggle: callbacks.onReminderCompleteToggle,
