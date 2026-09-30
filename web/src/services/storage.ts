@@ -20,6 +20,7 @@ import { normalizeRoutines, Routine } from '../types/routine';
 import { DEFAULT_SMART_ENGINE_SETTINGS, normalizeSmartEngineSettings, SmartEngineSettings } from '../types/smartEngine';
 import { normalizeNodePositions } from './nodePositions';
 import { normalizeReminders } from './reminders';
+import { normalizeIncomeConfig } from '../utils/payRates';
 
 export const CURRENT_STORAGE_VERSION = 10;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
@@ -55,6 +56,34 @@ export function getDefaultState(): MindMeshStorageData {
       defaultReminderPriority: 'medium',
       enableSound: false,
     },
+  };
+}
+
+/**
+ * Normalizes a raw money payload during import so a casual income config always
+ * carries a `rateRules` array, while every other slice keeps its stored value.
+ */
+function normalizeImportedMoney(input: unknown): MoneyState {
+  const fallback = getDefaultMoneyState();
+  if (!input || typeof input !== 'object') return fallback;
+  const money = input as Partial<MoneyState>;
+  return {
+    incomeConfig: normalizeIncomeConfig(money.incomeConfig),
+    directDebits: Array.isArray(money.directDebits) ? money.directDebits : fallback.directDebits,
+    billCategories:
+      Array.isArray(money.billCategories) && money.billCategories.length > 0
+        ? money.billCategories
+        : fallback.billCategories,
+    extraIncomeList: Array.isArray(money.extraIncomeList) ? money.extraIncomeList : fallback.extraIncomeList,
+    extraIncomeCategories:
+      Array.isArray(money.extraIncomeCategories) && money.extraIncomeCategories.length > 0
+        ? money.extraIncomeCategories
+        : fallback.extraIncomeCategories,
+    tipEntries: Array.isArray(money.tipEntries) ? money.tipEntries : fallback.tipEntries,
+    shifts: Array.isArray(money.shifts) ? money.shifts : fallback.shifts,
+    expenses: Array.isArray(money.expenses) ? money.expenses : fallback.expenses,
+    payCycleOverrides:
+      money.payCycleOverrides && typeof money.payCycleOverrides === 'object' ? money.payCycleOverrides : {},
   };
 }
 
@@ -161,7 +190,7 @@ export function loadAllData(): MindMeshStorageData {
     const defaultMoney = getDefaultMoneyState();
     const money: MoneyState = parsed.money && typeof parsed.money === 'object'
       ? {
-          incomeConfig: parsed.money.incomeConfig || null,
+          incomeConfig: normalizeIncomeConfig(parsed.money.incomeConfig),
           directDebits: Array.isArray(parsed.money.directDebits) ? parsed.money.directDebits : [],
           billCategories: Array.isArray(parsed.money.billCategories) && parsed.money.billCategories.length > 0
             ? parsed.money.billCategories
@@ -172,6 +201,7 @@ export function loadAllData(): MindMeshStorageData {
             : defaultMoney.extraIncomeCategories,
           tipEntries: Array.isArray(parsed.money.tipEntries) ? parsed.money.tipEntries : [],
           shifts: Array.isArray(parsed.money.shifts) ? parsed.money.shifts : [],
+          expenses: Array.isArray(parsed.money.expenses) ? parsed.money.expenses : [],
           payCycleOverrides: parsed.money.payCycleOverrides && typeof parsed.money.payCycleOverrides === 'object'
             ? parsed.money.payCycleOverrides
             : {},
@@ -668,7 +698,7 @@ export function importStorageJson(json: string): boolean {
       categories: normalizeCategories(parsed.categories),
       reminders: normalizeReminders(parsed.reminders),
       nodePositions: normalizeNodePositions(parsed.nodePositions),      lastUpdated: new Date().toISOString(),
-      money: parsed.money || getDefaultMoneyState(),
+      money: normalizeImportedMoney(parsed.money),
       contacts: Array.isArray(parsed.contacts) ? parsed.contacts.filter((contact: unknown): contact is Contact => Boolean(contact && typeof contact === 'object' && typeof (contact as Contact).id === 'string' && typeof (contact as Contact).fullName === 'string')).map((contact: Contact) => ({
         ...contact,
         phoneNumber: typeof contact.phoneNumber === 'string' ? contact.phoneNumber : '',

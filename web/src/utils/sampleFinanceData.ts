@@ -38,6 +38,7 @@ export function getDefaultMoneyState(): MoneyState {
     extraIncomeCategories: INITIAL_EXTRA_INCOME_CATEGORIES,
     tipEntries: [],
     shifts: [],
+    expenses: [],
     payCycleOverrides: {},
   };
 }

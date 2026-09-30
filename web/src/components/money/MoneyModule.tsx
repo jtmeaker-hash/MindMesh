@@ -7,6 +7,7 @@ import {
   Shift,
   ExtraIncome,
   TipEntry,
+  Expense,
   DirectDebitCategory,
   ExtraIncomeCategory,
 } from '../../types/finance';
@@ -20,13 +21,17 @@ import {
   computeShiftStats,
   calculateTipSummaries,
   getUpcomingMoneyTimeline,
+  calculateExpenseSummary,
+  sortExpensesNewestFirst,
 } from '../../utils/finance';
+import { summarizeRateRules } from '../../utils/payRates';
 import { EmptyState } from '../common/EmptyState';
 import { DirectDebitModal } from './DirectDebitModal';
 import { IncomeConfigModal } from './IncomeConfigModal';
 import { ShiftCalculatorModal } from './ShiftCalculatorModal';
 import { ExtraIncomeModal } from './ExtraIncomeModal';
 import { TipEntryModal } from './TipEntryModal';
+import { ExpenseModal } from './ExpenseModal';
 import {
   Wallet,
   Calendar,
@@ -35,6 +40,8 @@ import {
   Coins,
   Sparkles,
   Clock,
+  Receipt,
+  Search,
   CheckCircle2,
   Settings,
   ChevronRight,
@@ -70,6 +77,12 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
   const [editingShift, setEditingShift] = useState<Shift | null | 'new'>(null);
   const [editingExtra, setEditingExtra] = useState<ExtraIncome | null | 'new'>(null);
   const [editingTip, setEditingTip] = useState<TipEntry | null | 'new'>(null);
+  const [editingExpense, setEditingExpense] = useState<Expense | null | 'new'>(null);
+
+  // Expenses list filters
+  const [expenseCategoryFilter, setExpenseCategoryFilter] = useState('all');
+  const [expensePeriodFilter, setExpensePeriodFilter] = useState<'all' | 'cycle' | 'month'>('all');
+  const [expenseSearch, setExpenseSearch] = useState('');
 
   // Pay cycle override modal state
   const [showOverrideModal, setShowOverrideModal] = useState(false);
@@ -87,6 +100,33 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
   const shiftStats = computeShiftStats(moneyState.shifts);
   const tipSummaries = calculateTipSummaries(moneyState.tipEntries);
   const timelineItems = getUpcomingMoneyTimeline(moneyState);
+  const expenses = moneyState.expenses || [];
+  const expenseSummary = calculateExpenseSummary(
+    expenses,
+    undefined,
+    payCycleSummary.cycleStartDate,
+    payCycleSummary.cycleEndDate
+  );
+  const sortedExpenses = sortExpensesNewestFirst(expenses);
+  const recentExpenses = sortedExpenses.slice(0, 4);
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const monthPrefix = todayStr.substring(0, 7);
+  const visibleExpenses = sortedExpenses.filter((expense) => {
+    if (expenseCategoryFilter !== 'all' && expense.categoryId !== expenseCategoryFilter) return false;
+    if (expensePeriodFilter === 'month' && !expense.date.startsWith(monthPrefix)) return false;
+    if (
+      expensePeriodFilter === 'cycle' &&
+      (expense.date < payCycleSummary.cycleStartDate || expense.date > payCycleSummary.cycleEndDate)
+    )
+      return false;
+    const term = expenseSearch.trim().toLowerCase();
+    if (term) {
+      const haystack = `${expense.title} ${expense.merchant || ''} ${expense.notes || ''}`.toLowerCase();
+      if (!haystack.includes(term)) return false;
+    }
+    return true;
+  });
 
   const nextPayKey = moneyState.incomeConfig?.nextPayDate || '';
   const hasActiveOverride = Boolean(nextPayKey && moneyState.payCycleOverrides[nextPayKey] !== undefined);
@@ -97,6 +137,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
     { id: 'income', label: 'Income & Pay' },
     { id: 'extra', label: 'Extra Income' },
     { id: 'tips', label: 'Tips' },
+    { id: 'expenses', label: 'Expenses' },
     { id: 'categories', label: 'Settings' },
   ];
 
@@ -201,6 +242,26 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
     onUpdateMoneyState((prev) => ({
       ...prev,
       tipEntries: prev.tipEntries.filter((t) => t.id !== id),
+    }));
+  };
+
+  // General expense handlers. Expenses live in their own array so a fuel purchase
+  // can never surface as a recurring direct debit.
+  const handleSaveExpense = (expense: Expense) => {
+    onUpdateMoneyState((prev) => {
+      const list = prev.expenses || [];
+      const exists = list.some((e) => e.id === expense.id);
+      const expenses = exists
+        ? list.map((e) => (e.id === expense.id ? expense : e))
+        : [expense, ...list];
+      return { ...prev, expenses };
+    });
+  };
+
+  const handleDeleteExpense = (id: string) => {
+    onUpdateMoneyState((prev) => ({
+      ...prev,
+      expenses: (prev.expenses || []).filter((e) => e.id !== id),
     }));
   };
 
@@ -340,6 +401,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                 {tab.id === 'income' && <Briefcase size={14} />}
                 {tab.id === 'extra' && <Sparkles size={14} />}
                 {tab.id === 'tips' && <Coins size={14} />}
+                {tab.id === 'expenses' && <Receipt size={14} />}
                 {tab.id === 'categories' && <Settings size={14} />}
                 <span>{tab.label}</span>
               </button>
@@ -640,6 +702,128 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
               )}
             </div>
 
+            {/* General Expenses Overview (separate from scheduled Direct Debits) */}
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: '1px solid rgba(249, 115, 22, 0.2)',
+                borderRadius: 20,
+                padding: '22px 24px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Receipt size={18} color="#fb923c" />
+                  <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>General Expenses</h3>
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>One-off & variable spending (fuel, groceries, etc.)</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingExpense('new')}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 16px',
+                    borderRadius: 12,
+                    border: 'none',
+                    background: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+                    color: '#ffffff',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 14px rgba(249, 115, 22, 0.3)',
+                  }}
+                >
+                  <Plus size={16} />
+                  <span>Log Expense</span>
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                  gap: 14,
+                  paddingBottom: 16,
+                  borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                }}
+              >
+                <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                  <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Expenses This Cycle</span>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: '#fb923c' }}>
+                    -{formatCurrency(payCycleSummary.expensesTotalThisCycle)}
+                  </div>
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                    {payCycleSummary.expensesInCycle.length} unscheduled expense{payCycleSummary.expensesInCycle.length === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                  <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Expenses This Month</span>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: '#fdba74' }}>
+                    -{formatCurrency(expenseSummary.monthTotal)}
+                  </div>
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>Calendar month to date</span>
+                </div>
+                <div style={{ padding: 12, borderRadius: 14, background: 'rgba(255,255,255,0.03)' }}>
+                  <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Remaining After Bills + Expenses</span>
+                  <div
+                    style={{
+                      fontSize: 22,
+                      fontWeight: 800,
+                      color: payCycleSummary.remainingAfterBillsAndExpenses >= 0 ? '#38bdf8' : '#ef4444',
+                    }}
+                  >
+                    {payCycleSummary.remainingAfterBillsAndExpenses >= 0 ? '+' : ''}
+                    {formatCurrency(payCycleSummary.remainingAfterBillsAndExpenses)}
+                  </div>
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>Bills figure above is unchanged</span>
+                </div>
+              </div>
+
+              {recentExpenses.length === 0 ? (
+                <p style={{ color: '#94a3b8', fontSize: 13, margin: '16px 0 0 0' }}>
+                  No general expenses recorded yet. Log fuel, groceries or any one-off spending here — no schedule required.
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94a3b8' }}>
+                    Recent Expenses
+                  </span>
+                  {recentExpenses.map((expense) => {
+                    const category = moneyState.billCategories.find((c) => c.id === expense.categoryId);
+                    return (
+                      <div
+                        key={expense.id}
+                        onClick={() => setEditingExpense(expense)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '10px 14px',
+                          borderRadius: 12,
+                          background: 'rgba(255, 255, 255, 0.03)',
+                          border: '1px solid rgba(255, 255, 255, 0.06)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ width: 9, height: 9, borderRadius: '50%', backgroundColor: category?.color || '#94a3b8' }} />
+                          <div>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#f8fafc', display: 'block' }}>{expense.title}</span>
+                            <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                              {formatDateAU(expense.date)} • {category?.name || 'Uncategorized'}{expense.merchant ? ` • ${expense.merchant}` : ''}
+                            </span>
+                          </div>
+                        </div>
+                        <span style={{ fontSize: 15, fontWeight: 700, color: '#fb923c' }}>-{formatCurrency(expense.amount)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             {/* Two-Column Grid: Upcoming Bills & Quick Actions */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 24 }}>
               {/* Bills Due in Current Cycle */}
@@ -720,6 +904,11 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                               <span style={{ fontSize: 11, color: '#94a3b8' }}>
                                 Due {formatDateAU(bill.nextPaymentDate)} • {bill.frequency}
                               </span>
+                              {bill.dueByDate && (
+                                <span style={{ fontSize: 11, color: '#f59e0b', display: 'block', marginTop: 1 }}>
+                                  Must be paid by {formatDateAU(bill.dueByDate)}
+                                </span>
+                              )}
                             </div>
                           </div>
 
@@ -1001,6 +1190,12 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                         )}
                       </div>
 
+                      {bill.dueByDate && (
+                        <div style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600, marginTop: -4 }}>
+                          Due by {formatDateAU(bill.dueByDate)}
+                        </div>
+                      )}
+
                       {bill.linkedReminderId && (
                         <div
                           onClick={() => onOpenReminderModal?.(bill.linkedReminderId)}
@@ -1070,6 +1265,25 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                     {moneyState.incomeConfig.nextPayDate && ` • Next Pay Date: ${formatDateAU(moneyState.incomeConfig.nextPayDate)} (${payCycleSummary.daysRemainingInCycle} days)`}
                     {moneyState.incomeConfig.employerName && ` • Employer: ${moneyState.incomeConfig.employerName}`}
                   </p>
+                  {(moneyState.incomeConfig.hourlyRates?.rateRules ?? []).some((rule) => rule.enabled) && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                      {summarizeRateRules(moneyState.incomeConfig.hourlyRates).map((line) => (
+                        <span
+                          key={line}
+                          style={{
+                            fontSize: 11,
+                            color: '#a7f3d0',
+                            background: 'rgba(16, 185, 129, 0.1)',
+                            border: '1px solid rgba(16, 185, 129, 0.2)',
+                            padding: '3px 8px',
+                            borderRadius: 999,
+                          }}
+                        >
+                          {line}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: 'flex', gap: 10 }}>
@@ -1468,6 +1682,194 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
           </div>
         )}
 
+        {/* ===================== EXPENSES SUB-TAB ===================== */}
+        {activeSubTab === 'expenses' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <h2 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>General Expenses</h2>
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                  Fuel, groceries, parking, maintenance, medical and other one-off or variable spending
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setEditingExpense('new')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '9px 18px',
+                  borderRadius: 12,
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+                  color: '#ffffff',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(249, 115, 22, 0.3)',
+                }}
+              >
+                <Plus size={16} />
+                <span>Add Expense</span>
+              </button>
+            </div>
+
+            {/* Expense stat strip */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+              <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Expenses This Cycle</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#fb923c' }}>{formatCurrency(expenseSummary.cycleTotal)}</span>
+              </div>
+              <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Expenses This Month</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#fdba74' }}>{formatCurrency(expenseSummary.monthTotal)}</span>
+              </div>
+              <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>All-Time Expenses</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#f8fafc' }}>{formatCurrency(expenseSummary.total)}</span>
+              </div>
+              <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Records / Average</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: '#60a5fa' }}>
+                  {expenseSummary.count} / {formatCurrency(expenseSummary.averageAmount)}
+                </span>
+              </div>
+            </div>
+
+            {/* Filters */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 180 }}>
+                <Search size={15} color="#64748b" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
+                <input
+                  type="text"
+                  value={expenseSearch}
+                  onChange={(e) => setExpenseSearch(e.target.value)}
+                  placeholder="Search title, merchant or notes..."
+                  style={{
+                    width: '100%',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: 10,
+                    padding: '9px 12px 9px 34px',
+                    color: '#fff',
+                    fontSize: 13,
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+
+              <select
+                value={expenseCategoryFilter}
+                onChange={(e) => setExpenseCategoryFilter(e.target.value)}
+                style={{
+                  background: '#1e293b',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 10,
+                  padding: '9px 12px',
+                  color: '#fff',
+                  fontSize: 13,
+                }}
+              >
+                <option value="all">All Categories</option>
+                {moneyState.billCategories.map((cat) => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={expensePeriodFilter}
+                onChange={(e) => setExpensePeriodFilter(e.target.value as 'all' | 'cycle' | 'month')}
+                style={{
+                  background: '#1e293b',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 10,
+                  padding: '9px 12px',
+                  color: '#fff',
+                  fontSize: 13,
+                }}
+              >
+                <option value="all">All Time</option>
+                <option value="cycle">This Pay Cycle</option>
+                <option value="month">This Month</option>
+              </select>
+            </div>
+
+            {visibleExpenses.length === 0 ? (
+              <EmptyState
+                icon={Receipt}
+                title={expenses.length === 0 ? 'No expenses recorded yet.' : 'No matching expenses.'}
+                description={
+                  expenses.length === 0
+                    ? 'Track fuel, groceries, parking and other variable spending that has no fixed amount or schedule.'
+                    : 'Try clearing the filters or adding a new expense.'
+                }
+                actionLabel="Add Expense"
+                onAction={() => setEditingExpense('new')}
+              />
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {visibleExpenses.map((expense) => {
+                  const category = moneyState.billCategories.find((c) => c.id === expense.categoryId);
+                  return (
+                    <div
+                      key={expense.id}
+                      onClick={() => setEditingExpense(expense)}
+                      style={{
+                        padding: '14px 18px',
+                        borderRadius: 14,
+                        background: 'rgba(15, 23, 42, 0.6)',
+                        border: '1px solid rgba(255, 255, 255, 0.08)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                        <div
+                          style={{
+                            width: 38,
+                            height: 38,
+                            borderRadius: 10,
+                            background: 'rgba(249, 115, 22, 0.12)',
+                            color: '#fb923c',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexShrink: 0,
+                          }}
+                        >
+                          <Receipt size={18} />
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: '#f8fafc', display: 'block' }}>
+                            {expense.title}
+                          </span>
+                          <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                            {formatDateAU(expense.date)} •{' '}
+                            <span style={{ color: category?.color || '#94a3b8' }}>{category?.name || 'Uncategorized'}</span>
+                            {expense.merchant ? ` • ${expense.merchant}` : ''}
+                            {expense.notes ? ` • ${expense.notes}` : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      <span style={{ fontSize: 16, fontWeight: 800, color: '#fb923c', flexShrink: 0 }}>
+                        -{formatCurrency(expense.amount)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ===================== SETTINGS SUB-TAB ===================== */}
         {activeSubTab === 'categories' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -1821,6 +2223,17 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
           shifts={moneyState.shifts}
           onSave={handleSaveTip}
           onDelete={handleDeleteTip}
+        />
+      )}
+
+      {editingExpense !== null && (
+        <ExpenseModal
+          isOpen={true}
+          onClose={() => setEditingExpense(null)}
+          expense={editingExpense === 'new' ? null : editingExpense}
+          categories={moneyState.billCategories}
+          onSave={handleSaveExpense}
+          onDelete={handleDeleteExpense}
         />
       )}
     </div>

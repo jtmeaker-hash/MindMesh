@@ -38,6 +38,7 @@ import { normalizeRoutines } from '../types/routine';
 import { normalizeReminder, normalizeReminders } from './reminders';
 import { normalizeSmartEngineSettings } from '../types/smartEngine';
 import { normalizeNodePositions } from './nodePositions';
+import { normalizeIncomeConfig } from '../utils/payRates';
 
 export const BACKUP_FORMAT_VERSION = 3;
 export const APP_VERSION = '1.4.0';
@@ -335,6 +336,7 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
   let extraIncomeCount = 0;
   let tipsCount = 0;
   let shiftsCount = 0;
+  let expensesCount = 0;
   let hasMoneyConfig = false;
 
   if (data.money && typeof data.money === 'object') {
@@ -343,6 +345,11 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     if (Array.isArray(money.extraIncomeList)) extraIncomeCount = money.extraIncomeList.length;
     if (Array.isArray(money.tipEntries)) tipsCount = money.tipEntries.length;
     if (Array.isArray(money.shifts)) shiftsCount = money.shifts.length;
+    // Backups created before general expenses existed simply have none.
+    if (Array.isArray(money.expenses)) expensesCount = money.expenses.length;
+    else if (money.expenses !== undefined) {
+      warnings.push('General expenses in this backup were unreadable; they will be restored as an empty list.');
+    }
     if (money.incomeConfig) hasMoneyConfig = true;
   }
 
@@ -430,6 +437,7 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     extraIncomeCount,
     tipsCount,
     shiftsCount,
+    expensesCount,
     hasMoneyConfig,
     hasAppearance,
     appearanceTheme,
@@ -481,7 +489,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
   const defaultMoney = getDefaultMoneyState();
   const money = rawData.money && typeof rawData.money === 'object'
     ? {
-        incomeConfig: rawData.money.incomeConfig || null,
+        incomeConfig: normalizeIncomeConfig(rawData.money.incomeConfig),
         directDebits: Array.isArray(rawData.money.directDebits) ? rawData.money.directDebits : [],
         billCategories: Array.isArray(rawData.money.billCategories) && rawData.money.billCategories.length > 0
           ? rawData.money.billCategories
@@ -492,6 +500,8 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
           : defaultMoney.extraIncomeCategories,
         tipEntries: Array.isArray(rawData.money.tipEntries) ? rawData.money.tipEntries : [],
         shifts: Array.isArray(rawData.money.shifts) ? rawData.money.shifts : [],
+        // Older backups predate general expenses, so they restore as an empty list.
+        expenses: Array.isArray(rawData.money.expenses) ? rawData.money.expenses : [],
         payCycleOverrides: rawData.money.payCycleOverrides && typeof rawData.money.payCycleOverrides === 'object'
           ? rawData.money.payCycleOverrides
           : {},

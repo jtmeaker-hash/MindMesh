@@ -18,6 +18,7 @@ import {
   NotificationOffsetType,
 } from '../../types/finance';
 import { Reminder } from '../../types';
+import { advanceBillForNextOccurrence, isDueByOnOrAfterNextPayment } from '../../utils/finance';
 
 interface DirectDebitModalProps {
   isOpen: boolean;
@@ -69,6 +70,7 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
   const [nextPaymentDate, setNextPaymentDate] = useState(
     debit?.nextPaymentDate || new Date().toISOString().split('T')[0]
   );
+  const [dueByDate, setDueByDate] = useState(debit?.dueByDate || '');
   const [endDate, setEndDate] = useState(debit?.endDate || '');
   const [notes, setNotes] = useState(debit?.notes || '');
   const [active, setActive] = useState(debit ? debit.active : true);
@@ -88,6 +90,27 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
       }
       return [...prev, { id: `notif-${Date.now()}-${type}`, type, enabled: true }];
     });
+  };
+
+  // Explicitly advances a recurring bill to its next occurrence, keeping any
+  // due-by deadline at the same offset. This is a deliberate user action: the
+  // app never advances a bill's dates on its own.
+  const handleAdvanceOccurrence = () => {
+    const advanced = advanceBillForNextOccurrence({
+      id: debit?.id || '',
+      title: title.trim(),
+      amount: parseFloat(amount) || 0,
+      categoryId,
+      frequency,
+      recurrenceConfig: { interval: Number(interval) || 1, customDays: Number(customDays) || 14 },
+      nextPaymentDate,
+      dueByDate: dueByDate || undefined,
+      active,
+      createdAt: debit?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    setNextPaymentDate(advanced.nextPaymentDate);
+    setDueByDate(advanced.dueByDate || '');
   };
 
   const handleSave = (e: React.FormEvent) => {
@@ -111,6 +134,11 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
       return;
     }
 
+    if (dueByDate && !isDueByOnOrAfterNextPayment(nextPaymentDate, dueByDate)) {
+      setError('Payment due by must fall on or after the next payment date');
+      return;
+    }
+
     const payload: DirectDebit = {
       id: debit?.id || `debit-${Date.now()}`,
       title: trimmedTitle,
@@ -122,6 +150,7 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
         customDays: Number(customDays) || 14,
       },
       nextPaymentDate,
+      dueByDate: dueByDate || undefined,
       endDate: endDate.trim() || undefined,
       notes: notes.trim() || undefined,
       active,
@@ -134,6 +163,8 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
     onSave(payload);
     onClose();
   };
+
+  const dueByInvalid = Boolean(dueByDate) && !isDueByOnOrAfterNextPayment(nextPaymentDate, dueByDate);
 
   return (
     <div
@@ -385,6 +416,7 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
               </label>
               <input
                 type="date"
+                aria-label="Next payment date"
                 value={nextPaymentDate}
                 onChange={(e) => setNextPaymentDate(e.target.value)}
                 style={{
@@ -399,7 +431,73 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
                   boxSizing: 'border-box',
                 }}
               />
+              {debit && (
+                <button
+                  type="button"
+                  onClick={handleAdvanceOccurrence}
+                  title="Move next payment and the due-by deadline to the next occurrence"
+                  style={{
+                    marginTop: 8,
+                    width: '100%',
+                    padding: '7px 10px',
+                    borderRadius: 9,
+                    border: '1px solid rgba(99, 102, 241, 0.35)',
+                    background: 'rgba(99, 102, 241, 0.14)',
+                    color: '#a5b4fc',
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Advance to next occurrence
+                </button>
+              )}
             </div>
+          </div>
+
+          {/* Payment Due By (optional final deadline, separate from the planned payment) */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#94a3b8' }}>
+                <Calendar size={13} />
+                <span>Payment due by (Optional)</span>
+              </label>
+              {dueByDate && (
+                <button
+                  type="button"
+                  onClick={() => setDueByDate('')}
+                  style={{ background: 'transparent', border: 'none', color: '#f87171', fontSize: 11.5, fontWeight: 600, cursor: 'pointer', padding: 0 }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <input
+              type="date"
+              aria-label="Payment due by"
+              min={nextPaymentDate || undefined}
+              value={dueByDate}
+              onChange={(e) => setDueByDate(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: dueByInvalid ? '1px solid rgba(239, 68, 68, 0.6)' : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 10,
+                padding: '9px 12px',
+                color: '#fff',
+                fontSize: 13,
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+            <p style={{ fontSize: 11, color: '#64748b', margin: '6px 0 0', lineHeight: 1.45 }}>
+              The final deadline this payment must be completed by, kept separate from the planned next payment date. Leave blank when there is no hard deadline.
+            </p>
+            {dueByInvalid && (
+              <p role="alert" style={{ fontSize: 11.5, color: '#fca5a5', margin: '5px 0 0' }}>
+                Payment due by must fall on or after the next payment date.
+              </p>
+            )}
           </div>
 
           {/* Custom Frequency Sub-fields */}

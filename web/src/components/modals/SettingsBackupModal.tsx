@@ -796,6 +796,13 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
                   </div>
 
                   <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155' }}>
+                    <span style={{ color: '#94a3b8', display: 'block' }}>Expenses</span>
+                    <strong style={{ fontSize: 16, color: '#f8fafc' }}>
+                      {restoreSummary.expensesCount ?? 0}
+                    </strong>
+                  </div>
+
+                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155' }}>
                     <span style={{ color: '#94a3b8', display: 'block' }}>Extra Income & Shifts</span>
                     <strong style={{ fontSize: 16, color: '#f8fafc' }}>
                       {restoreSummary.extraIncomeCount + restoreSummary.shiftsCount}

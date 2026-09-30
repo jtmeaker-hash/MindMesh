@@ -195,6 +195,7 @@ describe('MindMesh Smart Engine Stage 05 dashboard, history and contacts', () =>
       extraIncomeCategories: [],
       tipEntries: [],
       shifts: [],
+      expenses: [],
       payCycleOverrides: {},
     };
     const withMoney = analyzeDashboard(allReminders, categories, moneyState, referenceDateStr);
