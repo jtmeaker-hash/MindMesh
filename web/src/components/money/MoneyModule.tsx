@@ -15,6 +15,7 @@ import { Reminder, Category } from '../../types';
 import {
   formatCurrency,
   formatDateAU,
+  toDateString,
   getCurrentPayCycleSummary,
   getDirectDebitsOverview,
   isBillOverdueOrDueSoon,
@@ -110,7 +111,9 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
   const sortedExpenses = sortExpensesNewestFirst(expenses);
   const recentExpenses = sortedExpenses.slice(0, 4);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Use the same local-date basis as calculateExpenseSummary so the "This Month"
+  // filter and the "Expenses This Month" total never disagree.
+  const todayStr = toDateString(new Date());
   const monthPrefix = todayStr.substring(0, 7);
   const visibleExpenses = sortedExpenses.filter((expense) => {
     if (expenseCategoryFilter !== 'all' && expense.categoryId !== expenseCategoryFilter) return false;
@@ -906,7 +909,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                               </span>
                               {bill.dueByDate && (
                                 <span style={{ fontSize: 11, color: '#f59e0b', display: 'block', marginTop: 1 }}>
-                                  Must be paid by {formatDateAU(bill.dueByDate)}
+                                  Payment due by {formatDateAU(bill.dueByDate)}
                                 </span>
                               )}
                             </div>
@@ -1192,7 +1195,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
 
                       {bill.dueByDate && (
                         <div style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600, marginTop: -4 }}>
-                          Due by {formatDateAU(bill.dueByDate)}
+                          Payment due by {formatDateAU(bill.dueByDate)}
                         </div>
                       )}
 
