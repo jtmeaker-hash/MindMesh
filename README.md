@@ -668,6 +668,29 @@ This section is maintained automatically. When a pull request is merged into `ma
 
 <!-- mindmesh-release-notes:start -->
 
+<!-- mindmesh-pr-3 -->
+### PR #3 — (Feat) inputs for money management
+
+#### Summary of Changes
+
+- Updated the web application UI, services or types, web tests and the Android host application.
+- (Feat) inputs for money management\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+
+#### Applied Fixes
+
+- No fixes were recorded for this pull request.
+
+#### Build / Test Failures
+
+- No build, test, regression, lint, signing or packaging failures were recorded.
+
+#### README Description
+
+(Feat) inputs for money management. It updates the web application UI, services or types, web tests and the Android host application. The DEBUG build, the required test suite and the regression checks are validated by this workflow.
+
+_Merged 2026-10-01 · [PR #3](https://github.com/jtmeaker-hash/MindMesh/pull/3) · @app/freebuff-web_
+
+
 <!-- mindmesh-pr-2 -->
 ### PR #2 — PR
 
