@@ -48,8 +48,8 @@ export const RateRuleEditor: React.FC<RateRuleEditorProps> = ({ rules, baseRate,
         enabled: true,
         days: [],
         allDay: true,
-        startTime: '19:00',
-        endTime: '23:59',
+        // A new rule starts all-day, so no example time is pre-filled. The user
+        // picks the window themselves after turning off "All day".
         mode: 'fixed',
         rate: Number.isFinite(baseRate) ? baseRate : 0,
         priority: rules.length,

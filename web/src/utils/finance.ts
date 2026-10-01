@@ -611,15 +611,6 @@ export function sortExpensesNewestFirst(expenses: Expense[]): Expense[] {
   });
 }
 
-/** Expenses whose date falls within [startDateStr, endDateStr] (inclusive). */
-export function getExpensesInDateRange(
-  expenses: Expense[],
-  startDateStr: string,
-  endDateStr: string
-): Expense[] {
-  return expenses.filter((expense) => expense.date >= startDateStr && expense.date <= endDateStr);
-}
-
 export interface ExpenseSummary {
   /** Expenses for the reference day. */
   todayTotal: number;
