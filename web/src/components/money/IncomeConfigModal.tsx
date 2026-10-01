@@ -9,7 +9,10 @@ import {
   EmploymentType,
   PayFrequency,
   HourlyRateConfig,
+  CasualPayRateRule,
 } from '../../types/finance';
+import { RateRuleEditor } from './RateRuleEditor';
+import { normalizeRateRules } from '../../utils/payRates';
 
 interface IncomeConfigModalProps {
   isOpen: boolean;
@@ -60,6 +63,9 @@ export const IncomeConfigModal: React.FC<IncomeConfigModalProps> = ({
   const [overtimeRate, setOvertimeRate] = useState(
     config?.hourlyRates?.overtimeRate ? String(config.hourlyRates.overtimeRate) : '48'
   );
+  const [rateRules, setRateRules] = useState<CasualPayRateRule[]>(() =>
+    normalizeRateRules(config?.hourlyRates?.rateRules)
+  );
 
   const [error, setError] = useState('');
 
@@ -94,6 +100,9 @@ export const IncomeConfigModal: React.FC<IncomeConfigModalProps> = ({
       eveningRate: eveningRate ? parseFloat(eveningRate) : undefined,
       nightRate: nightRate ? parseFloat(nightRate) : undefined,
       overtimeRate: overtimeRate ? parseFloat(overtimeRate) : undefined,
+      // List order is the priority order: first in the list wins. Storing an
+      // explicit descending priority keeps overlap resolution deterministic.
+      rateRules: rateRules.map((rule, index) => ({ ...rule, priority: rateRules.length - index })),
     };
 
     const payload: IncomeConfig = {
@@ -442,6 +451,7 @@ export const IncomeConfigModal: React.FC<IncomeConfigModalProps> = ({
             </div>
 
             {hourlyPayModeEnabled && (
+              <>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, marginTop: 4 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
@@ -596,7 +606,17 @@ export const IncomeConfigModal: React.FC<IncomeConfigModalProps> = ({
                     }}
                   />
                 </div>
+
               </div>
+
+              <div style={{ marginTop: 4 }}>
+                <RateRuleEditor
+                  rules={rateRules}
+                  baseRate={parseFloat(baseRate) || 0}
+                  onChange={setRateRules}
+                />
+              </div>
+              </>
             )}
           </div>
 

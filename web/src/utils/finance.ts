@@ -1,6 +1,7 @@
 import {
   BillFrequency,
   DirectDebit,
+  Expense,
   IncomeConfig,
   Shift,
   ExtraIncome,
@@ -122,6 +123,63 @@ export function getNextBillOccurrence(
   }
 
   return toDateString(date);
+}
+
+/**
+ * Returns the number of days between the planned next payment and the due-by
+ * deadline. Positive means the deadline falls after the planned payment, zero
+ * means they fall on the same day, negative means the deadline is too early.
+ * Returns null when either date is unavailable.
+ */
+export function getDueByOffsetDays(nextPaymentDate: string, dueByDate?: string): number | null {
+  if (!nextPaymentDate || !dueByDate) return null;
+  return daysBetween(nextPaymentDate, dueByDate);
+}
+
+/**
+ * The normal relationship is next payment <= payment due by. Equal dates are
+ * allowed; only a deadline that falls before the planned payment is invalid.
+ * Bills without a deadline are always valid.
+ */
+export function isDueByOnOrAfterNextPayment(nextPaymentDate: string, dueByDate?: string): boolean {
+  const offset = getDueByOffsetDays(nextPaymentDate, dueByDate);
+  return offset === null || offset >= 0;
+}
+
+/**
+ * Advances an optional due-by date so it keeps the same offset from the planned
+ * payment once that payment moves to a new occurrence. Returns undefined when no
+ * deadline is set, so deadline-free / one-off bills are left untouched.
+ */
+export function advanceDueByForNextPayment(
+  previousNextPaymentDate: string,
+  newNextPaymentDate: string,
+  dueByDate?: string
+): string | undefined {
+  const offset = getDueByOffsetDays(previousNextPaymentDate, dueByDate);
+  if (offset === null) return undefined;
+  const base = parseLocalDate(newNextPaymentDate);
+  base.setDate(base.getDate() + offset);
+  return toDateString(base);
+}
+
+/**
+ * Advances a recurring bill to its next occurrence using the existing frequency
+ * maths and keeps the deadline in step. Bills without a deadline are unchanged.
+ */
+export function advanceBillForNextOccurrence(
+  bill: DirectDebit
+): Pick<DirectDebit, 'nextPaymentDate' | 'dueByDate'> {
+  const nextPaymentDate = getNextBillOccurrence(
+    bill.nextPaymentDate,
+    bill.frequency,
+    bill.recurrenceConfig?.interval || 1,
+    bill.recurrenceConfig?.customDays
+  );
+  return {
+    nextPaymentDate,
+    dueByDate: advanceDueByForNextPayment(bill.nextPaymentDate, nextPaymentDate, bill.dueByDate),
+  };
 }
 
 /**
@@ -542,6 +600,89 @@ export function computeTipStats(tips: TipEntry[]) {
 }
 
 /**
+ * Default newest-first ordering for expenses: date descending, then the most
+ * recently created record first when several share a date.
+ */
+export function sortExpensesNewestFirst(expenses: Expense[]): Expense[] {
+  return [...expenses].sort((a, b) => {
+    const byDate = b.date.localeCompare(a.date);
+    if (byDate !== 0) return byDate;
+    return (b.createdAt || '').localeCompare(a.createdAt || '');
+  });
+}
+
+/** Expenses whose date falls within [startDateStr, endDateStr] (inclusive). */
+export function getExpensesInDateRange(
+  expenses: Expense[],
+  startDateStr: string,
+  endDateStr: string
+): Expense[] {
+  return expenses.filter((expense) => expense.date >= startDateStr && expense.date <= endDateStr);
+}
+
+export interface ExpenseSummary {
+  /** Expenses for the reference day. */
+  todayTotal: number;
+  /** Expenses for the reference calendar month. */
+  monthTotal: number;
+  /** Expenses inside the supplied pay cycle window (0 when no window is given). */
+  cycleTotal: number;
+  /** Expenses across every stored record. */
+  total: number;
+  count: number;
+  averageAmount: number;
+  /** Per-category totals, largest first, for the covered records. */
+  byCategory: { categoryId: string; total: number; count: number }[];
+}
+
+/**
+ * Aggregates general expenses. Amounts use the shared decimal-safe helpers so the
+ * running totals never accumulate floating-point error.
+ */
+export function calculateExpenseSummary(
+  expenses: Expense[],
+  referenceDateStr: string = toDateString(new Date()),
+  cycleStartDate?: string,
+  cycleEndDate?: string
+): ExpenseSummary {
+  const monthPrefix = referenceDateStr.substring(0, 7); // YYYY-MM
+  const categoryTotals = new Map<string, { total: number; count: number }>();
+
+  let todayTotal = 0;
+  let monthTotal = 0;
+  let cycleTotal = 0;
+  let total = 0;
+
+  for (const expense of expenses) {
+    const amount = Number(expense.amount) || 0;
+    total = addDecimals(total, amount);
+    if (expense.date === referenceDateStr) todayTotal = addDecimals(todayTotal, amount);
+    if (expense.date.startsWith(monthPrefix)) monthTotal = addDecimals(monthTotal, amount);
+    if (cycleStartDate && cycleEndDate && expense.date >= cycleStartDate && expense.date <= cycleEndDate) {
+      cycleTotal = addDecimals(cycleTotal, amount);
+    }
+
+    const key = expense.categoryId || 'uncategorized';
+    const existing = categoryTotals.get(key) || { total: 0, count: 0 };
+    categoryTotals.set(key, { total: addDecimals(existing.total, amount), count: existing.count + 1 });
+  }
+
+  const byCategory = Array.from(categoryTotals.entries())
+    .map(([categoryId, value]) => ({ categoryId, ...value }))
+    .sort((a, b) => b.total - a.total);
+
+  return {
+    todayTotal,
+    monthTotal,
+    cycleTotal,
+    total,
+    count: expenses.length,
+    averageAmount: expenses.length > 0 ? Math.round((total / expenses.length) * 100) / 100 : 0,
+    byCategory,
+  };
+}
+
+/**
  * Detailed current pay cycle summary for MoneyModule overview and cards.
  */
 export function getCurrentPayCycleSummary(moneyState: import('../types/finance').MoneyState) {
@@ -574,6 +715,24 @@ export function getCurrentPayCycleSummary(moneyState: import('../types/finance')
 
   const tipsTotalThisCycle = tipsInCycle.reduce((sum, t) => addDecimals(sum, Number(t.amount) || 0), 0);
 
+  // General (variable) expenses already spent in this pay window. This is kept
+  // strictly separate from scheduled bills so "remaining after bills" keeps its
+  // existing meaning; an additional figure is offered alongside it.
+  const expensesInCycle = (moneyState.expenses || []).filter((e) => {
+    if (!prevPayDate || !nextPayDate) return true;
+    return e.date >= prevPayDate && e.date <= nextPayDate;
+  });
+
+  const expensesTotalThisCycle = expensesInCycle.reduce(
+    (sum, e) => addDecimals(sum, Number(e.amount) || 0),
+    0
+  );
+
+  const remainingAfterBillsAndExpenses = subtractDecimals(
+    summary.remainingAfterBills,
+    expensesTotalThisCycle
+  );
+
   // Bills Due as flat DirectDebit array for UI convenience
   const billsDueInCycle: DirectDebit[] = summary.billsDue.map((item) => item.bill);
 
@@ -597,6 +756,9 @@ export function getCurrentPayCycleSummary(moneyState: import('../types/finance')
     tipsInCycle,
     billsDueInCycle,
     estimatedRemainingSafe,
+    expensesInCycle,
+    expensesTotalThisCycle,
+    remainingAfterBillsAndExpenses,
   };
 }
 

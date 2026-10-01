@@ -75,6 +75,8 @@ export interface RestoreSummary {
   extraIncomeCount: number;
   tipsCount: number;
   shiftsCount: number;
+  /** General (variable) expenses included in the backup (optional for older payloads). */
+  expensesCount?: number;
   hasMoneyConfig: boolean;
   hasAppearance: boolean;
   appearanceTheme?: string;

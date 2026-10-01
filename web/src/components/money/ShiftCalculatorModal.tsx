@@ -16,6 +16,7 @@ import {
   resolveHourlyRate,
   formatCurrency,
 } from '../../utils/finance';
+import { calculateShiftPayWithRules } from '../../utils/payRates';
 
 interface ShiftCalculatorModalProps {
   isOpen: boolean;
@@ -66,20 +67,37 @@ export const ShiftCalculatorModal: React.FC<ShiftCalculatorModalProps> = ({
 
   if (!isOpen) return null;
 
-  const effectiveHourlyRate = resolveHourlyRate(
-    incomeConfig,
-    rateType,
-    customRate ? parseFloat(customRate) : undefined
-  );
+  const customRateValue = customRate ? parseFloat(customRate) : undefined;
 
-  const { paidHours, estimatedPay } = calculateShiftEstimate({
+  // When the casual config defines rate rules they take over day/time matching.
+  // A flat custom rate is the explicit escape hatch and always wins.
+  const ruledResult =
+    rateType === 'custom'
+      ? null
+      : calculateShiftPayWithRules(incomeConfig?.hourlyRates, {
+          date,
+          startTime,
+          endTime,
+          breakMinutes,
+        });
+  const usesRateRules = ruledResult !== null;
+
+  const legacyEstimate = calculateShiftEstimate({
     startTime,
     endTime,
     breakMinutes,
     rateType,
-    customRate: customRate ? parseFloat(customRate) : undefined,
-    hourlyRate: effectiveHourlyRate,
+    customRate: customRateValue,
+    hourlyRate: resolveHourlyRate(incomeConfig, rateType, customRateValue),
   });
+
+  const paidHours = ruledResult ? ruledResult.paidHours : legacyEstimate.paidHours;
+  const estimatedPay = ruledResult ? ruledResult.estimatedPay : legacyEstimate.estimatedPay;
+  const effectiveHourlyRate = ruledResult
+    ? paidHours > 0
+      ? Math.round((estimatedPay / paidHours) * 100) / 100
+      : 0
+    : resolveHourlyRate(incomeConfig, rateType, customRateValue);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,10 +120,12 @@ export const ShiftCalculatorModal: React.FC<ShiftCalculatorModalProps> = ({
       endTime,
       breakMinutes: Number(breakMinutes) || 0,
       rateType,
-      customRate: customRate ? parseFloat(customRate) : undefined,
+      customRate: customRateValue,
       hourlyRate: effectiveHourlyRate,
       paidHours,
       estimatedPay,
+      rateSegments: ruledResult?.segments.length ? ruledResult.segments : undefined,
+      appliedRateRuleIds: ruledResult?.appliedRuleIds.length ? ruledResult.appliedRuleIds : undefined,
       notes: notes.trim() || undefined,
       createdAt: shift?.createdAt || new Date().toISOString(),
     };
@@ -223,6 +243,36 @@ export const ShiftCalculatorModal: React.FC<ShiftCalculatorModalProps> = ({
           </div>
         </div>
 
+        {usesRateRules && ruledResult && ruledResult.segments.length > 0 && (
+          <div
+            style={{
+              padding: '12px 22px',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              background: 'rgba(2, 6, 23, 0.4)',
+            }}
+          >
+            <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#93c5fd', letterSpacing: '0.05em' }}>
+              Rate breakdown
+            </span>
+            {ruledResult.segments.map((segment, index) => (
+              <div
+                key={`${segment.ruleId ?? 'base'}-${index}`}
+                style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: 12, color: '#cbd5e1' }}
+              >
+                <span>
+                  {segment.isBase ? 'Base' : segment.ruleLabel || 'Rule'} · {segment.startTime}–{segment.endTime}
+                </span>
+                <span>
+                  {segment.hours}h @ {formatCurrency(segment.rate)}/hr = {formatCurrency(segment.pay)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Form Body */}
         <form
           onSubmit={handleSave}
@@ -300,6 +350,11 @@ export const ShiftCalculatorModal: React.FC<ShiftCalculatorModalProps> = ({
                   </option>
                 ))}
               </select>
+              {usesRateRules && rateType !== 'custom' && (
+                <span style={{ fontSize: 10.5, color: '#6ee7b7', display: 'block', marginTop: 4 }}>
+                  Configured rate rules apply automatically for this shift.
+                </span>
+              )}
             </div>
           </div>
 
