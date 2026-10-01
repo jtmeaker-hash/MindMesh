@@ -1,8 +1,11 @@
 import {
   BillFrequency,
   DirectDebit,
+  DirectDebitKind,
   Expense,
+  ExpenseRepeat,
   IncomeConfig,
+  MoneyState,
   Shift,
   ExtraIncome,
   TipEntry,
@@ -80,13 +83,33 @@ export function daysBetween(fromStr: string, toStr: string): number {
 }
 
 /**
+ * Adds a number of calendar months, clamping the day to the target month's last
+ * day so months with different lengths are handled correctly (e.g. 31 Jan +
+ * 1 month = 28/29 Feb, never a roll into March). When an `anchorDay` is known
+ * the day keeps its intended value on longer months instead of drifting.
+ */
+export function addMonthsClamped(dateStr: string, months: number, anchorDay?: number): string {
+  const date = parseLocalDate(dateStr);
+  const desiredDay = Number.isInteger(anchorDay) && (anchorDay as number) >= 1 ? (anchorDay as number) : date.getDate();
+  const target = new Date(date.getFullYear(), date.getMonth() + months, 1, 12, 0, 0);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0, 12, 0, 0).getDate();
+  target.setDate(Math.min(desiredDay, lastDay));
+  return toDateString(target);
+}
+
+/**
  * Advance a date string by a bill recurrence frequency.
+ *
+ * Monthly, quarterly and annual steps clamp to the target month's last day and
+ * reuse `anchorDayOfMonth` when known, so a payment set on the 31st stays on
+ * the 31st in longer months instead of drifting a few days forward.
  */
 export function getNextBillOccurrence(
   currentDateStr: string,
   frequency: BillFrequency,
   interval = 1,
-  customDays?: number
+  customDays?: number,
+  anchorDayOfMonth?: number
 ): string {
   const date = parseLocalDate(currentDateStr);
 
@@ -98,14 +121,11 @@ export function getNextBillOccurrence(
       date.setDate(date.getDate() + 14 * Math.max(1, interval));
       break;
     case 'monthly':
-      date.setMonth(date.getMonth() + Math.max(1, interval));
-      break;
+      return addMonthsClamped(currentDateStr, Math.max(1, interval), anchorDayOfMonth);
     case 'quarterly':
-      date.setMonth(date.getMonth() + 3 * Math.max(1, interval));
-      break;
+      return addMonthsClamped(currentDateStr, 3 * Math.max(1, interval), anchorDayOfMonth);
     case 'annually':
-      date.setFullYear(date.getFullYear() + Math.max(1, interval));
-      break;
+      return addMonthsClamped(currentDateStr, 12 * Math.max(1, interval), anchorDayOfMonth);
     case 'every_x_days':
       date.setDate(date.getDate() + Math.max(1, customDays || interval));
       break;
@@ -113,13 +133,12 @@ export function getNextBillOccurrence(
       date.setDate(date.getDate() + 7 * Math.max(1, interval));
       break;
     case 'every_x_months':
-      date.setMonth(date.getMonth() + Math.max(1, interval));
-      break;
+      return addMonthsClamped(currentDateStr, Math.max(1, interval), anchorDayOfMonth);
     case 'custom':
       date.setDate(date.getDate() + Math.max(1, customDays || interval || 7));
       break;
     default:
-      date.setMonth(date.getMonth() + 1);
+      return addMonthsClamped(currentDateStr, 1, anchorDayOfMonth);
   }
 
   return toDateString(date);
@@ -166,19 +185,28 @@ export function advanceDueByForNextPayment(
 /**
  * Advances a recurring bill to its next occurrence using the existing frequency
  * maths and keeps the deadline in step. Bills without a deadline are unchanged.
+ * Monthly-style frequencies record their intended day of month so later steps
+ * stay on the same day across short/long months.
  */
 export function advanceBillForNextOccurrence(
   bill: DirectDebit
-): Pick<DirectDebit, 'nextPaymentDate' | 'dueByDate'> {
+): Pick<DirectDebit, 'nextPaymentDate' | 'dueByDate' | 'recurrenceConfig'> {
+  const anchorDay = bill.recurrenceConfig?.dayOfMonth ?? parseLocalDate(bill.nextPaymentDate).getDate();
   const nextPaymentDate = getNextBillOccurrence(
     bill.nextPaymentDate,
     bill.frequency,
     bill.recurrenceConfig?.interval || 1,
-    bill.recurrenceConfig?.customDays
+    bill.recurrenceConfig?.customDays,
+    anchorDay
   );
+  const advancedDueBy = advanceDueByForNextPayment(bill.nextPaymentDate, nextPaymentDate, bill.dueByDate);
   return {
     nextPaymentDate,
-    dueByDate: advanceDueByForNextPayment(bill.nextPaymentDate, nextPaymentDate, bill.dueByDate),
+    dueByDate: advancedDueBy,
+    recurrenceConfig: {
+      ...(bill.recurrenceConfig || {}),
+      dayOfMonth: anchorDay,
+    },
   };
 }
 
@@ -207,7 +235,8 @@ export function getBillOccurrencesInDateRange(
       curr,
       bill.frequency,
       bill.recurrenceConfig?.interval || 1,
-      bill.recurrenceConfig?.customDays
+      bill.recurrenceConfig?.customDays,
+      bill.recurrenceConfig?.dayOfMonth
     );
     iterations++;
   }
@@ -228,7 +257,8 @@ export function getBillOccurrencesInDateRange(
       curr,
       bill.frequency,
       bill.recurrenceConfig?.interval || 1,
-      bill.recurrenceConfig?.customDays
+      bill.recurrenceConfig?.customDays,
+      bill.recurrenceConfig?.dayOfMonth
     );
     iterations++;
   }
@@ -494,6 +524,280 @@ export function isBillOverdueOrDueSoon(
   return { isOverdue, isDueSoon, daysUntilDue };
 }
 
+/* ------------------------------------------------------------------ */
+/* Direct Debit / Bill classification and lifecycle                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Resolves whether an entry is an automatic withdrawal or a user-paid bill.
+ * Records created before `kind` existed are inferred: a due-by deadline means
+ * the user must pay (a bill), otherwise it is treated as an automatic direct
+ * debit that must never become overdue.
+ */
+export function resolveDirectDebitKind(
+  debit: Pick<DirectDebit, 'kind' | 'dueByDate'>
+): DirectDebitKind {
+  if (debit.kind === 'bill' || debit.kind === 'direct_debit') return debit.kind;
+  return debit.dueByDate ? 'bill' : 'direct_debit';
+}
+
+export type DirectDebitLifecycleState = 'upcoming' | 'due_today' | 'overdue' | 'next_scheduled';
+
+export interface DirectDebitStatus {
+  kind: DirectDebitKind;
+  state: DirectDebitLifecycleState;
+  /** Only ever true for a user-paid bill whose deadline has passed. */
+  isOverdue: boolean;
+  isDueToday: boolean;
+  isDueSoon: boolean;
+  daysUntilPayment: number;
+  /** Days until the user-facing deadline (due-by for bills, else the payment). */
+  daysUntilDue: number;
+  /** Short badge describing the type / next step. */
+  label: string;
+}
+
+/**
+ * Computes the lifecycle state for a direct debit or bill.
+ *
+ * Automatic direct debits flow Upcoming -> Due Today -> (auto-advanced) Upcoming
+ * and can never be overdue. Only bills the user is responsible for paying become
+ * overdue, and only once their due-by deadline (or payment date) has passed.
+ */
+export function getDirectDebitStatus(
+  debit: Pick<DirectDebit, 'kind' | 'nextPaymentDate' | 'dueByDate'>,
+  referenceDateStr: string = toDateString(new Date())
+): DirectDebitStatus {
+  const kind = resolveDirectDebitKind(debit);
+  const daysUntilPayment = daysBetween(referenceDateStr, debit.nextPaymentDate);
+
+  if (kind === 'direct_debit') {
+    const isDueToday = daysUntilPayment === 0;
+    return {
+      kind,
+      state: isDueToday ? 'due_today' : 'upcoming',
+      isOverdue: false,
+      isDueToday,
+      isDueSoon: false,
+      daysUntilPayment,
+      daysUntilDue: daysUntilPayment,
+      label: isDueToday ? 'Withdrawn today' : 'Automatically withdrawn',
+    };
+  }
+
+  const deadline = debit.dueByDate || debit.nextPaymentDate;
+  const daysUntilDue = daysBetween(referenceDateStr, deadline);
+  const isOverdue = daysUntilDue < 0;
+  const isDueToday = daysUntilDue === 0;
+  const isDueSoon = daysUntilDue > 0 && daysUntilDue <= 3;
+  return {
+    kind,
+    state: isOverdue ? 'overdue' : isDueToday ? 'due_today' : 'upcoming',
+    isOverdue,
+    isDueToday,
+    isDueSoon,
+    daysUntilPayment,
+    daysUntilDue,
+    label: 'User must pay',
+  };
+}
+
+/**
+ * Rolls automatic direct debits forward to their next scheduled occurrence once
+ * their payment date has passed. Their scheduled day and monthly anchor are
+ * preserved. Bills are intentionally left untouched so an overdue deadline is
+ * never silently cleared; recurring expenses derive their occurrences without
+ * mutating stored data.
+ *
+ * Returns the same array reference when nothing changed so callers can cheaply
+ * avoid redundant state writes.
+ */
+export function reconcileDirectDebits(
+  debits: DirectDebit[],
+  referenceDateStr: string = toDateString(new Date())
+): DirectDebit[] {
+  let changed = false;
+  const next = debits.map((debit) => {
+    if (!debit.active) return debit;
+    if (resolveDirectDebitKind(debit) !== 'direct_debit') return debit;
+    if (!debit.nextPaymentDate || debit.nextPaymentDate >= referenceDateStr) return debit;
+
+    // Fix the intended day of month from the original schedule so a short month
+    // never drifts the withdrawal onto a different day.
+    const anchorDay =
+      debit.recurrenceConfig?.dayOfMonth ?? parseLocalDate(debit.nextPaymentDate).getDate();
+    const isMonthlyStyle =
+      debit.frequency === 'monthly' ||
+      debit.frequency === 'quarterly' ||
+      debit.frequency === 'every_x_months' ||
+      debit.frequency === 'annually';
+
+    let date = debit.nextPaymentDate;
+    let iterations = 0;
+    while (date < referenceDateStr && iterations < 480) {
+      date = getNextBillOccurrence(
+        date,
+        debit.frequency,
+        debit.recurrenceConfig?.interval || 1,
+        debit.recurrenceConfig?.customDays,
+        anchorDay
+      );
+      iterations++;
+    }
+    changed = true;
+    return {
+      ...debit,
+      kind: 'direct_debit' as const,
+      nextPaymentDate: date,
+      recurrenceConfig: {
+        ...(debit.recurrenceConfig || {}),
+        ...(isMonthlyStyle ? { dayOfMonth: anchorDay } : {}),
+      },
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  return changed ? next : debits;
+}
+
+/* ------------------------------------------------------------------ */
+/* General expense recurrence and cycle contributions                   */
+/* ------------------------------------------------------------------ */
+
+const EXPENSE_REPEAT_VALUES: ExpenseRepeat[] = ['none', 'per_pay_cycle', 'weekly', 'fortnightly', 'monthly', 'custom'];
+
+/** Repeat behaviour for an expense, defaulting legacy records to `none`. */
+export function resolveExpenseRepeat(expense: Pick<Expense, 'repeat'>): ExpenseRepeat {
+  return expense.repeat && EXPENSE_REPEAT_VALUES.includes(expense.repeat) ? expense.repeat : 'none';
+}
+
+/** Maps an expense repeat onto the shared bill-frequency maths. */
+export function expenseRepeatToFrequency(expense: Expense): {
+  frequency: BillFrequency;
+  interval: number;
+  customDays?: number;
+} {
+  const repeat = resolveExpenseRepeat(expense);
+  const interval = Math.max(1, expense.recurrenceConfig?.interval || 1);
+  switch (repeat) {
+    case 'weekly':
+      return interval > 1 ? { frequency: 'every_x_weeks', interval } : { frequency: 'weekly', interval: 1 };
+    case 'fortnightly':
+      return { frequency: 'fortnightly', interval: 1 };
+    case 'monthly':
+      return interval > 1 ? { frequency: 'every_x_months', interval } : { frequency: 'monthly', interval: 1 };
+    case 'custom': {
+      const days = Math.max(1, expense.recurrenceConfig?.customDays || expense.recurrenceConfig?.interval || 7);
+      return { frequency: 'every_x_days', interval: 1, customDays: days };
+    }
+    default:
+      return { frequency: 'monthly', interval: 1 };
+  }
+}
+
+/** Dated occurrences of a repeating expense inside [startDateStr, endDateStr]. */
+export function getExpenseOccurrencesInDateRange(
+  expense: Expense,
+  startDateStr: string,
+  endDateStr: string
+): string[] {
+  if (!expense.date) return [];
+  const repeat = resolveExpenseRepeat(expense);
+  if (repeat === 'none' || repeat === 'per_pay_cycle') {
+    return expense.date >= startDateStr && expense.date <= endDateStr ? [expense.date] : [];
+  }
+
+  const { frequency, interval, customDays } = expenseRepeatToFrequency(expense);
+  const anchorDay = expense.recurrenceConfig?.dayOfMonth ?? parseLocalDate(expense.date).getDate();
+  const results: string[] = [];
+  let curr = expense.date;
+  let iterations = 0;
+
+  while (curr < startDateStr && iterations < 480) {
+    curr = getNextBillOccurrence(curr, frequency, interval, customDays, anchorDay);
+    iterations++;
+  }
+
+  iterations = 0;
+  while (curr <= endDateStr && iterations < 480) {
+    if (curr >= startDateStr) results.push(curr);
+    curr = getNextBillOccurrence(curr, frequency, interval, customDays, anchorDay);
+    iterations++;
+  }
+
+  return results;
+}
+
+export interface ExpenseCycleContribution {
+  expense: Expense;
+  /** Dated occurrences inside the cycle (empty for undated / per-cycle). */
+  occurrences: string[];
+  /** Total expected amount for the cycle. */
+  amount: number;
+  /** True when the amount is a per-cycle / undated expectation, not a dated spend. */
+  undated: boolean;
+}
+
+/**
+ * Contribution of a single expense to a pay cycle.
+ *
+ * - `per_pay_cycle` amounts are allocated once to every cycle and reset forward
+ *   automatically, without a calendar date.
+ * - A repeating expense contributes each of its occurrences inside the cycle.
+ * - A one-off expense with a date contributes on that date only.
+ * - A one-off expense without a date contributes once, to the cycle it was
+ *   created in, so it is an expectation rather than a permanent recurring cost.
+ */
+export function getExpenseCycleContribution(
+  expense: Expense,
+  cycleStartDate: string,
+  cycleEndDate: string
+): ExpenseCycleContribution {
+  const amount = Number(expense.amount) || 0;
+  const repeat = resolveExpenseRepeat(expense);
+
+  if (repeat === 'per_pay_cycle') {
+    return { expense, occurrences: [], amount, undated: true };
+  }
+
+  if (!expense.date) {
+    const createdDate = (expense.createdAt || '').slice(0, 10);
+    const inCycle = !createdDate || (createdDate >= cycleStartDate && createdDate <= cycleEndDate);
+    return { expense, occurrences: [], amount: inCycle ? amount : 0, undated: true };
+  }
+
+  const occurrences = getExpenseOccurrencesInDateRange(expense, cycleStartDate, cycleEndDate);
+  return {
+    expense,
+    occurrences,
+    amount: occurrences.length > 0 ? Math.round(occurrences.length * amount * 100) / 100 : 0,
+    undated: false,
+  };
+}
+
+/** Normalizes a stored expense so new fields always have safe defaults. */
+export function normalizeExpense(expense: Expense): Expense {
+  const date = typeof expense.date === 'string' && expense.date.length > 0 ? expense.date : undefined;
+  const repeat = resolveExpenseRepeat(expense);
+  const estimated = typeof expense.estimated === 'boolean' ? expense.estimated : repeat !== 'none' || !date;
+  return { ...expense, date, repeat, estimated };
+}
+
+/** Normalizes a stored direct debit, inferring `kind` when it is missing. */
+export function normalizeDirectDebit(debit: DirectDebit): DirectDebit {
+  return { ...debit, kind: resolveDirectDebitKind(debit) };
+}
+
+/** Normalizes the money slice after loading or restoring a payload. */
+export function normalizeMoneyState(state: MoneyState): MoneyState {
+  return {
+    ...state,
+    directDebits: Array.isArray(state.directDebits)
+      ? state.directDebits.map(normalizeDirectDebit)
+      : [],
+    expenses: Array.isArray(state.expenses) ? state.expenses.map(normalizeExpense) : [],
+  };
+}
+
 /**
  * Computes overview totals for direct debits (monthly burn rate, active/paused counts).
  */
@@ -605,7 +909,9 @@ export function computeTipStats(tips: TipEntry[]) {
  */
 export function sortExpensesNewestFirst(expenses: Expense[]): Expense[] {
   return [...expenses].sort((a, b) => {
-    const byDate = b.date.localeCompare(a.date);
+    // Dated expenses stay newest-first; undated expectations sort after them,
+    // most recently created first.
+    const byDate = (b.date || '').localeCompare(a.date || '');
     if (byDate !== 0) return byDate;
     return (b.createdAt || '').localeCompare(a.createdAt || '');
   });
@@ -647,10 +953,17 @@ export function calculateExpenseSummary(
   for (const expense of expenses) {
     const amount = Number(expense.amount) || 0;
     total = addDecimals(total, amount);
-    if (expense.date === referenceDateStr) todayTotal = addDecimals(todayTotal, amount);
-    if (expense.date.startsWith(monthPrefix)) monthTotal = addDecimals(monthTotal, amount);
-    if (cycleStartDate && cycleEndDate && expense.date >= cycleStartDate && expense.date <= cycleEndDate) {
-      cycleTotal = addDecimals(cycleTotal, amount);
+    if (expense.date) {
+      if (expense.date === referenceDateStr) todayTotal = addDecimals(todayTotal, amount);
+      if (expense.date.startsWith(monthPrefix)) monthTotal = addDecimals(monthTotal, amount);
+    }
+    // Cycle totals include per-pay-cycle and repeating expectations so available
+    // spending money and forecasts stay accurate.
+    if (cycleStartDate && cycleEndDate) {
+      cycleTotal = addDecimals(
+        cycleTotal,
+        getExpenseCycleContribution(expense, cycleStartDate, cycleEndDate).amount
+      );
     }
 
     const key = expense.categoryId || 'uncategorized';
@@ -706,18 +1019,26 @@ export function getCurrentPayCycleSummary(moneyState: import('../types/finance')
 
   const tipsTotalThisCycle = tipsInCycle.reduce((sum, t) => addDecimals(sum, Number(t.amount) || 0), 0);
 
-  // General (variable) expenses already spent in this pay window. This is kept
-  // strictly separate from scheduled bills so "remaining after bills" keeps its
-  // existing meaning; an additional figure is offered alongside it.
-  const expensesInCycle = (moneyState.expenses || []).filter((e) => {
-    if (!prevPayDate || !nextPayDate) return true;
-    return e.date >= prevPayDate && e.date <= nextPayDate;
-  });
+  // General (variable) expenses for this pay window. This is kept strictly
+  // separate from scheduled bills so "remaining after bills" keeps its existing
+  // meaning; an additional figure is offered alongside it. Per-pay-cycle and
+  // repeating expectations are counted here so they contribute to available
+  // spending money and forecasts.
+  const expenseContributions = (moneyState.expenses || [])
+    .map((e) => (prevPayDate && nextPayDate ? getExpenseCycleContribution(e, prevPayDate, nextPayDate) : { expense: e, occurrences: [], amount: Number(e.amount) || 0, undated: !e.date }))
+    .filter((contribution) => contribution.amount > 0);
 
-  const expensesTotalThisCycle = expensesInCycle.reduce(
-    (sum, e) => addDecimals(sum, Number(e.amount) || 0),
+  const expensesInCycle: Expense[] = expenseContributions.map((contribution) => contribution.expense);
+
+  const expensesTotalThisCycle = expenseContributions.reduce(
+    (sum, contribution) => addDecimals(sum, contribution.amount),
     0
   );
+
+  // Expected (undated / per-cycle) portion of the above, for transparent UI.
+  const expectedExpensesTotalThisCycle = expenseContributions
+    .filter((contribution) => contribution.undated)
+    .reduce((sum, contribution) => addDecimals(sum, contribution.amount), 0);
 
   const remainingAfterBillsAndExpenses = subtractDecimals(
     summary.remainingAfterBills,
@@ -749,6 +1070,7 @@ export function getCurrentPayCycleSummary(moneyState: import('../types/finance')
     estimatedRemainingSafe,
     expensesInCycle,
     expensesTotalThisCycle,
+    expectedExpensesTotalThisCycle,
     remainingAfterBillsAndExpenses,
   };
 }

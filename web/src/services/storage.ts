@@ -21,8 +21,11 @@ import { DEFAULT_SMART_ENGINE_SETTINGS, normalizeSmartEngineSettings, SmartEngin
 import { normalizeNodePositions } from './nodePositions';
 import { normalizeReminders } from './reminders';
 import { normalizeIncomeConfig } from '../utils/payRates';
+import { normalizeMoneyState } from '../utils/finance';
 
-export const CURRENT_STORAGE_VERSION = 10;
+// v11 adds direct-debit `kind` and general-expense `repeat` / optional `date`.
+// Older payloads are normalized non-destructively on load (see normalizeMoneyState).
+export const CURRENT_STORAGE_VERSION = 11;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
@@ -67,7 +70,7 @@ function normalizeImportedMoney(input: unknown): MoneyState {
   const fallback = getDefaultMoneyState();
   if (!input || typeof input !== 'object') return fallback;
   const money = input as Partial<MoneyState>;
-  return {
+  return normalizeMoneyState({
     incomeConfig: normalizeIncomeConfig(money.incomeConfig),
     directDebits: Array.isArray(money.directDebits) ? money.directDebits : fallback.directDebits,
     billCategories:
@@ -84,7 +87,7 @@ function normalizeImportedMoney(input: unknown): MoneyState {
     expenses: Array.isArray(money.expenses) ? money.expenses : fallback.expenses,
     payCycleOverrides:
       money.payCycleOverrides && typeof money.payCycleOverrides === 'object' ? money.payCycleOverrides : {},
-  };
+  });
 }
 
 /**
@@ -189,7 +192,7 @@ export function loadAllData(): MindMeshStorageData {
 
     const defaultMoney = getDefaultMoneyState();
     const money: MoneyState = parsed.money && typeof parsed.money === 'object'
-      ? {
+      ? normalizeMoneyState({
           incomeConfig: normalizeIncomeConfig(parsed.money.incomeConfig),
           directDebits: Array.isArray(parsed.money.directDebits) ? parsed.money.directDebits : [],
           billCategories: Array.isArray(parsed.money.billCategories) && parsed.money.billCategories.length > 0
@@ -205,7 +208,7 @@ export function loadAllData(): MindMeshStorageData {
           payCycleOverrides: parsed.money.payCycleOverrides && typeof parsed.money.payCycleOverrides === 'object'
             ? parsed.money.payCycleOverrides
             : {},
-        }
+        })
       : defaultMoney;
 
     const contacts: Contact[] = Array.isArray(parsed.contacts)

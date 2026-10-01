@@ -112,6 +112,7 @@ import { AppBackground } from './components/background/AppBackground';
 
 import { AppNavigation } from './components/navigation/AppNavigation';
 import { MoneyModule } from './components/money/MoneyModule';
+import { reconcileDirectDebits } from './utils/finance';
 import { DashboardModule } from './components/dashboard/DashboardModule';
 import { RoutineModule } from './components/routines/RoutineModule';
 import { ContactsModule } from './components/contacts/ContactsModule';
@@ -213,6 +214,18 @@ function MindMeshFlow() {
   useEffect(() => {
     saveMoneyState(moneyState);
   }, [moneyState]);
+
+  // Automatic recurrence: once an automatic direct debit's scheduled day has
+  // passed, roll it forward to its next occurrence on load. This keeps the app
+  // from ever showing a stale date or a false overdue state for an automatic
+  // withdrawal. User-paid bills are left untouched so their overdue deadline is
+  // never silently cleared.
+  useEffect(() => {
+    setMoneyState((prev) => {
+      const directDebits = reconcileDirectDebits(prev.directDebits);
+      return directDebits === prev.directDebits ? prev : { ...prev, directDebits };
+    });
+  }, []);
 
   useEffect(() => {
     saveContacts(contacts);

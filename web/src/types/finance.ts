@@ -45,6 +45,21 @@ export interface DirectDebitCategory {
   isDefault?: boolean;
 }
 
+/**
+ * Distinguishes money that is withdrawn automatically for the user from a bill
+ * the user is personally responsible for paying by a deadline.
+ * - `direct_debit`: automatically withdrawn (Netflix, phone plan, insurance,
+ *   gym, loan repayments). Never requires manual completion and never becomes
+ *   overdue — it simply rolls on to its next occurrence.
+ * - `bill`: the user must make the payment (registration, electricity, manual
+ *   rent, invoices). Only these can become overdue, based on their due-by date.
+ *
+ * Optional for backward compatibility: entries stored before this field existed
+ * are treated as a `bill` when they carry a due-by deadline and otherwise as an
+ * automatic `direct_debit`.
+ */
+export type DirectDebitKind = 'direct_debit' | 'bill';
+
 export interface DirectDebit {
   id: string;
   title: string;
@@ -52,6 +67,8 @@ export interface DirectDebit {
   categoryId: string;
   frequency: BillFrequency;
   recurrenceConfig?: BillRecurrenceConfig;
+  /** Automatic withdrawal vs. user-paid bill. See {@link DirectDebitKind}. */
+  kind?: DirectDebitKind;
   nextPaymentDate: string; // YYYY-MM-DD - the date the payment is expected/planned
   /**
    * YYYY-MM-DD - the final deadline by which the payment must be completed.
@@ -251,22 +268,49 @@ export interface TipEntry {
 
 /**
  * How an expense was paid. Optional and informational only; general expenses
- * never generate scheduled payments or recurrence.
+ * never generate scheduled payments or treatment as a bill.
  */
 export type ExpensePaymentMethod = 'cash' | 'card' | 'transfer' | 'other';
 
 /**
- * A one-off / variable general expense (fuel, groceries, parking, maintenance,
- * medical, miscellaneous). Unlike a {@link DirectDebit}, an expense has no
- * frequency, next payment date or due-by date: it is a record of money already
- * spent and is stored separately so it can never be treated as a recurring bill.
+ * How a general expense is expected to repeat.
+ * - `none`: a single logged / expected purchase.
+ * - `per_pay_cycle`: an expected amount allocated to every pay cycle without a
+ *   specific calendar date (e.g. "Fuel $70 per pay cycle"). It resets into the
+ *   next budget automatically and can never be overdue.
+ * - `weekly` / `fortnightly` / `monthly` / `custom`: an expected amount that
+ *   recurs on a schedule.
+ *
+ * Absent on records created before this field existed and treated as `none`.
+ */
+export type ExpenseRepeat = 'none' | 'per_pay_cycle' | 'weekly' | 'fortnightly' | 'monthly' | 'custom';
+
+/**
+ * A general expense (fuel, groceries, takeaway, transport, miscellaneous).
+ * Unlike a {@link DirectDebit}, an expense never becomes overdue and never
+ * requires manual completion. Its date is optional so an expected amount can be
+ * attached to a pay cycle without pretending it happens on an exact day.
  */
 export interface Expense {
   id: string;
   title: string;
   amount: number;
-  date: string; // YYYY-MM-DD - the date the money was spent
+  /**
+   * YYYY-MM-DD - the date the money was spent, or the anchor date for a
+   * repeating expectation. Omitted for `per_pay_cycle` and for one-off
+   * expectations with no calendar date.
+   */
+  date?: string;
   categoryId: string;
+  /** Repeat behaviour. Absent on older records and treated as `none`. */
+  repeat?: ExpenseRepeat;
+  /** Extra interval configuration for `custom` repeats. */
+  recurrenceConfig?: BillRecurrenceConfig;
+  /**
+   * True when the amount is an expectation/estimate rather than a logged
+   * purchase. Undated and repeating expenses are estimates by default.
+   */
+  estimated?: boolean;
   /** Optional merchant / payee / store name. */
   merchant?: string;
   /** Optional payment method, purely informational. */

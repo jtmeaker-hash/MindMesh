@@ -15,6 +15,7 @@ import {
 } from './storage';
 import { getDefaultAppearance, normalizeAppearance } from './appearance';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
+import { normalizeMoneyState } from '../utils/finance';
 import { INITIAL_CONTACTS, INITIAL_CONTACT_CATEGORIES, INITIAL_CONTACT_RELATIONSHIPS } from '../utils/sampleContactData';
 import { INITIAL_CATEGORIES } from '../utils/sampleData';
 import { normalizeCategories } from './categories';
@@ -488,7 +489,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
   // Money state migration
   const defaultMoney = getDefaultMoneyState();
   const money = rawData.money && typeof rawData.money === 'object'
-    ? {
+    ? normalizeMoneyState({
         incomeConfig: normalizeIncomeConfig(rawData.money.incomeConfig),
         directDebits: Array.isArray(rawData.money.directDebits) ? rawData.money.directDebits : [],
         billCategories: Array.isArray(rawData.money.billCategories) && rawData.money.billCategories.length > 0
@@ -505,7 +506,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
         payCycleOverrides: rawData.money.payCycleOverrides && typeof rawData.money.payCycleOverrides === 'object'
           ? rawData.money.payCycleOverrides
           : {},
-      }
+      })
     : defaultMoney;
 
   // Contacts migration: if backup has no contacts, seed defaults or empty

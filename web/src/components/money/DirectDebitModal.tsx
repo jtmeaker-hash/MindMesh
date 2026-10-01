@@ -13,12 +13,18 @@ import {
 import {
   DirectDebit,
   DirectDebitCategory,
+  DirectDebitKind,
   BillFrequency,
   NotificationSetting,
   NotificationOffsetType,
 } from '../../types/finance';
 import { Reminder } from '../../types';
-import { advanceBillForNextOccurrence, isDueByOnOrAfterNextPayment } from '../../utils/finance';
+import {
+  advanceBillForNextOccurrence,
+  isDueByOnOrAfterNextPayment,
+  parseLocalDate,
+  resolveDirectDebitKind,
+} from '../../utils/finance';
 
 interface DirectDebitModalProps {
   isOpen: boolean;
@@ -64,6 +70,9 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
   const [title, setTitle] = useState(debit?.title || '');
   const [amount, setAmount] = useState(debit ? String(debit.amount) : '');
   const [categoryId, setCategoryId] = useState(debit?.categoryId || categories[0]?.id || '');
+  const [kind, setKind] = useState<DirectDebitKind>(
+    debit ? resolveDirectDebitKind(debit) : 'direct_debit'
+  );
   const [frequency, setFrequency] = useState<BillFrequency>(debit?.frequency || 'monthly');
   const [customDays, setCustomDays] = useState(debit?.recurrenceConfig?.customDays || 14);
   const [interval, setInterval] = useState(debit?.recurrenceConfig?.interval || 1);
@@ -113,6 +122,16 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
     setDueByDate(advanced.dueByDate || '');
   };
 
+  // Monthly-style frequencies record the intended day so short months clamp
+  // instead of drifting the payment onto a different day.
+  const isMonthlyStyle = frequency === 'monthly' || frequency === 'quarterly' || frequency === 'every_x_months' || frequency === 'annually';
+  const monthlyAnchorDay = nextPaymentDate ? parseLocalDate(nextPaymentDate).getDate() : undefined;
+  const recurrenceConfig = {
+    interval: Number(interval) || 1,
+    customDays: Number(customDays) || 14,
+    ...(isMonthlyStyle && monthlyAnchorDay ? { dayOfMonth: monthlyAnchorDay } : {}),
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -144,11 +163,9 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
       title: trimmedTitle,
       amount: Math.round(parsedAmount * 100) / 100,
       categoryId,
+      kind,
       frequency,
-      recurrenceConfig: {
-        interval: Number(interval) || 1,
-        customDays: Number(customDays) || 14,
-      },
+      recurrenceConfig,
       nextPaymentDate,
       dueByDate: dueByDate || undefined,
       endDate: endDate.trim() || undefined,
@@ -272,6 +289,62 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
               {error}
             </div>
           )}
+
+          {/* Type: automatic withdrawal vs user-paid bill */}
+          <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+              Payment Type
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setKind('direct_debit')}
+                aria-pressed={kind === 'direct_debit'}
+                style={{
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: kind === 'direct_debit' ? '1px solid #10b981' : '1px solid rgba(255,255,255,0.1)',
+                  background: kind === 'direct_debit' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.04)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: kind === 'direct_debit' ? '#34d399' : '#e2e8f0' }}>
+                  Direct Debit
+                </span>
+                <span style={{ display: 'block', fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                  Automatically withdrawn
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setKind('bill')}
+                aria-pressed={kind === 'bill'}
+                style={{
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: kind === 'bill' ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.1)',
+                  background: kind === 'bill' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255,255,255,0.04)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: kind === 'bill' ? '#fbbf24' : '#e2e8f0' }}>
+                  Bill
+                </span>
+                <span style={{ display: 'block', fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                  User must pay
+                </span>
+              </button>
+            </div>
+            <p style={{ fontSize: 11, color: '#64748b', margin: '6px 0 0', lineHeight: 1.45 }}>
+              {kind === 'direct_debit'
+                ? 'Rolls on to its next occurrence automatically. It is never marked overdue and never needs manual completion.'
+                : 'Only these can become overdue, using the Payment due by deadline below.'}
+            </p>
+          </div>
 
           {/* Title & Amount */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 140px', gap: 12 }}>
@@ -491,7 +564,9 @@ export const DirectDebitModal: React.FC<DirectDebitModalProps> = ({
               }}
             />
             <p style={{ fontSize: 11, color: '#64748b', margin: '6px 0 0', lineHeight: 1.45 }}>
-              The final deadline this payment must be completed by, kept separate from the planned next payment date. Leave blank when there is no hard deadline.
+              {kind === 'bill'
+                ? 'The final deadline this bill must be paid by. A bill becomes overdue only once this date passes.'
+                : 'Not used for an automatic direct debit: it is withdrawn on its scheduled date and never becomes overdue.'}
             </p>
             {dueByInvalid && (
               <p role="alert" style={{ fontSize: 11.5, color: '#fca5a5', margin: '5px 0 0' }}>
