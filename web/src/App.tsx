@@ -120,7 +120,6 @@ import { RoutineModule } from './components/routines/RoutineModule';
 import { ContactsModule } from './components/contacts/ContactsModule';
 import { VehicleModule } from './components/vehicles/VehicleModule';
 import { SpatialGraph } from './components/graph/SpatialGraph';
-import { runVehicleNotificationSweep, toNotificationHistoryEntries } from './services/vehicleNotifications';
 
 const nodeTypes = {
   rootNode: RootNode,
@@ -346,27 +345,22 @@ function MindMeshFlow() {
       reminders,
       settings: notificationSettings,
       history: notificationHistory,
+      // Vehicle reminders are reconciled by this same engine, so they use the
+      // platform's native scheduler and survive the app being closed.
+      vehicleState,
       onHistoryChange: setNotificationHistory,
       onOpenReminder: handleOpenReminderById,
       onCompleteReminder: (remId) => {
         setReminders((prev) => handleReminderCompletion(remId, prev));
       },
+      onOpenVehicle: () => {
+        setMainNavTab('vehicles');
+      },
       onActionError: (message) => {
         logger.warn('Notifications', 'Notification action failed', { message });
       },
     });
-  }, [reminders, notificationSettings, notificationHistory, handleOpenReminderById]);
-
-  // Vehicle reminders (odometer, service, maintenance, known issues) run as a
-  // deterministic sweep: the same state always yields the same pending jobs, so
-  // nothing is duplicated and recurring reminders reschedule themselves.
-  useEffect(() => {
-    const result = runVehicleNotificationSweep(vehicleState, new Date(), notificationSettings.enabled);
-    if (result.fired.length === 0) return;
-    setVehicleState(result.state);
-    const entries = toNotificationHistoryEntries(result.fired);
-    setNotificationHistory((prev) => [...entries, ...prev]);
-  }, [vehicleState, notificationSettings.enabled]);
+  }, [reminders, notificationSettings, notificationHistory, handleOpenReminderById, vehicleState]);
 
   // Compact per-reminder notification status for the mesh node badges.
   const notificationStatusMap = useMemo(() => {

@@ -744,9 +744,12 @@ export function getVehicleServiceStatus(
     else timeStatus = 'ok';
   }
 
-  let status: VehicleServiceStatus = 'ok';
-  if (kmStatus && timeStatus) status = STATUS_SEVERITY[kmStatus] >= STATUS_SEVERITY[timeStatus] ? kmStatus : timeStatus;
-  else status = kmStatus ?? timeStatus ?? 'ok';
+  const status: VehicleServiceStatus =
+    kmStatus && timeStatus
+      ? STATUS_SEVERITY[kmStatus] >= STATUS_SEVERITY[timeStatus]
+        ? kmStatus
+        : timeStatus
+      : kmStatus ?? timeStatus ?? 'ok';
 
   const kmOverdue = info.kmRemaining !== undefined && info.kmRemaining < 0 ? Math.abs(info.kmRemaining) : undefined;
   const daysOverdue = info.daysRemaining !== undefined && info.daysRemaining < 0 ? Math.abs(info.daysRemaining) : undefined;
@@ -1118,13 +1121,20 @@ export function applyServiceCompletion(state: VehicleState, record: ServiceRecor
     };
   });
 
-  // 2. Mark next-service plan items completed when the work was done.
-  const servicedMaintenanceIds = new Set(replacementByItem.keys());
+  // 2. Mark next-service plan items completed only when THIS service record
+  //    performed the work. Completion is scoped to the record being saved so an
+  //    unrelated historical service can never silently complete a newly-created
+  //    plan item (or resolve a promoted known issue). Re-deriving component
+  //    last-replacement state above still uses the full history.
+  const servicedMaintenanceIds = new Set(
+    normalized.items
+      .filter((item) => (item.action === 'replaced' || item.action === 'repaired') && item.maintenanceItemId)
+      .map((item) => item.maintenanceItemId as string)
+  );
   // Plan items without a tracked-component link (e.g. promoted known issues) fall
-  // back to matching the name of a replaced/repaired service item.
+  // back to matching the name of a replaced/repaired item on this same record.
   const servicedNames = new Set(
-    serviceRecords
-      .flatMap((service) => service.items)
+    normalized.items
       .filter((item) => item.action === 'replaced' || item.action === 'repaired')
       .map((item) => item.name.trim().toLowerCase())
   );

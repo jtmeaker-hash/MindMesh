@@ -2,7 +2,6 @@ import type { DiagnosticResult, DiagnosticStatus } from '../types/diagnostics';
 import type { MindMeshStorageData } from '../types';
 import { readStoredPayload } from './storage';
 import {
-  computeMaintenanceItemStatus,
   computeNextService,
   getVehicleServiceStatus,
   normalizeVehicleState,
@@ -35,13 +34,6 @@ function result(
     ...(details && Object.keys(details).length > 0 ? { details } : {}),
     ...(suggestedFix ? { suggestedFix } : {}),
   };
-}
-
-function worst(statuses: DiagnosticStatus[]): DiagnosticStatus {
-  if (statuses.includes('fail')) return 'fail';
-  if (statuses.includes('warning')) return 'warning';
-  if (statuses.includes('pass')) return 'pass';
-  return 'unknown';
 }
 
 export function diagnoseVehicleMaintenance(state: MindMeshStorageData, now: number): DiagnosticResult[] {
@@ -228,7 +220,5 @@ export function diagnoseVehicleMaintenance(state: MindMeshStorageData, now: numb
     )
   );
 
-  // Roll a top-level status so a caller can quickly see overall health.
-  void worst(results.map((r) => r.status));
   return results;
 }

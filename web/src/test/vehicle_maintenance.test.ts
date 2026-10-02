@@ -20,7 +20,7 @@ import {
   promoteKnownIssueToNextService,
   recordOdometer,
 } from '../services/vehicleMaintenance';
-import { collectDueVehicleNotifications, runVehicleNotificationSweep } from '../services/vehicleNotifications';
+import { buildDesiredVehicleNotifications } from '../services/vehicleNotifications';
 import { diagnoseVehicleMaintenance } from '../services/vehicleDiagnostics';
 import {
   createBackup,
@@ -168,34 +168,208 @@ describe('Vehicle maintenance: service completion', () => {
     // History is preserved, not overwritten.
     expect(result.state.serviceRecords).toHaveLength(1);
   });
+
+  it('does not complete a newly-created plan item from unrelated historical work', () => {
+    let state = seedVehicle(createDefaultVehicleState(), { currentOdometerKm: 100000 });
+
+    // 1. A historical service replaced Engine oil (before the plan item existed).
+    const historical: ServiceRecord = {
+      id: 'svc-old',
+      vehicleId: 'v1',
+      date: '2026-01-01',
+      odometerKm: 90000,
+      serviceTypeId: 'svc-minor',
+      items: [{ id: 'old-1', serviceRecordId: 'svc-old', name: 'Engine oil', action: 'replaced' }],
+      inspectedItems: [],
+      replacedItems: ['Engine oil'],
+      repairedItems: [],
+      recommendedWork: [],
+      createdAt: ISO,
+      updatedAt: ISO,
+    };
+    state = applyServiceCompletion(state, historical).state;
+
+    // 2. The user later creates a new Engine-oil next-service plan item.
+    const planItem: NextServiceItem = {
+      id: 'nsi-oil',
+      vehicleId: 'v1',
+      title: 'Engine oil',
+      requirement: 'required',
+      priority: 'medium',
+      source: 'user',
+      completed: false,
+      createdAt: ISO,
+      updatedAt: ISO,
+    };
+    state = { ...state, nextServiceItems: [planItem] };
+
+    // 3. A brake-only service is saved today.
+    const brakeOnly: ServiceRecord = {
+      id: 'svc-brakes',
+      vehicleId: 'v1',
+      date: '2026-02-01',
+      odometerKm: 101000,
+      serviceTypeId: 'svc-brakes',
+      items: [{ id: 'b-1', serviceRecordId: 'svc-brakes', name: 'Front brake pads', action: 'replaced' }],
+      inspectedItems: [],
+      replacedItems: ['Front brake pads'],
+      repairedItems: [],
+      recommendedWork: [],
+      createdAt: ISO,
+      updatedAt: ISO,
+    };
+    const result = applyServiceCompletion(state, brakeOnly);
+
+    // Historical oil work must NOT complete the new Engine-oil plan item.
+    expect(result.state.nextServiceItems.find((i) => i.id === 'nsi-oil')!.completed).toBeFalsy();
+    expect(result.completedNextServiceItemIds).not.toContain('nsi-oil');
+
+    // A service that actually replaces Engine oil does complete it.
+    const oilService: ServiceRecord = {
+      ...brakeOnly,
+      id: 'svc-oil',
+      date: '2026-03-01',
+      odometerKm: 102000,
+      items: [{ id: 'o-1', serviceRecordId: 'svc-oil', name: 'Engine oil', action: 'replaced' }],
+      replacedItems: ['Engine oil'],
+    };
+    const completed = applyServiceCompletion(result.state, oilService);
+    expect(completed.completedNextServiceItemIds).toContain('nsi-oil');
+
+    // Editing the historical service again stays deterministic and does not complete
+    // later plan items.
+    const edited = applyServiceCompletion(completed.state, { ...historical, notes: 'Corrected odometer' });
+    expect(edited.completedNextServiceItemIds).not.toContain('nsi-oil');
+  });
+
+  it('only resolves a promoted known issue when the current service performs the linked repair', () => {
+    let state = seedVehicle(createDefaultVehicleState(), { currentOdometerKm: 100000 });
+
+    const historical: ServiceRecord = {
+      id: 'svc-hist',
+      vehicleId: 'v1',
+      date: '2026-01-01',
+      odometerKm: 90000,
+      serviceTypeId: 'svc-repair',
+      items: [{ id: 'h-1', serviceRecordId: 'svc-hist', name: 'Brake squeal', action: 'repaired' }],
+      inspectedItems: [],
+      replacedItems: [],
+      repairedItems: ['Brake squeal'],
+      recommendedWork: [],
+      createdAt: ISO,
+      updatedAt: ISO,
+    };
+    state = applyServiceCompletion(state, historical).state;
+
+    const issue: KnownVehicleIssue = {
+      id: 'issue-brake',
+      vehicleId: 'v1',
+      title: 'Brake squeal',
+      severity: 'medium',
+      priority: 'high',
+      status: 'needs_inspection',
+      createdAt: ISO,
+      updatedAt: ISO,
+    };
+    state = { ...state, knownIssues: [issue] };
+    state = promoteKnownIssueToNextService(state, 'issue-brake');
+    const promoted = state.nextServiceItems.find((i) => i.knownIssueId === 'issue-brake')!;
+
+    // An unrelated (oil-only) service must not resolve the promoted issue.
+    const oilOnly: ServiceRecord = {
+      id: 'svc-oil',
+      vehicleId: 'v1',
+      date: '2026-02-01',
+      odometerKm: 101000,
+      serviceTypeId: 'svc-minor',
+      items: [{ id: 'o-1', serviceRecordId: 'svc-oil', name: 'Engine oil', action: 'replaced' }],
+      inspectedItems: [],
+      replacedItems: ['Engine oil'],
+      repairedItems: [],
+      recommendedWork: [],
+      createdAt: ISO,
+      updatedAt: ISO,
+    };
+    const unrelated = applyServiceCompletion(state, oilOnly);
+    expect(unrelated.resolvedIssueIds).not.toContain('issue-brake');
+    expect(unrelated.state.knownIssues.find((i) => i.id === 'issue-brake')!.status).toBe('needs_inspection');
+    expect(unrelated.state.nextServiceItems.find((i) => i.id === promoted.id)!.completed).toBeFalsy();
+
+    // A service that actually performs the linked repair resolves it.
+    const repair: ServiceRecord = {
+      ...oilOnly,
+      id: 'svc-brake',
+      date: '2026-03-01',
+      odometerKm: 102000,
+      items: [{ id: 'r-1', serviceRecordId: 'svc-brake', name: 'Brake squeal', action: 'repaired' }],
+      replacedItems: [],
+      repairedItems: ['Brake squeal'],
+    };
+    const resolved = applyServiceCompletion(unrelated.state, repair);
+    expect(resolved.resolvedIssueIds).toContain('issue-brake');
+    expect(resolved.state.knownIssues.find((i) => i.id === 'issue-brake')!.status).toBe('repaired');
+  });
 });
 
 describe('Vehicle notifications: recurring & de-duplicated', () => {
-  it('fires a weekly odometer reminder once per cycle and reschedules automatically', () => {
-    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it('produces a due weekly odometer cycle plus the next cycle, without duplicates', () => {
+    const eightDaysAgo = new Date(Date.now() - 8 * DAY).toISOString();
     let state = seedVehicle(createDefaultVehicleState(), { lastOdometerUpdateAt: eightDaysAgo });
     state = { ...state, notificationSettings: { ...state.notificationSettings, odometerReminderMode: 'weekly' } };
 
-    const first = runVehicleNotificationSweep(state, new Date());
-    expect(first.fired.some((job) => job.type === 'odometer_update')).toBe(true);
-    state = first.state;
+    const now = new Date();
+    const first = buildDesiredVehicleNotifications(state, true, now).filter((job) => job.type === 'odometer_update');
+    expect(first).toHaveLength(2); // the elapsed cycle + the upcoming cycle
+    expect(new Set(first.map((job) => job.id)).size).toBe(2);
 
-    const second = runVehicleNotificationSweep(state, new Date());
-    expect(second.fired).toHaveLength(0);
+    // Re-running with the same state and time yields identical ids — never duplicated.
+    const second = buildDesiredVehicleNotifications(state, true, now).filter((job) => job.type === 'odometer_update');
+    expect(second.map((job) => job.id).sort()).toEqual(first.map((job) => job.id).sort());
 
-    // Another full interval later, a brand new cycle is due — no manual reset.
-    const later = new Date(Date.now() + 8 * 24 * 60 * 60 * 1000);
-    const third = runVehicleNotificationSweep(state, later);
-    expect(third.fired.some((job) => job.type === 'odometer_update')).toBe(true);
+    // A full interval later the upcoming cycle has become the due cycle (its id is
+    // stable) and a brand new upcoming cycle appears — recurring with no manual reset.
+    const later = new Date(now.getTime() + 8 * DAY);
+    const third = buildDesiredVehicleNotifications(state, true, later).filter((job) => job.type === 'odometer_update');
+    expect(third).toHaveLength(2);
+    expect(third.some((job) => job.id === first[1].id)).toBe(true);
+    expect(third.some((job) => job.id !== first[1].id)).toBe(true);
   });
 
-  it('does not duplicate service approaching notifications across sweeps', () => {
-    let state = seedVehicle(createDefaultVehicleState(), { currentOdometerKm: 128800, serviceIntervalKm: 10000, lastServiceKm: 120300 });
-    expect(collectDueVehicleNotifications(state).some((j) => j.type === 'service_approaching')).toBe(true);
-    const first = runVehicleNotificationSweep(state, new Date());
-    expect(first.fired.some((j) => j.type === 'service_approaching')).toBe(true);
-    state = first.state;
-    expect(runVehicleNotificationSweep(state, new Date()).fired).toHaveLength(0);
+  it('keeps one service notification per status point and changes it when the service state changes', () => {
+    const state = seedVehicle(createDefaultVehicleState(), { currentOdometerKm: 128800, serviceIntervalKm: 10000, lastServiceKm: 120300 });
+    const now = new Date();
+    const approach = buildDesiredVehicleNotifications(state, true, now).find((job) => job.type === 'service_approaching');
+    expect(approach).toBeDefined();
+
+    // Same condition → same deterministic id (the engine de-duplicates on it).
+    const again = buildDesiredVehicleNotifications(state, true, now).find((job) => job.type === 'service_approaching');
+    expect(again?.id).toBe(approach?.id);
+
+    // The odometer advances into the overdue band → a different notification id, so
+    // the engine cancels the stale approaching schedule automatically.
+    const advanced = { ...state, vehicles: state.vehicles.map((v) => ({ ...v, currentOdometerKm: 131000 })) };
+    const after = buildDesiredVehicleNotifications(advanced, true, now);
+    expect(after.some((job) => job.type === 'service_approaching')).toBe(false);
+    expect(after.some((job) => job.type === 'service_overdue')).toBe(true);
+  });
+
+  it('produces no vehicle notifications when either master switch is off', () => {
+    const eightDaysAgo = new Date(Date.now() - 8 * DAY).toISOString();
+    const state = {
+      ...seedVehicle(createDefaultVehicleState(), { lastOdometerUpdateAt: eightDaysAgo }),
+      notificationSettings: {
+        ...createDefaultVehicleState().notificationSettings,
+        odometerReminderMode: 'weekly' as const,
+      },
+    };
+
+    // Global app master switch off.
+    expect(buildDesiredVehicleNotifications(state, false, new Date())).toHaveLength(0);
+    // Vehicle-specific master switch off.
+    const vehicleDisabled = { ...state, notificationSettings: { ...state.notificationSettings, enabled: false } };
+    expect(buildDesiredVehicleNotifications(vehicleDisabled, true, new Date())).toHaveLength(0);
   });
 });
 

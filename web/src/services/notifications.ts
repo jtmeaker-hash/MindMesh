@@ -12,6 +12,8 @@ import {
   normalizeNotificationHistory,
 } from '../types/notifications';
 import { logger } from './logger';
+import type { VehicleState } from '../types/vehicle';
+import { buildDesiredVehicleNotifications, type DesiredVehicleNotification } from './vehicleNotifications';
 
 /**
  * Reminder notification engine.
@@ -101,7 +103,11 @@ export interface PlannedNotification {
   id: string;
   reminderId: string;
   reminderTitle: string;
-  /** Notification body is derived at delivery time from the reminder + offset. */
+  /** Notification title. Vehicle reminders carry their own; reminders use the title. */
+  title: string;
+  /** Explicit body (vehicle reminders). Reminder bodies are derived from the offset. */
+  body?: string;
+  /** Minutes before the due time. 0 = at due time. Used for reminder bodies only. */
   offsetMinutes: number;
   fireAt: number;
   /** ISO due date/time key — changes when a recurring reminder rolls forward. */
@@ -113,6 +119,8 @@ export interface ReconcileContext {
   reminders: Reminder[];
   settings: AppNotificationSettings;
   permission: NotificationPermissionState;
+  /** Vehicle reminders share this engine's schedule/cancel/deliver pipeline. */
+  vehicleNotifications?: DesiredVehicleNotification[];
   now?: number;
 }
 
@@ -135,9 +143,12 @@ interface EngineCallbacks {
   reminders: Reminder[];
   settings: AppNotificationSettings;
   history: NotificationHistoryEntry[];
+  /** When provided, vehicle reminders are reconciled through this same engine. */
+  vehicleState?: VehicleState;
   onHistoryChange: (history: NotificationHistoryEntry[]) => void;
   onOpenReminder?: (reminderId: string) => void;
   onCompleteReminder?: (reminderId: string) => void;
+  onOpenVehicle?: (vehicleId: string) => void;
   onActionError?: (message: string) => void;
 }
 
@@ -361,11 +372,17 @@ export function buildNotificationBody(reminder: Reminder, offsetMinutes: number)
 }
 
 interface DesiredEntry {
-  reminder: Reminder;
   id: string;
+  reminderId: string;
+  reminderTitle: string;
+  /** Notification title. */
+  title: string;
+  /** Explicit body (vehicle reminders). Reminder bodies derive from the offset. */
+  body?: string;
   offsetMinutes: number;
   fireAt: number;
   dueKey: string;
+  kind: 'reminder' | 'vehicle';
 }
 
 /** Builds the complete set of notifications that *should* exist right now. */
@@ -389,16 +406,36 @@ export function buildDesiredNotifications(
 
     for (const offsetMinutes of offsets) {
       desired.push({
-        reminder,
         id: buildNotificationEntryId(reminder.id, dueKey, offsetMinutes),
+        reminderId: reminder.id,
+        reminderTitle: reminder.title,
+        title: reminder.title,
         offsetMinutes,
         fireAt: dueAt - offsetMinutes * 60_000,
         dueKey,
+        kind: 'reminder',
       });
     }
   }
 
   return desired;
+}
+
+/** Adapts vehicle reminders into the engine's desired-entry shape. */
+function buildDesiredVehicleEntries(
+  vehicleNotifications: DesiredVehicleNotification[]
+): DesiredEntry[] {
+  return vehicleNotifications.map((job) => ({
+    id: job.id,
+    reminderId: job.reminderId,
+    reminderTitle: job.reminderTitle,
+    title: job.title,
+    body: job.body,
+    offsetMinutes: 0,
+    fireAt: job.fireAt,
+    dueKey: job.cycleKey,
+    kind: 'vehicle' as const,
+  }));
 }
 
 function signatureOf(history: NotificationHistoryEntry[]): string {
@@ -419,7 +456,10 @@ export function reconcileNotifications(
   const now = context.now ?? Date.now();
   const graceMs = Math.max(0, context.settings.missedGraceMinutes) * 60_000;
   const existing = new Map(history.map((entry) => [entry.id, entry]));
-  const desired = buildDesiredNotifications(context.reminders, context.settings);
+  const desired: DesiredEntry[] = [
+    ...buildDesiredNotifications(context.reminders, context.settings),
+    ...buildDesiredVehicleEntries(context.vehicleNotifications ?? []),
+  ];
   const desiredIds = new Set(desired.map((item) => item.id));
 
   const next: NotificationHistoryEntry[] = [];
@@ -454,8 +494,8 @@ export function reconcileNotifications(
     if (effectiveFireAt > now) {
       const entry: NotificationHistoryEntry = {
         id: item.id,
-        reminderId: item.reminder.id,
-        reminderTitle: item.reminder.title,
+        reminderId: item.reminderId,
+        reminderTitle: item.reminderTitle,
         scheduledFor: new Date(effectiveFireAt).toISOString(),
         offsetMinutes: item.offsetMinutes,
         status: isSnoozed ? 'snoozed' : 'pending',
@@ -465,8 +505,10 @@ export function reconcileNotifications(
       next.push(entry);
       toSchedule.push({
         id: item.id,
-        reminderId: item.reminder.id,
-        reminderTitle: item.reminder.title,
+        reminderId: item.reminderId,
+        reminderTitle: item.reminderTitle,
+        title: item.title,
+        ...(item.body ? { body: item.body } : {}),
         offsetMinutes: item.offsetMinutes,
         fireAt: effectiveFireAt,
         dueKey: item.dueKey,
@@ -481,8 +523,8 @@ export function reconcileNotifications(
       if (!canDeliver) {
         const entry: NotificationHistoryEntry = {
           id: item.id,
-          reminderId: item.reminder.id,
-          reminderTitle: item.reminder.title,
+          reminderId: item.reminderId,
+          reminderTitle: item.reminderTitle,
           scheduledFor: new Date(effectiveFireAt).toISOString(),
           offsetMinutes: item.offsetMinutes,
           status: 'pending',
@@ -491,8 +533,10 @@ export function reconcileNotifications(
         next.push(entry);
         toDeliver.push({
           id: item.id,
-          reminderId: item.reminder.id,
-          reminderTitle: item.reminder.title,
+          reminderId: item.reminderId,
+          reminderTitle: item.reminderTitle,
+          title: item.title,
+          ...(item.body ? { body: item.body } : {}),
           offsetMinutes: item.offsetMinutes,
           fireAt: effectiveFireAt,
           dueKey: item.dueKey,
@@ -504,8 +548,8 @@ export function reconcileNotifications(
 
       const entry: NotificationHistoryEntry = {
         id: item.id,
-        reminderId: item.reminder.id,
-        reminderTitle: item.reminder.title,
+        reminderId: item.reminderId,
+        reminderTitle: item.reminderTitle,
         scheduledFor: new Date(effectiveFireAt).toISOString(),
         offsetMinutes: item.offsetMinutes,
         status: 'pending',
@@ -513,8 +557,10 @@ export function reconcileNotifications(
       next.push(entry);
       toDeliver.push({
         id: item.id,
-        reminderId: item.reminder.id,
-        reminderTitle: item.reminder.title,
+        reminderId: item.reminderId,
+        reminderTitle: item.reminderTitle,
+        title: item.title,
+        ...(item.body ? { body: item.body } : {}),
         offsetMinutes: item.offsetMinutes,
         fireAt: effectiveFireAt,
         dueKey: item.dueKey,
@@ -527,8 +573,8 @@ export function reconcileNotifications(
     // Past the grace window: record it as missed so the user can see what slipped.
     const missed: NotificationHistoryEntry = {
       id: item.id,
-      reminderId: item.reminder.id,
-      reminderTitle: item.reminder.title,
+      reminderId: item.reminderId,
+      reminderTitle: item.reminderTitle,
       scheduledFor: new Date(effectiveFireAt).toISOString(),
       offsetMinutes: item.offsetMinutes,
       status: 'missed',
@@ -586,6 +632,22 @@ function buildNativeOptions(): string {
   });
 }
 
+/** Routes a notification id to its owning surface (vehicle or reminder). */
+function openNotificationTarget(reminderId: string): void {
+  if (reminderId.startsWith('vehicle:')) {
+    callbacks?.onOpenVehicle?.(reminderId.slice('vehicle:'.length));
+    return;
+  }
+  callbacks?.onOpenReminder?.(reminderId);
+}
+
+/** The body shown for a notification that did not carry its own. */
+function notificationBody(item: PlannedNotification): string {
+  if (item.body) return item.body;
+  const reminder = callbacks?.reminders.find((r) => r.id === item.reminderId);
+  return reminder ? buildNotificationBody(reminder, item.offsetMinutes) : '';
+}
+
 /** Registers a future notification with whichever platform can actually deliver it. */
 function registerScheduled(item: PlannedNotification): { ok: boolean; error?: string } {
   if (environment.schedulingMode === 'native-alarm') {
@@ -594,8 +656,8 @@ function registerScheduled(item: PlannedNotification): { ok: boolean; error?: st
     try {
       const ok = bridge.schedule(
         item.id,
-        item.reminderTitle,
-        `${formatAdvanceLabel(item.offsetMinutes)}`,
+        item.title,
+        item.body ?? formatAdvanceLabel(item.offsetMinutes),
         item.fireAt,
         buildNativeOptions()
       );
@@ -621,11 +683,11 @@ function cancelScheduled(id: string): void {
 /** Shows the notification through the Web Notification API. */
 function deliverViaWebApi(item: PlannedNotification): { ok: boolean; error?: string } {
   const reminder = callbacks?.reminders.find((r) => r.id === item.reminderId);
-  if (!reminder) return { ok: false, error: 'Reminder no longer exists.' };
+  if (!reminder && !item.body) return { ok: false, error: 'Reminder no longer exists.' };
 
   try {
-    const notification = new Notification(reminder.title, {
-      body: buildNotificationBody(reminder, item.offsetMinutes),
+    const notification = new Notification(item.title, {
+      body: notificationBody(item),
       tag: item.id,
       silent: !(callbacks?.settings.sound ?? true),
     });
@@ -635,7 +697,7 @@ function deliverViaWebApi(item: PlannedNotification): { ok: boolean; error?: str
       } catch {
         // focus() can be blocked; ignore.
       }
-      callbacks?.onOpenReminder?.(item.reminderId);
+      openNotificationTarget(item.reminderId);
       notification.close();
     };
     return { ok: true };
@@ -767,10 +829,15 @@ export function syncNotificationSchedules(force = false): ReconcileResult | null
   }
 
   try {
+    const vehicleNotifications = callbacks.vehicleState
+      ? buildDesiredVehicleNotifications(callbacks.vehicleState, callbacks.settings.enabled)
+      : [];
+
     const result = reconcileNotifications(callbacks.history, {
       reminders: callbacks.reminders,
       settings: callbacks.settings,
       permission: environment.permission,
+      vehicleNotifications,
     });
 
     const signature = signatureOf(result.history);
@@ -921,6 +988,19 @@ export function handleNotificationAction(entryId: string, action: 'complete' | '
   const reminderId = entry?.reminderId;
   if (!reminderId) return;
 
+  // Vehicle reminders are state-derived, so "complete" simply opens the vehicle
+  // while "snooze" still defers the current cycle like any other notification.
+  if (reminderId.startsWith('vehicle:')) {
+    if (action === 'snooze') {
+      logger.info('Notifications', 'Vehicle notification action: snooze', { entryId });
+      snoozeNotification(entryId);
+    } else {
+      logger.info('Notifications', 'Vehicle notification action: open', { entryId, action });
+      openNotificationTarget(reminderId);
+    }
+    return;
+  }
+
   switch (action) {
     case 'complete':
       logger.info('Notifications', 'Notification action: complete', { entryId });
@@ -981,12 +1061,12 @@ export function attachNativeBridgeHandlers(): void {
       }
       const entry = callbacks?.history.find((item) => item.id === id);
       if (entry) {
-        callbacks?.onOpenReminder?.(entry.reminderId);
+        openNotificationTarget(entry.reminderId);
       } else {
         // The notification may have been replaced/removed from history; the entry id
         // still starts with the reminder id, so fall back to that.
         const reminderId = id.split('::')[0];
-        if (reminderId) callbacks?.onOpenReminder?.(reminderId);
+        if (reminderId) openNotificationTarget(reminderId);
       }
     },
   };
