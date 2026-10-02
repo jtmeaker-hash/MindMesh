@@ -24,11 +24,17 @@ import { normalizeIncomeConfig } from '../utils/payRates';
 import { normalizeMoneyState } from '../utils/finance';
 import { VehicleState } from '../types/vehicle';
 import { createDefaultVehicleState, normalizeVehicleState } from './vehicleMaintenance';
+import {
+  PluginRegistryState,
+  createEmptyRegistryState,
+  normalizePluginRegistryState,
+} from '../types/plugin';
 
 // v11 adds direct-debit `kind` and general-expense `repeat` / optional `date`.
 // v12 adds the Vehicle Maintenance & Service Tracking module (`vehicles`).
+// v13 adds the plugin registry state (`plugins`), additive and non-destructive.
 // Older payloads are normalized non-destructively on load (see normalizeMoneyState).
-export const CURRENT_STORAGE_VERSION = 12;
+export const CURRENT_STORAGE_VERSION = 13;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
@@ -58,6 +64,7 @@ export function getDefaultState(): MindMeshStorageData {
     smartEngineSettings: { ...DEFAULT_SMART_ENGINE_SETTINGS, featureToggles: {} },
     routines: [],
     vehicles: createDefaultVehicleState(),
+    plugins: createEmptyRegistryState(),
     preferences: {
       theme: 'dark',
       defaultReminderPriority: 'medium',
@@ -149,6 +156,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       notificationHistory: [],
       routines: [],
       vehicles: createDefaultVehicleState(),
+      plugins: createEmptyRegistryState(),
       preferences: {
         theme: 'dark',
       },
@@ -289,6 +297,7 @@ export function loadAllData(): MindMeshStorageData {
       smartEngineSettings,
       routines: routineResult.routines,
       vehicles,
+      plugins: normalizePluginRegistryState(parsed.plugins),
       preferences,
     };
   } catch (e) {
@@ -532,6 +541,19 @@ export function saveVehicleState(vehicles: VehicleState): void {
   saveAllData({ ...current, vehicles: normalizeVehicleState(vehicles) });
 }
 
+/**
+ * Plugin registry helper methods. The registry is a normal state slice, so it
+ * travels with backups and is covered by the same migration pipeline.
+ */
+export function loadPluginRegistry(): PluginRegistryState {
+  return normalizePluginRegistryState(loadAllData().plugins);
+}
+
+export function savePluginRegistry(plugins: PluginRegistryState): void {
+  const current = loadAllData();
+  saveAllData({ ...current, plugins: normalizePluginRegistryState(plugins) });
+}
+
 export function loadRoutineQuarantine(): import('../types/routine').RoutineQuarantineEntry[] {
   try {
     const raw = localStorage.getItem(ROUTINE_QUARANTINE_KEY);
@@ -740,6 +762,7 @@ export function importStorageJson(json: string): boolean {
       smartEngineSettings: normalizeSmartEngineSettings(parsed.smartEngineSettings),
       routines: normalizeRoutines(parsed.routines).routines,
       vehicles: normalizeVehicleState(parsed.vehicles),
+      plugins: normalizePluginRegistryState(parsed.plugins),
       preferences: parsed.preferences || {},
     };
     saveAllData(state);

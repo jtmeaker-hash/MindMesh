@@ -14,6 +14,17 @@ Importing a backup also records its node positions under a dedicated key (`mindm
 
 Connection brightness and connection contrast are stored on the existing appearance slice (`data.appearance.connectionBrightness` and `data.appearance.connectionContrast`), so they are serialized by the current full-backup path with no separate key or format change. Both fields arrived after the first appearance release, so normalization treats a missing value as "use the default" (`connectionBrightness` 1, `connectionContrast` 0.35) and clamps anything outside the supported range. Appearance data saved before the fields existed therefore still validates and restores rather than being reported as malformed.
 
+## Plugin registry and plugin data
+
+The plugin architecture adds two additive, optional parts to the payload without changing the backup format version:
+
+- `data.plugins` — plugin-owned data keyed by plugin id (`{ version, schemaVersion, data }`).
+- `data.pluginRegistry` — install/enable state for the Plugin Manager.
+
+Inside the app, the same information lives in the existing payload as the optional `plugins` slice; the per-feature data continues to use the existing `money` and `vehicles` slices, normalised non-destructively. Plugin data is serialized for **every** installed plugin, including disabled ones, so disabling a plugin never risks losing its data. Restoring a plugin section is isolated: a malformed section is logged and skipped and cannot fail the overall restore.
+
+Backups created before the plugin architecture simply omit these fields and restore unchanged; `validateBackup` treats a missing plugin section as `0` plugin sections. Plugin schema migrations are recorded (`completedMigrations`) so they are idempotent and only ever run once.
+
 ## Zoomed-out node visibility
 
 Reminders and steps are hidden purely as a rendering effect when the node view is zoomed sufficiently far out. Their data, saved state and positions are untouched, the transition is driven by camera distance with a hysteresis band to prevent flicker, and primary nodes (root, categories) always remain visible.

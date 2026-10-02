@@ -364,6 +364,49 @@ The long-term direction is an explorable digital space rather than a conventiona
 
 ---
 
+## Plugin Architecture
+
+Optional features can run as independent plugins behind a common MindMesh
+Plugin API while Core stays stable. The first plugins are **Money Management**
+and **Car Maintenance** — both existing features that were *wrapped*, never
+rewritten.
+
+- Core owns the reminder engine, storage, notifications/scheduler, settings,
+  graph, backup/restore, diagnostics and the Plugin Manager/Registry/API.
+- Plugins depend on Core through a controlled `PluginContext` (storage,
+  notifications, scheduler, reminders, graph, backup, settings, diagnostics,
+  native bridge). Core never depends on a specific plugin.
+- **Disabling a plugin never deletes its data.** Data removal is a separate,
+  explicitly confirmed action.
+- The upgrade is invisible: previously integrated features keep working while
+  the plugin registry auto-enables them.
+- Backup is additive — plugin data is always included (even for disabled
+  plugins) and older backups remain importable.
+
+A broken plugin can never stop MindMesh from starting: activation failures are
+isolated, the plugin is marked **Error**, and the cause is recorded in the
+Plugin Manager and Diagnostics. Manage plugins from **Settings → Plugins** (or
+options menu → **Plugins**). See `docs/plugin-architecture.md`.
+
+### Plugin branches & workflows
+
+```text
+main
+├── <temporary active PR branch>
+├── plugin/money-management
+├── plugin/car-maintenance
+└── plugin/<future-plugin>
+```
+
+`main` is the stable release; one normal PR branch exists at a time and is
+deleted after merge. Plugin branches are persistent distribution branches. Each
+plugin has its own isolated GitHub Actions workflow that packages only that
+plugin as a `.mindmesh-plugin.zip` artifact
+(`MindMesh-Money-Management-Plugin-vX.Y.Z`,
+`MindMesh-Car-Maintenance-Plugin-vX.Y.Z`).
+
+---
+
 ## App Architecture
 
 MindMesh uses a hybrid Android architecture.
@@ -600,9 +643,15 @@ MindMesh/
 ├── docs/
 │   ├── ROUTINE_BUILDER_PROGRESS.md
 │   └── persistence-and-backups.md
+├── scripts/
+│   └── package-plugin.mjs      # plugin manifest validation + packaging
 ├── web/
 │   ├── src/
 │   │   ├── components/
+│   │   ├── plugins/            # Plugin API core + built-in plugins
+│   │   │   ├── core/
+│   │   │   ├── money-management/
+│   │   │   └── car-maintenance/
 │   │   ├── services/
 │   │   ├── types/
 │   │   └── utils/

@@ -9,6 +9,12 @@ interface AppNavigationProps {
   upcomingBillsCount?: number;
   contactsCount?: number;
   vehiclesCount?: number;
+  /**
+   * Tabs that should be rendered. Undefined renders every built-in tab. Plugin
+   * tabs (Money, Vehicles) are omitted here while their plugin is disabled, so
+   * navigation always reflects the enabled plugin set.
+   */
+  visibleTabs?: AppNavTab[];
 }
 
 export const AppNavigation: React.FC<AppNavigationProps> = ({
@@ -18,7 +24,9 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
   upcomingBillsCount = 0,
   contactsCount = 0,
   vehiclesCount = 0,
+  visibleTabs,
 }) => {
+  const shows = (tab: AppNavTab) => !visibleTabs || visibleTabs.includes(tab);
   return (
     <nav
       className="mm-navigation mm-surface"
@@ -136,6 +144,7 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
       </button>
 
       {/* Money */}
+      {shows('money') && (
       <button
         type="button"
         onClick={() => onSelectTab('money')}
@@ -177,7 +186,10 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
         )}
       </button>
 
+      )}
+
       {/* Vehicles */}
+      {shows('vehicles') && (
       <button
         type="button"
         onClick={() => onSelectTab('vehicles')}
@@ -204,6 +216,8 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
           </span>
         )}
       </button>
+
+      )}
 
       {/* Dashboard */}
       <button

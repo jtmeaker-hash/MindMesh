@@ -42,6 +42,8 @@ import { normalizeNodePositions } from './nodePositions';
 import { normalizeIncomeConfig } from '../utils/payRates';
 import { VehicleState } from '../types/vehicle';
 import { createDefaultVehicleState, normalizeVehicleState } from './vehicleMaintenance';
+import { normalizePluginRegistryState } from '../types/plugin';
+import { exportPluginBackupSections, restorePluginBackupSections } from '../plugins/core/backupBridge';
 
 // Backup format stays 3: the optional `vehicles` section is additive and older
 // backups without it are migrated forward via the schema version, so existing
@@ -89,6 +91,10 @@ export function createBackup(): MindMeshBackupFile {
     ),
     smartEngineSettings: normalizeSmartEngineSettings(state.smartEngineSettings),
     preferences: state.preferences || { theme: 'dark' },
+    // Plugin data is always backed up, including for disabled plugins, so
+    // disabling can never risk data loss.
+    plugins: exportPluginBackupSections(),
+    pluginRegistry: normalizePluginRegistryState(state.plugins),
     diagnostics: buildDiagnosticsBackupSection(diagnosticPreferences),
     statistics: {
       totalCompletedCount: (state.reminders || []).filter((r) => r.completed).length,
@@ -439,6 +445,20 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     }
   }
 
+  // Plugin sections (additive; older backups simply omit them).
+  let pluginSectionIds: string[] = [];
+  if (data.plugins !== undefined) {
+    if (data.plugins && typeof data.plugins === 'object' && !Array.isArray(data.plugins)) {
+      const sectioned = data.plugins as Record<string, unknown>;
+      pluginSectionIds = Object.keys(sectioned).filter((id) => {
+        const section = sectioned[id];
+        return Boolean(section && typeof section === 'object' && !Array.isArray(section));
+      });
+    } else {
+      warnings.push('Plugin data in this backup was unreadable and will be skipped.');
+    }
+  }
+
   const completedReminders = (data.reminders as Reminder[]).filter((r) => r.completed).length;
   const stepCount = (data.reminders as Reminder[]).reduce(
     (sum, r) => sum + (Array.isArray(r.steps) ? r.steps.length : 0),
@@ -488,6 +508,8 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     maintenanceItemCount,
     knownIssueCount,
     odometerRecordCount,
+    pluginSectionCount: pluginSectionIds.length,
+    pluginSectionIds,
     warnings,
   };
 
@@ -625,6 +647,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     notifications,
     notificationHistory,
     smartEngineSettings,
+    plugins: normalizePluginRegistryState(rawData.pluginRegistry),
     preferences: mergedPreferences,
     lastUpdated: new Date().toISOString(),
   };
@@ -698,10 +721,23 @@ export function restoreBackup(backupFile: MindMeshBackupFile): { success: boolea
       }
     }
 
+    // Plugin data restoration runs after the core state is persisted and is
+    // isolated: a broken plugin section is logged, never allowed to fail the
+    // whole restore or destroy the core data that was just written.
+    const pluginOutcome = restorePluginBackupSections(backupFile.data.plugins);
+    if (pluginOutcome.restored.length > 0 || Object.keys(pluginOutcome.errors).length > 0) {
+      logger.info('BackupService', 'Plugin backup sections processed', {
+        restored: pluginOutcome.restored,
+        skipped: pluginOutcome.skipped,
+        errors: pluginOutcome.errors,
+      });
+    }
+
     logger.info('BackupService', 'Backup restored successfully', {
       remindersRestored: migratedState.reminders.length,
       contactsRestored: (migratedState.contacts || []).length,
       notificationHistoryRestored: (migratedState.notificationHistory || []).length,
+      pluginSectionsRestored: pluginOutcome.restored.length,
     });
 
     recordRestore();

@@ -1,0 +1,99 @@
+# MindMesh Plugin — Money Management
+# ---------------------------------------------------------------------------
+# Isolated plugin workflow. Runs for the plugin/money-management distribution
+# branch and packages ONLY this plugin as a downloaded .mindmesh-plugin.zip
+# artifact. It never builds a full MindMesh APK and never triggers for changes
+# that belong to another plugin.
+#
+# A Money Management change does not build Car Maintenance, and vice versa.
+# ---------------------------------------------------------------------------
+
+name: MindMesh Plugin — Money Management
+
+on:
+  push:
+    branches: [ plugin/money-management ]
+    paths:
+      - 'web/src/plugins/money-management/**'
+      - 'web/src/plugins/core/**'
+      - 'web/src/types/plugin.ts'
+      - 'web/src/services/storage.ts'
+      - 'web/src/services/backup.ts'
+      - 'web/src/services/moneyNotifications.ts'
+      - 'web/src/services/moneyIntelligence.ts'
+      - 'web/src/components/money/**'
+      - 'web/src/utils/finance.ts'
+      - 'web/src/utils/payRates.ts'
+      - 'scripts/package-plugin.mjs'
+      - '.github/workflows/plugin-money-management.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mindmesh-plugin-money-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  money-management:
+    name: Money Management plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin branch
+        uses: actions/checkout@v4
+        with:
+          ref: plugin/money-management
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Lint
+        run: npm --prefix web run lint
+
+      - name: TypeScript type-check
+        run: npm --prefix web run type-check
+
+      - name: Plugin + Money Management regression tests
+        run: >-
+          npm --prefix web run test -- --run
+          src/test/plugin_system.test.ts
+          src/test/finance.test.ts
+          src/test/pay_rates.test.ts
+          src/test/expenses.test.tsx
+          src/test/direct_debit_due_by.test.tsx
+          src/test/recurring_expenses_direct_debits.test.tsx
+
+      - name: Validate manifest and Core API compatibility
+        id: validate
+        run: >-
+          node scripts/package-plugin.mjs
+          --id money-management
+          --dir web/src/plugins/money-management
+          --check
+
+      - name: Package plugin, version + integrity metadata
+        id: package
+        run: >-
+          node scripts/package-plugin.mjs
+          --id money-management
+          --dir web/src/plugins/money-management
+          --out artifacts/plugin
+
+      - name: Show package checksums
+        run: cat artifacts/plugin/checksums.txt
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact-name }}
+          path: artifacts/plugin/
+          if-no-files-found: error
