@@ -25,10 +25,13 @@ import { normalizeMoneyState } from '../utils/finance';
 import { VehicleState } from '../types/vehicle';
 import { createDefaultVehicleState, normalizeVehicleState } from './vehicleMaintenance';
 import {
+  InstalledPluginPackageState,
   PluginRegistryState,
   RetainedPluginData,
+  createEmptyInstalledPackageState,
   createEmptyRegistryState,
   createEmptyRetainedPluginData,
+  normalizeInstalledPluginPackageState,
   normalizePluginRegistryState,
   normalizeRetainedPluginData,
 } from '../types/plugin';
@@ -55,6 +58,11 @@ export const ROUTINE_QUARANTINE_KEY = 'mindmesh_routine_quarantine_v1';
  * can ever touch it before the owning plugin adopts it.
  */
 export const RETAINED_PLUGIN_DATA_KEY = 'mindmesh_plugin_retained_v1';
+/**
+ * Validated plugin packages recorded by the runtime installer. Install/provenance
+ * state only — deleting a record never deletes the plugin's stored user data.
+ */
+export const INSTALLED_PLUGIN_PACKAGES_KEY = 'mindmesh_plugin_packages_v1';
 
 export function getDefaultState(): MindMeshStorageData {
   return {
@@ -591,6 +599,49 @@ export function saveRetainedPluginData(data: RetainedPluginData): void {
   }
 }
 
+export function clearRetainedPluginData(): void {
+  try {
+    localStorage.removeItem(RETAINED_PLUGIN_DATA_KEY);
+  } catch (error) {
+    logger.error('Storage', 'Failed to clear retained plugin data', error);
+  }
+}
+
+/**
+ * Validated plugin packages installed at runtime. Kept outside the live state
+ * payload so a malformed package record can never affect Core state loading.
+ */
+export function loadInstalledPluginPackages(): InstalledPluginPackageState {
+  try {
+    const raw = localStorage.getItem(INSTALLED_PLUGIN_PACKAGES_KEY);
+    if (!raw) return createEmptyInstalledPackageState();
+    return normalizeInstalledPluginPackageState(JSON.parse(raw));
+  } catch (error) {
+    logger.error('Storage', 'Failed to read installed plugin packages', error);
+    return createEmptyInstalledPackageState();
+  }
+}
+
+export function saveInstalledPluginPackages(data: InstalledPluginPackageState): void {
+  try {
+    const normalized = normalizeInstalledPluginPackageState(data);
+    localStorage.setItem(
+      INSTALLED_PLUGIN_PACKAGES_KEY,
+      JSON.stringify({ ...normalized, lastUpdated: new Date().toISOString() })
+    );
+  } catch (error) {
+    logger.error('Storage', 'Failed to persist installed plugin packages', error);
+  }
+}
+
+export function clearInstalledPluginPackages(): void {
+  try {
+    localStorage.removeItem(INSTALLED_PLUGIN_PACKAGES_KEY);
+  } catch (error) {
+    logger.error('Storage', 'Failed to clear installed plugin packages', error);
+  }
+}
+
 export function loadRoutineQuarantine(): import('../types/routine').RoutineQuarantineEntry[] {
   try {
     const raw = localStorage.getItem(ROUTINE_QUARANTINE_KEY);
@@ -740,6 +791,11 @@ export function resetToSample(): MindMeshStorageData {
 export function resetMindMeshEntirely(): MindMeshStorageData {
   const freshState = getDefaultState();
   saveAllData(freshState);
+  // A factory reset is explicitly destructive: it must also purge the
+  // out-of-band stores, otherwise "wipe everything" would leave hidden plugin
+  // data (retained payloads) and package records behind to resurface later.
+  clearRetainedPluginData();
+  clearInstalledPluginPackages();
   logger.info('Storage', 'MindMesh reset entirely to clean default state');
   return freshState;
 }

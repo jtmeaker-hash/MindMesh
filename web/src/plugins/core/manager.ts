@@ -22,6 +22,7 @@ import type {
   PluginView,
 } from './types';
 import type {
+  InstalledPluginPackage,
   PluginBackupSection,
   PluginRegistryEntry,
   PluginRegistryState,
@@ -30,13 +31,18 @@ import { PLUGIN_BACKUP_PAYLOAD_VERSION, normalizePluginBackupSection } from '../
 import { PluginRegistry, resolvePluginStatus } from './registry';
 import { createPluginContext } from './context';
 import {
+  loadInstalledPluginPackages,
   loadPluginRegistry,
   loadReminders,
   loadRetainedPluginData,
+  saveInstalledPluginPackages,
   savePluginRegistry,
   saveRetainedPluginData,
 } from '../../services/storage';
 import { logger } from '../../services/logger';
+import { PluginLoader } from './loader';
+import { parsePluginPackage, type ParsedPluginPackage, type PluginPackageInput } from './installer';
+import { compareVersions } from './version';
 import { setPluginBackupProvider, type PluginBackupProvider, type PluginRestoreOutcome } from './backupBridge';
 
 export interface PluginRuntimeSnapshot {
@@ -49,6 +55,27 @@ export interface PluginRuntimeSnapshot {
 export interface PluginActionResult {
   ok: boolean;
   error?: string;
+}
+
+/** Outcome of installing a downloaded plugin package. */
+export type PluginInstallStatus = 'installed' | 'updated' | 'staged';
+
+export interface PluginInstallResult {
+  ok: boolean;
+  pluginId?: string;
+  version?: string;
+  status?: PluginInstallStatus;
+  /** True when this build contains the plugin implementation. */
+  applied?: boolean;
+  errors?: string[];
+  message?: string;
+}
+
+/** How a recorded package relates to the implementation in this build. */
+export type InstalledPackageState = 'applied' | 'staged' | 'newer' | 'older';
+
+export interface InstalledPluginPackageView extends InstalledPluginPackage {
+  state: InstalledPackageState;
 }
 
 /** A route contributed by an enabled plugin, tagged with its owning plugin. */
@@ -123,6 +150,11 @@ export class PluginManager implements PluginBackupProvider {
       // A failed adoption (e.g. a throwing migration) leaves the retained copy
       // intact and must not be cleared by a successful activation, so skip it.
       if (this.registry.getLoadError(plugin.manifest.id)) continue;
+      // A plugin auto-enabled on upgrade still needs its schema migrations run
+      // before activation; otherwise a built-in's legacy-hydration migration
+      // would never execute on the launch that introduced it.
+      const migrated = await this.runMigrations(plugin, entry);
+      if (!migrated.ok) continue;
       await this.activatePlugin(plugin, entry);
     }
     this.rebuildSnapshot();
@@ -229,6 +261,106 @@ export class PluginManager implements PluginBackupProvider {
       this.rebuildSnapshot();
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Runtime installer
+  // -------------------------------------------------------------------------
+
+  /**
+   * Installs a downloaded plugin package (`.mindmesh-plugin.zip` or a bare
+   * `.mindmesh-plugin.json` descriptor).
+   *
+   * The package is parsed, validated against this Core/Plugin API build and its
+   * identity/version/integrity recorded. Downloaded code is never evaluated —
+   * when this build contains the plugin implementation the package is
+   * *installed/updated*; otherwise it is *staged* until a build ships that
+   * plugin. Neither path touches the plugin's stored data.
+   */
+  async installPackage(input: PluginPackageInput): Promise<PluginInstallResult> {
+    let parsed: ParsedPluginPackage;
+    try {
+      parsed = await parsePluginPackage(input);
+    } catch (err) {
+      return { ok: false, errors: [err instanceof Error ? err.message : String(err)] };
+    }
+
+    const loader = new PluginLoader({ getRegistryState: () => this.state });
+    const result = loader.load(parsed.descriptor);
+    if (!result.ok) return { ok: false, errors: result.errors };
+
+    const { descriptor } = result.loaded;
+    const manifest = descriptor.manifest;
+
+    const store = loadInstalledPluginPackages();
+    const existing = store.packages[manifest.id];
+    store.packages[manifest.id] = {
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      schemaVersion: manifest.schemaVersion,
+      apiVersion: manifest.apiVersion,
+      minimumCoreVersion: manifest.minimumCoreVersion,
+      permissions: manifest.permissions ?? [],
+      integrity: descriptor.integrity,
+      files: descriptor.files.map((file) => file.path),
+      sourceName: parsed.sourceName,
+      installedAt: existing?.installedAt ?? nowIso(),
+    };
+    saveInstalledPluginPackages(store);
+
+    const applied = this.registry.has(manifest.id);
+    const status: PluginInstallStatus = applied ? (existing ? 'updated' : 'installed') : 'staged';
+    logger.info('Plugins', 'Plugin package installed', {
+      pluginId: manifest.id,
+      version: manifest.version,
+      status,
+      source: parsed.sourceName,
+    });
+    this.rebuildSnapshot();
+
+    return {
+      ok: true,
+      pluginId: manifest.id,
+      version: manifest.version,
+      status,
+      applied,
+      message: applied
+        ? `${manifest.name} ${manifest.version} is installed.`
+        : `${manifest.name} ${manifest.version} was validated and staged; this build does not contain that plugin.`,
+    };
+  }
+
+  /** Validated packages recorded on this device, reconciled with this build. */
+  getInstalledPackages(): InstalledPluginPackageView[] {
+    const store = loadInstalledPluginPackages();
+    return Object.values(store.packages)
+      .map((pkg): InstalledPluginPackageView => ({ ...pkg, state: this.resolvePackageState(pkg) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Removes a recorded package. Like disabling a plugin, this only clears
+   * install/provenance metadata — the plugin's stored user data and any
+   * retained backup payload are left untouched (uninstall protection).
+   */
+  uninstallPackage(pluginId: string): PluginActionResult {
+    const store = loadInstalledPluginPackages();
+    if (!store.packages[pluginId]) {
+      return { ok: false, error: `No installed package for "${pluginId}"` };
+    }
+    delete store.packages[pluginId];
+    saveInstalledPluginPackages(store);
+    this.rebuildSnapshot();
+    return { ok: true };
+  }
+
+  private resolvePackageState(pkg: InstalledPluginPackage): InstalledPackageState {
+    const plugin = this.registry.get(pkg.id);
+    if (!plugin) return 'staged';
+    const comparison = compareVersions(pkg.version, plugin.manifest.version);
+    if (comparison === null || comparison === 0) return 'applied';
+    return comparison > 0 ? 'newer' : 'older';
   }
 
   // -------------------------------------------------------------------------

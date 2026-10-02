@@ -25,9 +25,11 @@ Inside the app, the plugin data continues to use the existing `money` and `vehic
 
 Restoring is isolated per plugin: a section whose plugin is available is applied immediately; a section whose plugin is **not** installed (or that fails to apply) is preserved verbatim in a separate retained-data store (`mindmesh_plugin_retained_v1`) and marked as belonging to an unavailable plugin. The live core state is still restored regardless. The retained payload is adopted automatically once the plugin is installed/re-enabled (restore → migrate → verify), and the retained copy is dropped only after both succeed, so a migration failure can never destroy it. Retained payloads are included in every subsequent backup until adopted.
 
-Backups created before the plugin architecture simply omit these fields and restore unchanged; `validateBackup` treats a missing plugin section as `0` plugin sections, and older `{ version, schemaVersion, data }` sections are backfilled with identity metadata on load. Plugin schema migrations are recorded (`completedMigrations`) so they are idempotent and only ever run once.
+Backups created before the plugin architecture simply omit these fields and restore unchanged; `validateBackup` treats a missing plugin section as `0` plugin sections, and older `{ version, schemaVersion, data }` sections are backfilled with identity metadata on load. Plugin schema migrations are recorded (`completedMigrations`) so they are idempotent and only ever run once, and `initialize()` runs them for plugins that were auto-enabled on upgrade as well as for plugins enabled later.
 
-Permanent deletion of plugin data is a distinct, user-confirmed **Delete plugin data** action — disabling or uninstalling a plugin never removes its stored data, backup data, history or restoration settings.
+The runtime installer records validated plugin packages in a separate key (`mindmesh_plugin_packages_v1`). This is install/provenance metadata, not user data: it is deliberately kept outside the backup payload, and removing a package record never removes the plugin's data.
+
+Permanent deletion of plugin data is a distinct, user-confirmed **Delete plugin data** action — disabling or uninstalling a plugin never removes its stored data, backup data, history or restoration settings. A full **factory reset** is the only other destructive path: it clears the live state, the retained-data store and the installed-package store together, so an explicit "wipe everything" cannot leave hidden plugin data behind.
 
 ## Zoomed-out node visibility
 

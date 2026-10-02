@@ -382,6 +382,12 @@ rewritten.
   the plugin registry auto-enables them.
 - Backup is additive — plugin data is always included (even for disabled
   plugins) and older backups remain importable.
+- Downloaded `.mindmesh-plugin.zip` packages can be installed from
+  **Settings → Plugins**: they are validated and integrity-checked against this
+  build, and downloaded code is never executed (the package reconciles with the
+  plugin implementation shipped in the build; unknown plugins are staged).
+- A factory reset also purges retained plugin data and installed package
+  records, so an explicit "wipe everything" leaves nothing hidden behind.
 
 A broken plugin can never stop MindMesh from starting: activation failures are
 isolated, the plugin is marked **Error**, and the cause is recorded in the

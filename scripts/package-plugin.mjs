@@ -147,14 +147,18 @@ function main() {
   ];
   const integrity = computePackageIntegrity(manifest, files);
   const descriptor = { packageFormatVersion: PACKAGE_FORMAT_VERSION, manifest, files, integrity };
-  writeFileSync(join(outDir, `${manifest.id}.mindmesh-plugin.json`), JSON.stringify(descriptor, null, 2));
+  const descriptorJson = JSON.stringify(descriptor, null, 2);
+  writeFileSync(join(outDir, `${manifest.id}.mindmesh-plugin.json`), descriptorJson);
+  // Embedded in the archive so the runtime installer can verify integrity. It is
+  // metadata, not a declared package file, so it is not part of `files`.
+  writeFileSync(join(stagingDir, 'mindmesh-package.json'), descriptorJson);
 
   const packageFile = `${manifest.id}-v${manifest.version}.mindmesh-plugin.zip`;
   const packagePath = join(outDir, packageFile);
   const packageAbsolute = resolve(packagePath);
 
   try {
-    execFileSync('zip', ['-q', '-r', packageAbsolute, 'manifest.json'], { cwd: stagingDir });
+    execFileSync('zip', ['-q', packageAbsolute, 'manifest.json', 'mindmesh-package.json'], { cwd: stagingDir });
   } catch (err) {
     fail(`Failed to create plugin package (is "zip" available?): ${err.message}`);
   }

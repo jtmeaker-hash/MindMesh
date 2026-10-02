@@ -241,6 +241,85 @@ export function normalizePluginRegistryState(input: unknown): PluginRegistryStat
   };
 }
 
+/**
+ * A validated plugin package recorded by the runtime installer.
+ *
+ * This is install/provenance state, not user data. The package supplies the
+ * plugin's identity, version and integrity metadata; the runtime reconciles it
+ * with the plugin implementation compiled into this build. Removing a package
+ * record never removes the plugin's stored data (uninstall protection).
+ */
+export interface InstalledPluginPackage {
+  id: string;
+  name: string;
+  version: string;
+  schemaVersion: number;
+  apiVersion: string;
+  minimumCoreVersion: string;
+  permissions: PluginPermission[];
+  /** Verified package integrity (`fnv1a-...`) at install time. */
+  integrity: string;
+  /** Paths declared by the package descriptor. */
+  files: string[];
+  /** Original downloaded file name, for provenance. */
+  sourceName: string;
+  installedAt: string;
+}
+
+export interface InstalledPluginPackageState {
+  version: number;
+  lastUpdated: string;
+  packages: Record<string, InstalledPluginPackage>;
+}
+
+export const INSTALLED_PLUGIN_PACKAGES_VERSION = 1;
+
+export function createEmptyInstalledPackageState(): InstalledPluginPackageState {
+  return {
+    version: INSTALLED_PLUGIN_PACKAGES_VERSION,
+    lastUpdated: new Date().toISOString(),
+    packages: {},
+  };
+}
+
+/** Non-destructive normalizer for the installed-plugin-package store. */
+export function normalizeInstalledPluginPackageState(input: unknown): InstalledPluginPackageState {
+  const base = createEmptyInstalledPackageState();
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return base;
+  const raw = input as Record<string, unknown>;
+  const packages: Record<string, InstalledPluginPackage> = {};
+  const rawPackages = raw.packages;
+  if (rawPackages && typeof rawPackages === 'object' && !Array.isArray(rawPackages)) {
+    for (const [id, value] of Object.entries(rawPackages as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const pkg = value as Record<string, unknown>;
+      if (typeof pkg.version !== 'string' || typeof pkg.integrity !== 'string') continue;
+      packages[id] = {
+        id,
+        name: typeof pkg.name === 'string' && pkg.name.length > 0 ? pkg.name : id,
+        version: pkg.version,
+        schemaVersion:
+          typeof pkg.schemaVersion === 'number' && Number.isInteger(pkg.schemaVersion) ? pkg.schemaVersion : 0,
+        apiVersion: typeof pkg.apiVersion === 'string' ? pkg.apiVersion : '0.0.0',
+        minimumCoreVersion:
+          typeof pkg.minimumCoreVersion === 'string' ? pkg.minimumCoreVersion : '0.0.0',
+        permissions: Array.isArray(pkg.permissions)
+          ? pkg.permissions.filter((permission): permission is PluginPermission => typeof permission === 'string')
+          : [],
+        integrity: pkg.integrity,
+        files: Array.isArray(pkg.files) ? pkg.files.filter((file): file is string => typeof file === 'string') : [],
+        sourceName: typeof pkg.sourceName === 'string' ? pkg.sourceName : '',
+        installedAt: typeof pkg.installedAt === 'string' ? pkg.installedAt : new Date().toISOString(),
+      };
+    }
+  }
+  return {
+    version: typeof raw.version === 'number' ? raw.version : INSTALLED_PLUGIN_PACKAGES_VERSION,
+    lastUpdated: typeof raw.lastUpdated === 'string' ? raw.lastUpdated : new Date().toISOString(),
+    packages,
+  };
+}
+
 export interface PluginMigration {
   id: string;
   description: string;

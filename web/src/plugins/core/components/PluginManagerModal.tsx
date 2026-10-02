@@ -1,18 +1,21 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
   Download,
   Info,
   Loader2,
+  Package,
   Plug,
   Power,
   ShieldCheck,
   Trash2,
+  Upload,
   X,
   XCircle,
 } from 'lucide-react';
 import type { PluginStatus, PluginView } from '../types';
+import type { InstalledPackageState } from '../manager';
 import { PLUGIN_PERMISSION_LABELS, type PluginPermission } from '../../../types/plugin';
 import { getPluginManager } from '../runtime';
 import { usePluginRuntime } from '../usePluginRuntime';
@@ -64,8 +67,41 @@ export const PluginManagerModal: React.FC<PluginManagerModalProps> = ({ isOpen, 
   const snapshot = usePluginRuntime(manager);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const views = snapshot.views;
+  // Recomputed when the manager revision changes (e.g. after an install).
+  const packages = useMemo(() => manager.getInstalledPackages(), [manager, snapshot.revision]);
+
+  const handleInstallFile = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      // Reset so re-selecting the same file still fires a change event.
+      event.target.value = '';
+      if (!file) return;
+      setInstalling(true);
+      setMessage(null);
+      try {
+        const bytes = await file.arrayBuffer();
+        const result = await manager.installPackage({ bytes, fileName: file.name });
+        if (result.ok) {
+          setMessage(
+            result.applied
+              ? `${result.message} Its data is retained and still included in backups.`
+              : `${result.message} Its data (if any) is retained and included in backups.`
+          );
+        } else {
+          setMessage(`Could not install package: ${(result.errors ?? ['unknown error']).join('; ')}`);
+        }
+      } catch (err) {
+        setMessage(`Could not read package: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setInstalling(false);
+      }
+    },
+    [manager]
+  );
 
   const handleEnable = useCallback(
     async (view: PluginView) => {
@@ -180,6 +216,73 @@ export const PluginManagerModal: React.FC<PluginManagerModalProps> = ({ isOpen, 
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 18 }}>
+          <section
+            style={{
+              borderRadius: 14,
+              border: '1px solid #1e293b',
+              background: 'rgba(15,23,42,0.7)',
+              padding: 14,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Package size={16} color="#818cf8" />
+              <span style={{ fontSize: 13.5, fontWeight: 700, color: '#f8fafc' }}>Install plugin package</span>
+            </div>
+            <p style={{ fontSize: 11.5, color: '#94a3b8', lineHeight: 1.5 }}>
+              Install a downloaded <code>.mindmesh-plugin.zip</code> (or a <code>.mindmesh-plugin.json</code>
+              {' '}descriptor). Packages are validated and integrity-checked before anything changes.
+            </p>
+            <div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".zip,.json,application/zip,application/json"
+                onChange={handleInstallFile}
+                style={{ display: 'none' }}
+              />
+              <button
+                type="button"
+                disabled={installing}
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  ...buttonStyle('#818cf8', 'rgba(99,102,241,0.14)', 'rgba(99,102,241,0.4)'),
+                  opacity: installing ? 0.5 : 1,
+                  cursor: installing ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {installing ? <Loader2 size={14} className="mm-spin" /> : <Upload size={14} />}
+                Choose package…
+              </button>
+            </div>
+            {packages.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {packages.map((pkg) => (
+                  <div
+                    key={pkg.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      fontSize: 11.5,
+                      color: '#cbd5e1',
+                    }}
+                  >
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <strong style={{ color: '#e2e8f0' }}>{pkg.name}</strong> v{pkg.version}
+                    </span>
+                    <span style={{ color: packageStateColor(pkg.state), fontWeight: 700, flexShrink: 0 }}>
+                      {packageStateLabel(pkg.state)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           {views.length === 0 && (
             <p style={{ fontSize: 13, color: '#94a3b8' }}>No plugins are registered in this build.</p>
           )}
@@ -332,6 +435,23 @@ export const PluginManagerModal: React.FC<PluginManagerModalProps> = ({ isOpen, 
     </div>
   );
 };
+
+const PACKAGE_STATE_LABELS: Record<InstalledPackageState, string> = {
+  applied: 'Installed',
+  staged: 'Staged — needs app update',
+  newer: 'Newer — needs app update',
+  older: 'Superseded',
+};
+
+function packageStateLabel(state: InstalledPackageState): string {
+  return PACKAGE_STATE_LABELS[state];
+}
+
+function packageStateColor(state: InstalledPackageState): string {
+  if (state === 'applied') return '#34d399';
+  if (state === 'staged' || state === 'newer') return '#fbbf24';
+  return '#94a3b8';
+}
 
 function buttonStyle(color: string, background: string, border: string): React.CSSProperties {
   return {

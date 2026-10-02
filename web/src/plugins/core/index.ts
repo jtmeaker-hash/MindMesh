@@ -4,6 +4,8 @@ export * from './manifest';
 export * from './registry';
 export * from './manager';
 export * from './loader';
+export * from './zip';
+export * from './installer';
 export * from './context';
 export * from './backupBridge';
 export * from './runtime';

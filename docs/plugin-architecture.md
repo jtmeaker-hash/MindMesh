@@ -2,10 +2,7 @@
 
 MindMesh Core can run optional features as **plugins**. This document describes
 the contract, the safety guarantees, the storage/backup model and the branch +
-CI structure.
-
-The first plugins are **Money Management** and **Car Maintenance**. Both were
-already working features; they were *wrapped*, not rewritten. Their behaviour,
+CI structure.The first plugins are **Money Management** and **Car Maintenance**. Both were already working features; they were *wrapped*, not rewritten. See [`plugin-migration-audit.md`](./plugin-migration-audit.md) for the Stage 1 feature-parity inventory and validation results. Their behaviour,
 stored data, calculations, notifications, settings and backup integration are
 unchanged.
 
@@ -230,6 +227,11 @@ or restoration settings. Permanent deletion is a distinct, user-confirmed
 **Delete plugin data** action in the Plugin Manager; it is the only path that may
 clear a retained payload.
 
+A full **factory reset** (Settings → Backup → Reset) is the one other
+intentionally destructive path: it wipes the live state *and* both out-of-band
+stores — the retained plugin-data store and the installed-package store — so a
+reset cannot leave hidden plugin data behind.
+
 ---
 
 ## Plugin package format
@@ -244,10 +246,35 @@ car-maintenance-v1.0.3.mindmesh-plugin.zip
 
 `scripts/package-plugin.mjs` validates the manifest, checks Core/Plugin API
 compatibility, computes integrity (`fnv1a`) and a `sha256` checksum, and emits
-the artifact. The runtime (`core/manifest.ts`, `core/loader.ts`) validates the
-same descriptor before installation and rejects malformed/incompatible packages
-gracefully. Downloaded plugin code has **no** unrestricted Android access — all
-capabilities go through the Plugin API.
+the artifact. The descriptor (`mindmesh-package.json`) is embedded in the
+archive so its integrity can be verified at install time. The runtime
+(`core/manifest.ts`, `core/loader.ts`, `core/zip.ts`, `core/installer.ts`)
+validates the same descriptor before installation and rejects
+malformed/incompatible packages gracefully. Downloaded plugin code has **no**
+unrestricted Android access — all capabilities go through the Plugin API.
+
+### Runtime install flow
+
+**Settings → Plugins → Install plugin package** accepts a downloaded
+`.mindmesh-plugin.zip` (or a bare `.mindmesh-plugin.json` descriptor):
+
+1. `core/zip.ts` reads the archive without third-party dependencies (stored and
+deflated entries; bounds-checked against zip bombs).
+2. `core/installer.ts` extracts and parses the descriptor.
+3. `core/loader.ts` validates id, format, manifest, version, Plugin API / Core
+compatibility, dependencies and integrity.
+4. `PluginManager.installPackage()` records the package's identity, version and
+integrity, then reconciles it with this build:
+   - the plugin exists in this build → **installed / updated**, or
+   - the plugin does not exist here → **staged** until a build ships it.
+
+**Downloaded code is never evaluated.** Plugin implementations ship compiled
+into the app (e.g. the built-ins distributed through their plugin branches); a
+package supplies identity, version and integrity and is the install/update
+unit. Installing, staging, or uninstalling a package never touches the plugin's
+stored user data or its retained backup payload (uninstall protection).
+Installing a package for a plugin whose data was previously retained lets the
+existing retained-data adoption path restore it.
 
 ---
 

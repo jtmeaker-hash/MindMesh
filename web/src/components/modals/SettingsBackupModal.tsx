@@ -301,7 +301,11 @@ export const SettingsBackupModal: React.FC<SettingsBackupModalProps> = ({
       return;
     }
 
-    if (confirm('Are you absolutely certain? This will wipe all reminders, contacts, financial entries, and local positions!')) {
+    if (
+      confirm(
+        'Are you absolutely certain? This will wipe all reminders, contacts, financial entries, local positions, and plugin data — including plugin data retained from an uninstalled plugin!'
+      )
+    ) {
       setIsResetting(true);
       resetMindMeshEntirely();
       setIsResetting(false);

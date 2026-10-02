@@ -147,6 +147,23 @@ export function isSafePluginPath(path: string): boolean {
   return !path.split(/[\\/]/).some((segment) => segment === '..');
 }
 
+function fnv1a(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `fnv1a-${hash.toString(16).padStart(8, '0')}`;
+}
+
+/**
+ * Per-file integrity hash. Must match the hashing used by
+ * `scripts/package-plugin.mjs` so a package descriptor validates at install.
+ */
+export function computeFileIntegrity(content: string): string {
+  return fnv1a(content);
+}
+
 /**
  * Deterministic integrity hash over the manifest and declared files.
  * A lightweight FNV-1a is intentional: packages are also integrity-checked by
@@ -162,12 +179,7 @@ export function computePackageIntegrity(
     manifest,
     files: [...files].sort((a, b) => a.path.localeCompare(b.path)),
   });
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < canonical.length; i += 1) {
-    hash ^= canonical.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return `fnv1a-${hash.toString(16).padStart(8, '0')}`;
+  return fnv1a(canonical);
 }
 
 /** Validates an untrusted package descriptor before installation. */
