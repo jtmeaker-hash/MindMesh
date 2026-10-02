@@ -668,6 +668,29 @@ This section is maintained automatically. When a pull request is merged into `ma
 
 <!-- mindmesh-release-notes:start -->
 
+<!-- mindmesh-pr-5 -->
+### PR #5 — (Tweak) direct debit mechanics & reoccurring expenses
+
+#### Summary of Changes
+
+- Updated the web application UI, services or types and web tests.
+- (Tweak) direct debit mechanics & reoccurring expenses\n\nCo-authored-by: Freebuff Agent <agent@mail.freebuff.app>
+
+#### Applied Fixes
+
+- No fixes were recorded for this pull request.
+
+#### Build / Test Failures
+
+- No build, test, regression, lint, signing or packaging failures were recorded.
+
+#### README Description
+
+(Tweak) direct debit mechanics & reoccurring expenses. It updates the web application UI, services or types and web tests. The DEBUG build, the required test suite and the regression checks are validated by this workflow.
+
+_Merged 2026-10-02 · [PR #5](https://github.com/jtmeaker-hash/MindMesh/pull/5) · @app/freebuff-web_
+
+
 <!-- mindmesh-pr-4 -->
 ### PR #4 — Stage build complete
 
