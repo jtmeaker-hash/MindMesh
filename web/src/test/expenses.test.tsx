@@ -102,13 +102,13 @@ describe('General Expenses: modal create / edit / delete', () => {
   });
 
   it('persists the selected category and optional details', () => {
-    const { onSave, container } = renderModal();
+    const { onSave } = renderModal();
 
     fireEvent.change(screen.getByPlaceholderText('e.g. Fuel, Groceries, Parking'), {
       target: { value: 'Weekly shop' },
     });
     fireEvent.change(screen.getByPlaceholderText('0.00'), { target: { value: '132' } });
-    fireEvent.change(container.querySelectorAll('select')[0], { target: { value: 'bcat-food' } });
+    fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'bcat-food' } });
     fireEvent.change(screen.getByPlaceholderText('e.g. Ampol, Coles'), { target: { value: 'Coles' } });
     fireEvent.click(screen.getByText('Save Expense'));
 

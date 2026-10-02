@@ -167,9 +167,10 @@ describe('Direct Debit: date helpers', () => {
     expect(advanceDueByForNextPayment('2026-10-03', '2026-11-03', undefined)).toBeUndefined();
     // Roll-over across a year boundary.
     expect(advanceDueByForNextPayment('2026-12-28', '2027-01-28', '2026-12-31')).toBe('2027-01-31');
-    // End-of-month edge: the underlying month maths puts the 31st on the 3rd.
-    expect(getNextBillOccurrence('2026-01-31', 'monthly')).toBe('2026-03-03');
-    expect(advanceDueByForNextPayment('2026-01-31', '2026-03-03', '2026-02-07')).toBe('2026-03-10');
+    // End-of-month edge: short months clamp to their last day instead of
+    // rolling the payment into the next month.
+    expect(getNextBillOccurrence('2026-01-31', 'monthly')).toBe('2026-02-28');
+    expect(advanceDueByForNextPayment('2026-01-31', '2026-02-28', '2026-02-07')).toBe('2026-03-07');
   });
 
   it('advances a recurring bill and its deadline together', () => {

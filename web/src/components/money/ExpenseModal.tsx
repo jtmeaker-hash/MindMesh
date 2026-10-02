@@ -9,8 +9,10 @@ import {
 import {
   Expense,
   ExpensePaymentMethod,
+  ExpenseRepeat,
   DirectDebitCategory,
 } from '../../types/finance';
+import { parseLocalDate } from '../../utils/finance';
 
 interface ExpenseModalProps {
   isOpen: boolean;
@@ -28,10 +30,20 @@ const PAYMENT_METHODS: { id: ExpensePaymentMethod; label: string }[] = [
   { id: 'other', label: 'Other' },
 ];
 
+const REPEAT_OPTIONS: { id: ExpenseRepeat; label: string }[] = [
+  { id: 'none', label: 'None' },
+  { id: 'per_pay_cycle', label: 'Per pay cycle' },
+  { id: 'weekly', label: 'Weekly' },
+  { id: 'fortnightly', label: 'Fortnightly' },
+  { id: 'monthly', label: 'Monthly' },
+  { id: 'custom', label: 'Custom' },
+];
+
 /**
- * Create / edit / delete for a one-off general expense. There is deliberately no
- * frequency, next payment date or due-by field: general expenses are not
- * scheduled obligations and must never behave like a direct debit.
+ * Create / edit / delete for a general expense. The date is optional so an
+ * expected amount can be allocated to a pay cycle ("Fuel $70 per pay cycle")
+ * without pretending it happens on an exact day. General expenses are never
+ * overdue and never require manual completion, unlike a bill.
  */
 export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   isOpen,
@@ -43,7 +55,10 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 }) => {
   const [title, setTitle] = useState(expense?.title || '');
   const [amount, setAmount] = useState(expense ? String(expense.amount) : '');
-  const [date, setDate] = useState(expense?.date || new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(expense?.date || '');
+  const [repeat, setRepeat] = useState<ExpenseRepeat>(expense?.repeat || 'none');
+  const [interval, setInterval] = useState(expense?.recurrenceConfig?.interval || 1);
+  const [customDays, setCustomDays] = useState(expense?.recurrenceConfig?.customDays || 7);
   const [categoryId, setCategoryId] = useState(
     expense?.categoryId || categories[0]?.id || ''
   );
@@ -72,17 +87,33 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
       return;
     }
 
-    if (!date) {
-      setError('Date is required');
-      return;
-    }
+    // The date is intentionally optional. A per-pay-cycle or undated one-off
+    // expense is a valid expectation and must never block saving.
+    const recurrenceConfig =
+      repeat === 'custom'
+        ? {
+            interval: Math.max(1, Number(interval) || 1),
+            customDays: Math.max(1, Number(customDays) || 7),
+          }
+        : repeat === 'weekly' || repeat === 'monthly'
+        ? { interval: Math.max(1, Number(interval) || 1) }
+        : undefined;
+
+    const dayOfMonth = date && repeat === 'monthly' ? parseLocalDate(date).getDate() : undefined;
 
     const now = new Date().toISOString();
     const payload: Expense = {
       id: expense?.id || `exp-${Date.now()}`,
       title: title.trim(),
       amount: Math.round(parsedAmount * 100) / 100,
-      date,
+      date: date || undefined,
+      repeat,
+      recurrenceConfig: recurrenceConfig
+        ? { ...recurrenceConfig, ...(dayOfMonth ? { dayOfMonth } : {}) }
+        : dayOfMonth
+        ? { dayOfMonth }
+        : undefined,
+      estimated: repeat !== 'none' || !date,
       categoryId: categoryId || categories[0]?.id || 'bcat-other',
       merchant: merchant.trim() || undefined,
       paymentMethod: paymentMethod || undefined,
@@ -158,7 +189,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                 {expense ? 'Edit Expense' : 'Add Expense'}
               </h2>
               <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                One-off / variable spending — no schedule required
+                Expected / discretionary spending — no date required
               </span>
             </div>
           </div>
@@ -264,11 +295,10 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
             <div>
               <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
                 <Calendar size={13} />
-                <span>Date *</span>
+                <span>Date (Optional)</span>
               </label>
               <input
                 type="date"
-                required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 style={{
@@ -285,12 +315,98 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
             </div>
           </div>
 
+          {/* Repeat */}
+          <div>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+              Repeat
+            </label>
+            <select
+              aria-label="Repeat"
+              value={repeat}
+              onChange={(e) => setRepeat(e.target.value as ExpenseRepeat)}
+              style={{
+                width: '100%',
+                background: '#1e293b',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 10,
+                padding: '9px 12px',
+                color: '#fff',
+                fontSize: 13,
+                boxSizing: 'border-box',
+              }}
+            >
+              {REPEAT_OPTIONS.map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <p style={{ fontSize: 11, color: '#64748b', margin: '6px 0 0', lineHeight: 1.45 }}>
+              {repeat === 'per_pay_cycle'
+                ? 'Allocates this amount to every pay cycle. No calendar date is needed and it can never be overdue.'
+                : repeat === 'none'
+                ? 'A one-off expense. Leave the date blank to treat it as an expected cost for the current cycle.'
+                : 'Expected to repeat on this schedule and counted in each matching pay cycle.'}
+            </p>
+          </div>
+
+          {repeat === 'custom' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+                  Repeat Every (Days)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={customDays}
+                  onChange={(e) => setCustomDays(Number(e.target.value))}
+                  style={{
+                    width: '100%',
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: 10,
+                    padding: '9px 12px',
+                    color: '#fff',
+                    fontSize: 13,
+                    boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {(repeat === 'weekly' || repeat === 'monthly') && (
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
+                Every N {repeat === 'weekly' ? 'Weeks' : 'Months'}
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={interval}
+                onChange={(e) => setInterval(Number(e.target.value))}
+                style={{
+                  width: '100%',
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 10,
+                  padding: '9px 12px',
+                  color: '#fff',
+                  fontSize: 13,
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          )}
+
           {/* Category */}
           <div>
             <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#94a3b8', marginBottom: 6 }}>
               Category
             </label>
             <select
+              aria-label="Category"
               value={categoryId}
               onChange={(e) => setCategoryId(e.target.value)}
               style={{

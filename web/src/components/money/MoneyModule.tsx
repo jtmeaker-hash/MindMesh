@@ -18,15 +18,17 @@ import {
   toDateString,
   getCurrentPayCycleSummary,
   getDirectDebitsOverview,
-  isBillOverdueOrDueSoon,
   computeShiftStats,
   calculateTipSummaries,
   getUpcomingMoneyTimeline,
   calculateExpenseSummary,
   sortExpensesNewestFirst,
+  getDirectDebitStatus,
+  resolveExpenseRepeat,
 } from '../../utils/finance';
 import { summarizeRateRules } from '../../utils/payRates';
 import { EmptyState } from '../common/EmptyState';
+import { getDirectDebitsDueToday } from '../../services/moneyNotifications';
 import { DirectDebitModal } from './DirectDebitModal';
 import { IncomeConfigModal } from './IncomeConfigModal';
 import { ShiftCalculatorModal } from './ShiftCalculatorModal';
@@ -53,6 +55,24 @@ import {
   X,
   RotateCcw,
 } from 'lucide-react';
+
+/** Human label for an expense's repeat behaviour (empty for plain one-off spends). */
+function describeExpenseRepeat(expense: Expense): string {
+  switch (resolveExpenseRepeat(expense)) {
+    case 'per_pay_cycle':
+      return 'Per pay cycle • expected';
+    case 'weekly':
+      return 'Weekly • expected';
+    case 'fortnightly':
+      return 'Fortnightly • expected';
+    case 'monthly':
+      return 'Monthly • expected';
+    case 'custom':
+      return 'Custom • expected';
+    default:
+      return expense.date ? '' : 'Expected this cycle';
+  }
+}
 
 interface MoneyModuleProps {
   moneyState: MoneyState;
@@ -117,9 +137,12 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
   const monthPrefix = todayStr.substring(0, 7);
   const visibleExpenses = sortedExpenses.filter((expense) => {
     if (expenseCategoryFilter !== 'all' && expense.categoryId !== expenseCategoryFilter) return false;
-    if (expensePeriodFilter === 'month' && !expense.date.startsWith(monthPrefix)) return false;
+    // Undated / per-pay-cycle expectations have no calendar date to filter on, so
+    // they stay visible in every period rather than being falsely hidden.
+    if (expensePeriodFilter === 'month' && expense.date && !expense.date.startsWith(monthPrefix)) return false;
     if (
       expensePeriodFilter === 'cycle' &&
+      expense.date &&
       (expense.date < payCycleSummary.cycleStartDate || expense.date > payCycleSummary.cycleEndDate)
     )
       return false;
@@ -130,6 +153,11 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
     }
     return true;
   });
+
+  // Automatic direct debits scheduled for withdrawal today. These surface as an
+  // in-app notification and are marked current for the day; they are never
+  // overdue and roll on to the next occurrence automatically tomorrow.
+  const directDebitsDueToday = getDirectDebitsDueToday(moneyState.directDebits);
 
   const nextPayKey = moneyState.incomeConfig?.nextPayDate || '';
   const hasActiveOverride = Boolean(nextPayKey && moneyState.payCycleOverrides[nextPayKey] !== undefined);
@@ -418,6 +446,31 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
         {/* ===================== OVERVIEW SUB-TAB ===================== */}
         {activeSubTab === 'overview' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            {directDebitsDueToday.length > 0 && (
+              <div
+                role="status"
+                data-testid="direct-debit-due-today"
+                style={{
+                  borderRadius: 18,
+                  border: '1px solid rgba(16, 185, 129, 0.35)',
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  padding: '16px 20px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <span style={{ fontSize: 12, fontWeight: 800, color: '#34d399', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  Direct debits withdrawn today
+                </span>
+                {directDebitsDueToday.map((debit) => (
+                  <span key={debit.id} style={{ fontSize: 13, color: '#d1fae5' }}>
+                    {debit.title} {formatCurrency(debit.amount)} is scheduled to be withdrawn today.
+                  </span>
+                ))}
+              </div>
+            )}
+
             {!moneyState.incomeConfig ? (
               <EmptyState
                 icon={Briefcase}
@@ -786,7 +839,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
 
               {recentExpenses.length === 0 ? (
                 <p style={{ color: '#94a3b8', fontSize: 13, margin: '16px 0 0 0' }}>
-                  No general expenses recorded yet. Log fuel, groceries or any one-off spending here — no schedule required.
+                  No general expenses recorded yet. Log fuel, groceries or any expected spending here — no date required.
                 </p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
@@ -815,7 +868,9 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                           <div>
                             <span style={{ fontSize: 13, fontWeight: 600, color: '#f8fafc', display: 'block' }}>{expense.title}</span>
                             <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                              {formatDateAU(expense.date)} • {category?.name || 'Uncategorized'}{expense.merchant ? ` • ${expense.merchant}` : ''}
+                              {expense.date ? formatDateAU(expense.date) : 'No date'} • {category?.name || 'Uncategorized'}
+                              {describeExpenseRepeat(expense) ? ` • ${describeExpenseRepeat(expense)}` : ''}
+                              {expense.merchant ? ` • ${expense.merchant}` : ''}
                             </span>
                           </div>
                         </div>
@@ -875,7 +930,8 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {payCycleSummary.billsDueInCycle.map((bill: DirectDebit) => {
                       const category = moneyState.billCategories.find((c) => c.id === bill.categoryId);
-                      const dueStatus = isBillOverdueOrDueSoon(bill.nextPaymentDate);
+                      const status = getDirectDebitStatus(bill);
+                      const isDirectDebit = status.kind === 'direct_debit';
                       return (
                         <div
                           key={bill.id}
@@ -905,9 +961,12 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                                 {bill.title}
                               </span>
                               <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                                Due {formatDateAU(bill.nextPaymentDate)} • {bill.frequency}
+                                {isDirectDebit ? 'Auto-withdraw' : 'Due'} {formatDateAU(bill.nextPaymentDate)} • {bill.frequency}
                               </span>
-                              {bill.dueByDate && (
+                              <span style={{ fontSize: 11, color: isDirectDebit ? '#34d399' : '#fbbf24', display: 'block', marginTop: 1 }}>
+                                {isDirectDebit ? 'Direct Debit • Automatically withdrawn' : 'Bill • User must pay'}
+                              </span>
+                              {!isDirectDebit && bill.dueByDate && (
                                 <span style={{ fontSize: 11, color: '#f59e0b', display: 'block', marginTop: 1 }}>
                                   Payment due by {formatDateAU(bill.dueByDate)}
                                 </span>
@@ -919,11 +978,21 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                             <span style={{ fontSize: 15, fontWeight: 700, color: '#fca5a5', display: 'block' }}>
                               -{formatCurrency(bill.amount)}
                             </span>
-                            {dueStatus.isDueSoon && (
-                              <span style={{ fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase' }}>
-                                Due in {dueStatus.daysUntilDue}d
+                            {isDirectDebit ? (
+                              status.isDueToday ? (
+                                <span style={{ fontSize: 10, fontWeight: 700, color: '#f87171', textTransform: 'uppercase' }}>
+                                  Withdrawn today
+                                </span>
+                              ) : null
+                            ) : status.isOverdue ? (
+                              <span style={{ fontSize: 10, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase' }}>
+                                Overdue
                               </span>
-                            )}
+                            ) : status.isDueSoon ? (
+                              <span style={{ fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase' }}>
+                                Due in {status.daysUntilDue}d
+                              </span>
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -1096,7 +1165,8 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
                 {moneyState.directDebits.map((bill) => {
                   const category = moneyState.billCategories.find((c) => c.id === bill.categoryId);
-                  const dueInfo = isBillOverdueOrDueSoon(bill.nextPaymentDate);
+                  const status = getDirectDebitStatus(bill);
+                  const isDirectDebit = status.kind === 'direct_debit';
                   return (
                     <div
                       key={bill.id}
@@ -1168,6 +1238,21 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                             / {bill.frequency.replace('_', ' ')}
                           </span>
                         </div>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            marginTop: 6,
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            color: isDirectDebit ? '#34d399' : '#fbbf24',
+                            background: isDirectDebit ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)',
+                            border: `1px solid ${isDirectDebit ? 'rgba(16,185,129,0.35)' : 'rgba(245,158,11,0.35)'}`,
+                          }}
+                        >
+                          {isDirectDebit ? 'Direct Debit • Automatically withdrawn' : 'Bill • User must pay'}
+                        </span>
                       </div>
 
                       <div
@@ -1181,19 +1266,26 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                         }}
                       >
                         <span style={{ color: '#94a3b8' }}>
-                          Next: <strong style={{ color: '#f8fafc' }}>{formatDateAU(bill.nextPaymentDate)}</strong>
+                          {isDirectDebit ? 'Next withdrawal: ' : 'Next: '}
+                          <strong style={{ color: '#f8fafc' }}>{formatDateAU(bill.nextPaymentDate)}</strong>
                         </span>
 
-                        {dueInfo.isOverdue ? (
+                        {isDirectDebit ? (
+                          status.isDueToday ? (
+                            <span style={{ color: '#f87171', fontWeight: 700 }}>Withdrawn today</span>
+                          ) : (
+                            <span style={{ color: '#34d399', fontWeight: 600 }}>Scheduled</span>
+                          )
+                        ) : status.isOverdue ? (
                           <span style={{ color: '#ef4444', fontWeight: 700 }}>OVERDUE</span>
-                        ) : dueInfo.isDueSoon ? (
-                          <span style={{ color: '#f59e0b', fontWeight: 700 }}>Due in {dueInfo.daysUntilDue}d</span>
+                        ) : status.isDueSoon ? (
+                          <span style={{ color: '#f59e0b', fontWeight: 700 }}>Due in {status.daysUntilDue}d</span>
                         ) : (
-                          <span style={{ color: '#10b981', fontWeight: 600 }}>Active</span>
+                          <span style={{ color: '#10b981', fontWeight: 600 }}>Upcoming</span>
                         )}
                       </div>
 
-                      {bill.dueByDate && (
+                      {!isDirectDebit && bill.dueByDate && (
                         <div style={{ fontSize: 11, color: '#f59e0b', fontWeight: 600, marginTop: -4 }}>
                           Payment due by {formatDateAU(bill.dueByDate)}
                         </div>
@@ -1854,8 +1946,9 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                             {expense.title}
                           </span>
                           <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                            {formatDateAU(expense.date)} •{' '}
+                            {expense.date ? formatDateAU(expense.date) : 'No date'} •{' '}
                             <span style={{ color: category?.color || '#94a3b8' }}>{category?.name || 'Uncategorized'}</span>
+                            {describeExpenseRepeat(expense) ? ` • ${describeExpenseRepeat(expense)}` : ''}
                             {expense.merchant ? ` • ${expense.merchant}` : ''}
                             {expense.notes ? ` • ${expense.notes}` : ''}
                           </span>
