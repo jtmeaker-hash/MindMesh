@@ -22,10 +22,13 @@ import { normalizeNodePositions } from './nodePositions';
 import { normalizeReminders } from './reminders';
 import { normalizeIncomeConfig } from '../utils/payRates';
 import { normalizeMoneyState } from '../utils/finance';
+import { VehicleState } from '../types/vehicle';
+import { createDefaultVehicleState, normalizeVehicleState } from './vehicleMaintenance';
 
 // v11 adds direct-debit `kind` and general-expense `repeat` / optional `date`.
+// v12 adds the Vehicle Maintenance & Service Tracking module (`vehicles`).
 // Older payloads are normalized non-destructively on load (see normalizeMoneyState).
-export const CURRENT_STORAGE_VERSION = 11;
+export const CURRENT_STORAGE_VERSION = 12;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
@@ -54,6 +57,7 @@ export function getDefaultState(): MindMeshStorageData {
     notificationHistory: [],
     smartEngineSettings: { ...DEFAULT_SMART_ENGINE_SETTINGS, featureToggles: {} },
     routines: [],
+    vehicles: createDefaultVehicleState(),
     preferences: {
       theme: 'dark',
       defaultReminderPriority: 'medium',
@@ -144,6 +148,7 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       notifications: { ...DEFAULT_NOTIFICATION_SETTINGS },
       notificationHistory: [],
       routines: [],
+      vehicles: createDefaultVehicleState(),
       preferences: {
         theme: 'dark',
       },
@@ -245,6 +250,8 @@ export function loadAllData(): MindMeshStorageData {
 
     const smartEngineSettings: SmartEngineSettings = normalizeSmartEngineSettings(parsed.smartEngineSettings);
 
+    const vehicles: VehicleState = normalizeVehicleState(parsed.vehicles);
+
     const routineResult = normalizeRoutines(parsed.routines);
     // Only write quarantine evidence when malformed data is actually found. Clean
     // hydration must remain read-only so transactional write-failure tests and
@@ -281,6 +288,7 @@ export function loadAllData(): MindMeshStorageData {
       notificationHistory,
       smartEngineSettings,
       routines: routineResult.routines,
+      vehicles,
       preferences,
     };
   } catch (e) {
@@ -510,6 +518,20 @@ export function loadRoutines(): Routine[] {
   return loadAllData().routines || [];
 }
 
+/**
+ * Vehicle Maintenance helper methods. The whole module is stored as one slice so
+ * a single save keeps vehicles, history, intervals and notification state
+ * consistent with each other.
+ */
+export function loadVehicleState(): VehicleState {
+  return normalizeVehicleState(loadAllData().vehicles);
+}
+
+export function saveVehicleState(vehicles: VehicleState): void {
+  const current = loadAllData();
+  saveAllData({ ...current, vehicles: normalizeVehicleState(vehicles) });
+}
+
 export function loadRoutineQuarantine(): import('../types/routine').RoutineQuarantineEntry[] {
   try {
     const raw = localStorage.getItem(ROUTINE_QUARANTINE_KEY);
@@ -717,6 +739,7 @@ export function importStorageJson(json: string): boolean {
       notificationHistory: normalizeNotificationHistory(parsed.notificationHistory),
       smartEngineSettings: normalizeSmartEngineSettings(parsed.smartEngineSettings),
       routines: normalizeRoutines(parsed.routines).routines,
+      vehicles: normalizeVehicleState(parsed.vehicles),
       preferences: parsed.preferences || {},
     };
     saveAllData(state);

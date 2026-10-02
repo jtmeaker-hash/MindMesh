@@ -262,6 +262,27 @@ Contact functionality includes:
 
 ---
 
+## Vehicle Maintenance & Service Tracking
+
+MindMesh tracks vehicle servicing by odometer kilometres and service history rather than as a simple reminder list.
+
+Vehicle functionality includes:
+
+- One or more vehicle profiles (nickname, make, model, year, registration, VIN and odometer).
+- Automatic next-service calculation from the last service plus the km/time interval.
+- Service status (OK, approaching, urgent, due, overdue) and remaining kilometres.
+- Permanent, append-only service history with inspected, replaced, repaired and recommended items.
+- A seeded catalogue of common serviceable components, each tracked with its own replacement interval.
+- Automatic next-replacement calculations per component from its last replacement.
+- A next-service plan with required/recommended items, estimated costs and known-issue promotion.
+- Known issues with severity, priority, estimated repair cost and repair status.
+- Part/repair cost estimates with estimated vs. actual differences.
+- An optional recurring odometer reminder that reschedules itself and never duplicates.
+- Estimated driving rate and projected service date from odometer history.
+- Full backup, restore and diagnostics coverage.
+
+---
+
 ## Backup & Restore
 
 MindMesh treats backup compatibility as core functionality rather than an afterthought.
@@ -273,6 +294,7 @@ The current backup format stores the wider application state, including:
 - Routines.
 - Node positions.
 - Money data.
+- Vehicles and their odometer/service/maintenance/known-issue data.
 - Contacts.
 - Contact categories.
 - Contact relationships.
@@ -331,6 +353,7 @@ Diagnostics cover areas such as:
 - Navigation configuration.
 - Money storage.
 - Routine integrity.
+- Vehicle maintenance records, calculations, odometer history and notification jobs.
 - Startup state.
 - Runtime logs.
 

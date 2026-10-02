@@ -1,6 +1,6 @@
 import React from 'react';
 import { AppNavTab } from '../../types/finance';
-import { Network, Users, Wallet, LayoutDashboard, ListChecks } from 'lucide-react';
+import { Network, Users, Wallet, LayoutDashboard, ListChecks, Car } from 'lucide-react';
 
 interface AppNavigationProps {
   currentTab: AppNavTab;
@@ -8,6 +8,7 @@ interface AppNavigationProps {
   activeRemindersCount?: number;
   upcomingBillsCount?: number;
   contactsCount?: number;
+  vehiclesCount?: number;
 }
 
 export const AppNavigation: React.FC<AppNavigationProps> = ({
@@ -16,6 +17,7 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
   activeRemindersCount = 0,
   upcomingBillsCount = 0,
   contactsCount = 0,
+  vehiclesCount = 0,
 }) => {
   return (
     <nav
@@ -171,6 +173,34 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
             }}
           >
             {upcomingBillsCount}
+          </span>
+        )}
+      </button>
+
+      {/* Vehicles */}
+      <button
+        type="button"
+        onClick={() => onSelectTab('vehicles')}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 999,
+          border: 'none', background: currentTab === 'vehicles' ? 'linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%)' : 'transparent',
+          color: currentTab === 'vehicles' ? '#ffffff' : '#94a3b8', fontWeight: currentTab === 'vehicles' ? 600 : 500,
+          fontSize: 13, cursor: 'pointer', transition: 'all 0.18s ease', minHeight: 34,
+          boxShadow: currentTab === 'vehicles' ? '0 2px 10px rgba(14,165,233,.4)' : 'none',
+        }}
+      >
+        <Car size={15} />
+        <span>Vehicles</span>
+        {vehiclesCount > 0 && (
+          <span
+            style={{
+              fontSize: 10, fontWeight: 700,
+              background: currentTab === 'vehicles' ? 'rgba(255,255,255,0.25)' : 'rgba(14, 165, 233, 0.3)',
+              color: currentTab === 'vehicles' ? '#ffffff' : '#7dd3fc',
+              padding: '1px 6px', borderRadius: 999, marginLeft: 1,
+            }}
+          >
+            {vehiclesCount}
           </span>
         )}
       </button>

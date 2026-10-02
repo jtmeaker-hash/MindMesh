@@ -40,7 +40,12 @@ import { normalizeReminder, normalizeReminders } from './reminders';
 import { normalizeSmartEngineSettings } from '../types/smartEngine';
 import { normalizeNodePositions } from './nodePositions';
 import { normalizeIncomeConfig } from '../utils/payRates';
+import { VehicleState } from '../types/vehicle';
+import { createDefaultVehicleState, normalizeVehicleState } from './vehicleMaintenance';
 
+// Backup format stays 3: the optional `vehicles` section is additive and older
+// backups without it are migrated forward via the schema version, so existing
+// backup files remain fully compatible.
 export const BACKUP_FORMAT_VERSION = 3;
 export const APP_VERSION = '1.4.0';
 
@@ -71,6 +76,7 @@ export function createBackup(): MindMeshBackupFile {
     reminders: state.reminders || [],
     routines: state.routines || [],
     nodePositions: state.nodePositions || {},
+    vehicles: normalizeVehicleState(state.vehicles),
     money: state.money || getDefaultMoneyState(),
     contacts: state.contacts || INITIAL_CONTACTS,
     contactCategories: state.contactCategories || INITIAL_CONTACT_CATEGORIES,
@@ -407,6 +413,32 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     }
   }
 
+  // Vehicle maintenance (sanitised, never fatal). A malformed vehicle section
+  // is normalised on restore rather than failing the whole backup.
+  let vehicleCount = 0;
+  let serviceRecordCount = 0;
+  let maintenanceItemCount = 0;
+  let knownIssueCount = 0;
+  let odometerRecordCount = 0;
+  if (data.vehicles !== undefined) {
+    if (data.vehicles && typeof data.vehicles === 'object' && !Array.isArray(data.vehicles)) {
+      const normalizedVehicles = normalizeVehicleState(data.vehicles);
+      vehicleCount = normalizedVehicles.vehicles.length;
+      serviceRecordCount = normalizedVehicles.serviceRecords.length;
+      maintenanceItemCount = normalizedVehicles.maintenanceItems.length;
+      knownIssueCount = normalizedVehicles.knownIssues.length;
+      odometerRecordCount = normalizedVehicles.odometerRecords.length;
+      const rawVehicleCount = Array.isArray((data.vehicles as VehicleState).vehicles)
+        ? (data.vehicles as VehicleState).vehicles.length
+        : 0;
+      if (rawVehicleCount > vehicleCount) {
+        warnings.push(`${rawVehicleCount - vehicleCount} malformed vehicle record(s) will be skipped during restore.`);
+      }
+    } else {
+      warnings.push('Vehicle maintenance data in this backup was unreadable and will be discarded.');
+    }
+  }
+
   const completedReminders = (data.reminders as Reminder[]).filter((r) => r.completed).length;
   const stepCount = (data.reminders as Reminder[]).reduce(
     (sum, r) => sum + (Array.isArray(r.steps) ? r.steps.length : 0),
@@ -451,6 +483,11 @@ export function validateBackup(jsonContent: string): BackupValidationResult {
     routineCount: Array.isArray(data.routines) ? data.routines.length - normalizeRoutines(data.routines).quarantined.length : 0,
     activeRoutineCount: Array.isArray(data.routines) ? normalizeRoutines(data.routines).routines.filter((routine) => Boolean(routine.activeSession)).length : 0,
     routineHistoryCount: Array.isArray(data.routines) ? normalizeRoutines(data.routines).routines.reduce((count, routine) => count + routine.history.length, 0) : 0,
+    vehicleCount,
+    serviceRecordCount,
+    maintenanceItemCount,
+    knownIssueCount,
+    odometerRecordCount,
     warnings,
   };
 
@@ -579,6 +616,7 @@ export function migrateBackup(backup: MindMeshBackupFile): MindMeshStorageData {
     reminders: normalizeReminders(fullySanitizedReminders),
     routines: normalizeRoutines(rawData.routines).routines,
     nodePositions,
+    vehicles: rawData.vehicles ? normalizeVehicleState(rawData.vehicles) : createDefaultVehicleState(),
     money,
     contacts,
     contactCategories,

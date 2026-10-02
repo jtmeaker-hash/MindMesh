@@ -22,7 +22,8 @@ export type DiagnosticCategory =
   | 'platform'
   | 'network'
   | 'references'
-  | 'routines';
+  | 'routines'
+  | 'vehicles';
 
 /** How risky a repair is. Nothing except `safe` may ever run automatically. */
 export type FixKind = 'none' | 'safe' | 'confirm';

@@ -85,6 +85,8 @@ import {
   loadAllData,
   loadRoutines,
   loadSmartEngineSettings,
+  loadVehicleState,
+  saveVehicleState,
 } from './utils/storage';
 import { generateCompletedCategoryMesh } from './utils/layout';
 import { generateNestedActiveMesh, generateNestedCompletedOverviewMesh } from './utils/nestedLayout';
@@ -116,7 +118,9 @@ import { reconcileDirectDebits } from './utils/finance';
 import { DashboardModule } from './components/dashboard/DashboardModule';
 import { RoutineModule } from './components/routines/RoutineModule';
 import { ContactsModule } from './components/contacts/ContactsModule';
+import { VehicleModule } from './components/vehicles/VehicleModule';
 import { SpatialGraph } from './components/graph/SpatialGraph';
+import { runVehicleNotificationSweep, toNotificationHistoryEntries } from './services/vehicleNotifications';
 
 const nodeTypes = {
   rootNode: RootNode,
@@ -142,6 +146,7 @@ function MindMeshFlow() {
     loadNotificationHistory()
   );
   const [routines, setRoutines] = useState(() => loadRoutines());
+  const [vehicleState, setVehicleState] = useState(() => loadVehicleState());
 
   // Navigation state
   const [mainNavTab, setMainNavTab] = useState<AppNavTab>('reminders');
@@ -251,6 +256,10 @@ function MindMeshFlow() {
     saveNotificationHistory(notificationHistory);
   }, [notificationHistory]);
 
+  useEffect(() => {
+    saveVehicleState(vehicleState);
+  }, [vehicleState]);
+
   const chrome = useMemo(() => getChromeTheme(appearance), [appearance]);
 
   // ---------------------------------------------------------------------
@@ -347,6 +356,17 @@ function MindMeshFlow() {
       },
     });
   }, [reminders, notificationSettings, notificationHistory, handleOpenReminderById]);
+
+  // Vehicle reminders (odometer, service, maintenance, known issues) run as a
+  // deterministic sweep: the same state always yields the same pending jobs, so
+  // nothing is duplicated and recurring reminders reschedule themselves.
+  useEffect(() => {
+    const result = runVehicleNotificationSweep(vehicleState, new Date(), notificationSettings.enabled);
+    if (result.fired.length === 0) return;
+    setVehicleState(result.state);
+    const entries = toNotificationHistoryEntries(result.fired);
+    setNotificationHistory((prev) => [...entries, ...prev]);
+  }, [vehicleState, notificationSettings.enabled]);
 
   // Compact per-reminder notification status for the mesh node badges.
   const notificationStatusMap = useMemo(() => {
@@ -852,6 +872,7 @@ function MindMeshFlow() {
     // which re-schedules everything against the restored reminders.
     setNotificationSettings(full.notifications || loadNotificationSettings());
     setNotificationHistory(full.notificationHistory || loadNotificationHistory());
+    setVehicleState(full.vehicles || loadVehicleState());
 
     setFocusedCategoryId(null);
     setSelectedCompletedCategory(null);
@@ -1041,6 +1062,7 @@ function MindMeshFlow() {
             activeRemindersCount={activeCount}
             upcomingBillsCount={moneyState.directDebits.filter((b) => b.active).length}
             contactsCount={contacts.length}
+            vehiclesCount={vehicleState.vehicles.length}
           />
         </div>
 
@@ -1688,6 +1710,15 @@ function MindMeshFlow() {
             }}
           />
         </div>
+      )}
+
+      {/* VEHICLE MAINTENANCE SECTION */}
+      {mainNavTab === 'vehicles' && (
+        <VehicleModule
+          vehicleState={vehicleState}
+          onUpdateVehicleState={setVehicleState}
+          appNotificationsEnabled={notificationSettings.enabled}
+        />
       )}
 
       {/* DASHBOARD SECTION */}

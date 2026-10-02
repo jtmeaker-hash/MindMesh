@@ -6,6 +6,7 @@ import { AppNotificationSettings, NotificationHistoryEntry } from './notificatio
 import { DiagnosticPreferences, DiagnosticsHistoryEntry, LogEntry } from './diagnostics';
 import { Routine } from './routine';
 import { SmartEngineSettings } from './smartEngine';
+import { VehicleState } from './vehicle';
 
 export interface AppPreferences {
   theme?: 'dark' | 'light' | 'system';
@@ -24,6 +25,8 @@ export interface MindMeshBackupData {
   /** Optional for compatibility with backups created before Routine Builder. */
   routines?: Routine[];
   nodePositions: NodePositionMap;
+  /** Optional for compatibility with backups created before Vehicle Maintenance. */
+  vehicles?: VehicleState;
   money: MoneyState;
   contacts: Contact[];
   contactCategories?: string[];
@@ -89,6 +92,11 @@ export interface RestoreSummary {
   routineCount?: number;
   activeRoutineCount?: number;
   routineHistoryCount?: number;
+  vehicleCount?: number;
+  serviceRecordCount?: number;
+  maintenanceItemCount?: number;
+  knownIssueCount?: number;
+  odometerRecordCount?: number;
   warnings: string[];
 }
 

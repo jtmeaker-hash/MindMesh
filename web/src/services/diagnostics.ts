@@ -28,6 +28,7 @@ import { computeDashboardMetrics } from '../utils/dashboard';
 import { getCurrentPayCycleSummary, getUpcomingMoneyTimeline } from '../utils/finance';
 import { logger } from './logger';
 import { diagnoseRoutines } from './routineSafety';
+import { diagnoseVehicleMaintenance } from './vehicleDiagnostics';
 
 export const BUILD_VERSION = `${APP_VERSION} (${import.meta.env.MODE})`;
 
@@ -40,7 +41,9 @@ interface DiagnosticsContext {
   now: number;
 }
 
-type DiagnosticCheck = (ctx: DiagnosticsContext) => DiagnosticResult | Promise<DiagnosticResult>;
+type DiagnosticCheck = (
+  ctx: DiagnosticsContext
+) => DiagnosticResult | DiagnosticResult[] | Promise<DiagnosticResult | DiagnosticResult[]>;
 
 interface ResultInput {
   id: string;
@@ -1486,6 +1489,9 @@ const checkMoneyTimeline: DiagnosticCheck = ({ state }) => {
   }
 };
 
+/** Vehicle Maintenance aggregates several focused checks into one entry point. */
+const checkVehicleMaintenance: DiagnosticCheck = (ctx) => diagnoseVehicleMaintenance(ctx.state, ctx.now);
+
 const checkRoutineSafety: DiagnosticCheck = () => {
   const routineReport = diagnoseRoutines();
   const issues = routineReport.invalidSessions.length + routineReport.missingLinks.length + routineReport.quarantined.length;
@@ -1541,6 +1547,7 @@ const QUICK_CHECKS: DiagnosticCheck[] = [
   checkPwaInstall,
   checkNetwork,
   checkRoutineSafety,
+  checkVehicleMaintenance,
   checkRoutineGraphLayout,
   checkLayoutOverflow,
 ];
@@ -1563,7 +1570,9 @@ export async function runDiagnostics(mode: DiagnosticMode = 'quick'): Promise<Di
   const results: DiagnosticResult[] = [];
   for (const check of checks) {
     try {
-      results.push(await check(ctx));
+      const output = await check(ctx);
+      if (Array.isArray(output)) results.push(...output);
+      else results.push(output);
     } catch (err) {
       // A failed check must never take the diagnostics page down.
       results.push(
