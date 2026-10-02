@@ -12,7 +12,11 @@
 import type { PluginBackupSection } from '../../types/plugin';
 
 export interface PluginRestoreOutcome {
+  /** Sections applied directly to an available plugin. */
   restored: string[];
+  /** Sections preserved for plugins that are not currently available. */
+  retained: string[];
+  /** Sections that carried no usable payload. */
   skipped: string[];
   errors: Record<string, string>;
 }
@@ -50,10 +54,15 @@ export function exportPluginBackupSections(): Record<string, PluginBackupSection
 export function restorePluginBackupSections(
   sections: Record<string, PluginBackupSection> | undefined
 ): PluginRestoreOutcome {
-  if (!sections || !provider) return { restored: [], skipped: [], errors: {} };
+  if (!sections || !provider) return { restored: [], retained: [], skipped: [], errors: {} };
   try {
     return provider.restoreSections(sections);
   } catch (err) {
-    return { restored: [], skipped: [], errors: { '*': err instanceof Error ? err.message : String(err) } };
+    return {
+      restored: [],
+      retained: [],
+      skipped: [],
+      errors: { '*': err instanceof Error ? err.message : String(err) },
+    };
   }
 }

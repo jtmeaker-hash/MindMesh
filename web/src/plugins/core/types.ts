@@ -129,9 +129,21 @@ export interface PluginRoute {
   component: ComponentType<PluginRouteProps>;
 }
 
+/**
+ * The payload a plugin provides when it is serialized. The manager wraps it in
+ * a full {@link PluginBackupSection} with identity metadata, settings and the
+ * enablement flag so plugin code cannot accidentally drop data by omitting it.
+ */
+export interface PluginBackupPayload {
+  /** The plugin's owned user data. */
+  data: unknown;
+  /** Optional plugin-specific history that is not part of `data`. */
+  history?: unknown;
+}
+
 export interface PluginBackupHandler {
   /** Serialize the plugin's owned data for the backup file. */
-  serialize(): PluginBackupSection;
+  serialize(): PluginBackupPayload;
   /**
    * Apply a backup section. Must be idempotent and must never delete data on
    * failure — the restore pipeline isolates and logs plugin errors.

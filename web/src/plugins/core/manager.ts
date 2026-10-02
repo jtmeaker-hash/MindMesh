@@ -21,10 +21,21 @@ import type {
   PluginRoute,
   PluginView,
 } from './types';
-import type { PluginRegistryEntry, PluginRegistryState } from '../../types/plugin';
+import type {
+  PluginBackupSection,
+  PluginRegistryEntry,
+  PluginRegistryState,
+} from '../../types/plugin';
+import { PLUGIN_BACKUP_PAYLOAD_VERSION, normalizePluginBackupSection } from '../../types/plugin';
 import { PluginRegistry, resolvePluginStatus } from './registry';
 import { createPluginContext } from './context';
-import { loadPluginRegistry, loadReminders, savePluginRegistry } from '../../services/storage';
+import {
+  loadPluginRegistry,
+  loadReminders,
+  loadRetainedPluginData,
+  savePluginRegistry,
+  saveRetainedPluginData,
+} from '../../services/storage';
 import { logger } from '../../services/logger';
 import { setPluginBackupProvider, type PluginBackupProvider, type PluginRestoreOutcome } from './backupBridge';
 
@@ -106,6 +117,12 @@ export class PluginManager implements PluginBackupProvider {
     for (const plugin of this.registry.list()) {
       const entry = this.state.plugins[plugin.manifest.id];
       if (!entry?.enabled) continue;
+      // Adopt any retained backup data matching this plugin before activating,
+      // so a plugin installed after a restore automatically gets its data back.
+      await this.adoptRetainedData(plugin, entry);
+      // A failed adoption (e.g. a throwing migration) leaves the retained copy
+      // intact and must not be cleared by a successful activation, so skip it.
+      if (this.registry.getLoadError(plugin.manifest.id)) continue;
       await this.activatePlugin(plugin, entry);
     }
     this.rebuildSnapshot();
@@ -131,6 +148,11 @@ export class PluginManager implements PluginBackupProvider {
     if (resolution.status === 'missing-dependency') {
       return { ok: false, error: `${plugin.manifest.name} is missing a required plugin dependency.` };
     }
+
+    // Adopt any retained backup data before activating. The retained copy is
+    // only dropped after the restore + migration both succeed, so a failure can
+    // never destroy the preserved payload.
+    await this.adoptRetainedData(plugin, entry);
 
     // Run required migrations before activation, and only then flip enabled.
     const migrated = await this.runMigrations(plugin, entry);
@@ -197,6 +219,8 @@ export class PluginManager implements PluginBackupProvider {
         entry.dataSchemaVersion = 0;
         entry.updatedAt = nowIso();
       }
+      // Explicit deletion is the only path that may drop a retained payload.
+      this.clearRetainedSection(pluginId);
       this.persist();
       this.rebuildSnapshot();
       return { ok: true };
@@ -266,13 +290,18 @@ export class PluginManager implements PluginBackupProvider {
   // Backup provider (PluginBackupProvider)
   // -------------------------------------------------------------------------
 
-  exportSections(): Record<string, import('../../types/plugin').PluginBackupSection> {
-    const sections: Record<string, import('../../types/plugin').PluginBackupSection> = {};
+  /**
+   * Serializes every registered plugin that declares a backup handler into a
+   * full section, regardless of enablement, plus any retained payloads for
+   * plugins that are not currently available. Plugin state (enabled/disabled/
+   * absent) never gates whether data is included.
+   */
+  exportSections(): Record<string, PluginBackupSection> {
+    const sections: Record<string, PluginBackupSection> = {};
     for (const plugin of this.registry.list()) {
       if (!plugin.backup) continue;
-      // Installed or not, plugin data is included so disabling never risks data.
       try {
-        sections[plugin.manifest.id] = plugin.backup.serialize();
+        sections[plugin.manifest.id] = this.buildBackupSection(plugin);
       } catch (err) {
         logger.warn('Plugins', 'Plugin backup serialization failed', {
           pluginId: plugin.manifest.id,
@@ -280,36 +309,166 @@ export class PluginManager implements PluginBackupProvider {
         });
       }
     }
+
+    // Retained data for unavailable plugins keeps travelling with every backup.
+    const retained = loadRetainedPluginData();
+    for (const [id, section] of Object.entries(retained.sections)) {
+      if (!sections[id]) sections[id] = section;
+    }
     return sections;
   }
 
-  restoreSections(
-    sections: Record<string, import('../../types/plugin').PluginBackupSection>
-  ): PluginRestoreOutcome {
-    const outcome: PluginRestoreOutcome = { restored: [], skipped: [], errors: {} };
-    for (const [pluginId, section] of Object.entries(sections)) {
+  /**
+   * Applies plugin sections after Core state is persisted.
+   *
+   *  - Available plugin  → the payload is applied immediately.
+   *  - Unavailable plugin → the payload is retained verbatim and marked as
+   *    belonging to an unavailable plugin, never discarded or modified.
+   *  - Apply failure      → the payload is retained so nothing is ever lost.
+   */
+  restoreSections(sections: Record<string, PluginBackupSection>): PluginRestoreOutcome {
+    const outcome: PluginRestoreOutcome = { restored: [], retained: [], skipped: [], errors: {} };
+    const retainedState = loadRetainedPluginData();
+    let retainedChanged = false;
+
+    const retain = (id: string, section: PluginBackupSection) => {
+      // `enabled` is configuration only; forcing it false marks the payload as
+      // unclaimed without touching its data.
+      retainedState.sections[id] = { ...section, enabled: false };
+      retainedChanged = true;
+      if (!outcome.retained.includes(id)) outcome.retained.push(id);
+    };
+
+    for (const [pluginId, raw] of Object.entries(sections)) {
+      const section = normalizePluginBackupSection(raw, pluginId);
+      if (!section) {
+        outcome.skipped.push(pluginId);
+        logger.warn('Plugins', 'Plugin backup section carried no usable payload; skipped', { pluginId });
+        continue;
+      }
+
       const plugin = this.registry.get(pluginId);
-      if (!plugin) {
-        outcome.skipped.push(pluginId);
+      if (!plugin || !plugin.backup) {
+        // Unknown or not-yet-installed plugin: preserve the data untouched.
+        retain(pluginId, section);
+        logger.info('Plugins', 'Retained plugin data for an unavailable plugin', { pluginId });
         continue;
       }
-      if (!plugin.backup) {
-        outcome.skipped.push(pluginId);
-        continue;
-      }
+
       try {
         plugin.backup.restore(section);
         outcome.restored.push(pluginId);
+        if (retainedState.sections[pluginId]) {
+          delete retainedState.sections[pluginId];
+          retainedChanged = true;
+        }
       } catch (err) {
         outcome.errors[pluginId] = err instanceof Error ? err.message : String(err);
-        logger.warn('Plugins', 'Plugin backup restore failed', { pluginId, error: outcome.errors[pluginId] });
+        // A failed apply must never destroy the payload; keep it for a retry.
+        retain(pluginId, section);
+        logger.warn('Plugins', 'Plugin backup restore failed; data retained for a later retry', {
+          pluginId,
+          error: outcome.errors[pluginId],
+        });
       }
     }
+
+    if (retainedChanged) saveRetainedPluginData(retainedState);
     return outcome;
   }
 
   listBackupPluginIds(): string[] {
-    return this.registry.list().filter((plugin) => Boolean(plugin.backup)).map((plugin) => plugin.manifest.id);
+    const ids = this.registry
+      .list()
+      .filter((plugin) => Boolean(plugin.backup))
+      .map((plugin) => plugin.manifest.id);
+    for (const id of this.getRetainedPluginIds()) {
+      if (!ids.includes(id)) ids.push(id);
+    }
+    return ids;
+  }
+
+  /** Ids of plugins whose backup data is retained because they are unavailable. */
+  getRetainedPluginIds(): string[] {
+    return Object.keys(loadRetainedPluginData().sections);
+  }
+
+  hasRetainedData(pluginId: string): boolean {
+    return Boolean(loadRetainedPluginData().sections[pluginId]);
+  }
+
+  /** Builds a full backup section from a plugin's manifest + serialized payload. */
+  private buildBackupSection(plugin: MindMeshPlugin): PluginBackupSection {
+    if (!plugin.backup) throw new Error(`Plugin ${plugin.manifest.id} has no backup handler`);
+    const id = plugin.manifest.id;
+    const entry = this.state.plugins[id];
+    const context = this.getContext(id);
+
+    // Settings are generic: read every declared setting from plugin-owned
+    // storage so configuration travels without each plugin hand-rolling it.
+    const settings: Record<string, unknown> = {};
+    for (const setting of plugin.settings ?? []) {
+      settings[setting.id] = context.settings.get(setting.id, setting.defaultValue);
+    }
+
+    const payload = plugin.backup.serialize();
+    return {
+      payloadVersion: PLUGIN_BACKUP_PAYLOAD_VERSION,
+      pluginId: id,
+      name: plugin.manifest.name,
+      version: plugin.manifest.version,
+      schemaVersion: plugin.manifest.schemaVersion,
+      enabled: entry?.enabled === true,
+      settings: Object.keys(settings).length > 0 ? settings : undefined,
+      history: payload.history,
+      lastModified: entry?.updatedAt ?? nowIso(),
+      data: payload.data,
+    };
+  }
+
+  /**
+   * Adopts retained backup data for a plugin that just became available:
+   * restore → migrate → verify. The retained copy is removed only after both
+   * the restore and the migration succeed, so a migration failure can never
+   * destroy the original retained payload.
+   */
+  private async adoptRetainedData(plugin: MindMeshPlugin, entry: PluginRegistryEntry): Promise<void> {
+    if (!plugin.backup) return;
+    const id = plugin.manifest.id;
+    const section = loadRetainedPluginData().sections[id];
+    if (!section) return;
+
+    try {
+      plugin.backup.restore(section);
+    } catch (err) {
+      logger.warn('Plugins', 'Retained plugin data could not be restored; payload preserved', {
+        pluginId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+
+    const migrated = await this.runMigrations(plugin, entry);
+    if (!migrated.ok) {
+      logger.warn('Plugins', 'Migration of retained plugin data failed; payload preserved', {
+        pluginId: id,
+        error: migrated.error,
+      });
+      return;
+    }
+
+    this.clearRetainedSection(id);
+    logger.info('Plugins', 'Retained plugin data adopted', {
+      pluginId: id,
+      schemaVersion: section.schemaVersion,
+    });
+  }
+
+  private clearRetainedSection(pluginId: string): void {
+    const retained = loadRetainedPluginData();
+    if (!retained.sections[pluginId]) return;
+    delete retained.sections[pluginId];
+    saveRetainedPluginData(retained);
   }
 
   // -------------------------------------------------------------------------

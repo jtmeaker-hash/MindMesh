@@ -7,7 +7,7 @@
  * graceful: Core continues to run.
  */
 import type { PluginManifest, PluginBackupSection } from '../../types/plugin';
-import { MINDMESH_CORE_VERSION, PLUGIN_API_VERSION } from '../../types/plugin';
+import { MINDMESH_CORE_VERSION, PLUGIN_API_VERSION, normalizePluginBackupSection } from '../../types/plugin';
 import {
   validatePluginPackage,
   type PluginPackageDescriptor,
@@ -69,9 +69,11 @@ export class PluginLoader {
   }
 }
 
-/** Type guard for a plugin backup section found in an imported backup file. */
+/**
+ * Type guard for a plugin backup section found in an imported backup file.
+ * Accepts both the current envelope and older `{ version, schemaVersion, data }`
+ * sections, which the normalizer backfills with identity metadata.
+ */
 export function isPluginBackupSection(value: unknown): value is PluginBackupSection {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const section = value as Record<string, unknown>;
-  return typeof section.version === 'string' && typeof section.schemaVersion === 'number' && 'data' in section;
+  return normalizePluginBackupSection(value) !== null;
 }

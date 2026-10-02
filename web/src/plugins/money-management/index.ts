@@ -67,11 +67,7 @@ export function createMoneyManagementPlugin(): MindMeshPlugin {
       saveMoneyState(getDefaultMoneyState());
     },
     backup: {
-      serialize: () => ({
-        version: MONEY_MANAGEMENT_MANIFEST.version,
-        schemaVersion: MONEY_MANAGEMENT_MANIFEST.schemaVersion,
-        data: loadMoneyState(),
-      }),
+      serialize: () => ({ data: loadMoneyState() }),
       restore: (section) => {
         if (!section.data || typeof section.data !== 'object') {
           throw new Error('Money Management backup section is malformed');

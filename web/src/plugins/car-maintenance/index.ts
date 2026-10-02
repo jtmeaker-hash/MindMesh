@@ -63,11 +63,7 @@ export function createCarMaintenancePlugin(): MindMeshPlugin {
       saveVehicleState(createDefaultVehicleState());
     },
     backup: {
-      serialize: () => ({
-        version: CAR_MAINTENANCE_MANIFEST.version,
-        schemaVersion: CAR_MAINTENANCE_MANIFEST.schemaVersion,
-        data: loadVehicleState(),
-      }),
+      serialize: () => ({ data: loadVehicleState() }),
       restore: (section) => {
         saveVehicleState(normalizeVehicleState(section.data));
       },

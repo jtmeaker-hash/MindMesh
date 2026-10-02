@@ -18,12 +18,16 @@ Connection brightness and connection contrast are stored on the existing appeara
 
 The plugin architecture adds two additive, optional parts to the payload without changing the backup format version:
 
-- `data.plugins` — plugin-owned data keyed by plugin id (`{ version, schemaVersion, data }`).
+- `data.plugins` — plugin-owned data keyed by plugin id. Each section carries the plugin id, name, plugin version, data/schema version, the `enabled` flag (configuration only), optional settings/history, a last-modified timestamp and the `data` itself.
 - `data.pluginRegistry` — install/enable state for the Plugin Manager.
 
-Inside the app, the same information lives in the existing payload as the optional `plugins` slice; the per-feature data continues to use the existing `money` and `vehicles` slices, normalised non-destructively. Plugin data is serialized for **every** installed plugin, including disabled ones, so disabling a plugin never risks losing its data. Restoring a plugin section is isolated: a malformed section is logged and skipped and cannot fail the overall restore.
+Inside the app, the plugin data continues to use the existing `money` and `vehicles` slices, normalised non-destructively, while the registry lives in the optional `plugins` slice. Plugin data is serialized for **every** installed plugin, including disabled ones, so disabling a plugin never risks losing its data.
 
-Backups created before the plugin architecture simply omit these fields and restore unchanged; `validateBackup` treats a missing plugin section as `0` plugin sections. Plugin schema migrations are recorded (`completedMigrations`) so they are idempotent and only ever run once.
+Restoring is isolated per plugin: a section whose plugin is available is applied immediately; a section whose plugin is **not** installed (or that fails to apply) is preserved verbatim in a separate retained-data store (`mindmesh_plugin_retained_v1`) and marked as belonging to an unavailable plugin. The live core state is still restored regardless. The retained payload is adopted automatically once the plugin is installed/re-enabled (restore → migrate → verify), and the retained copy is dropped only after both succeed, so a migration failure can never destroy it. Retained payloads are included in every subsequent backup until adopted.
+
+Backups created before the plugin architecture simply omit these fields and restore unchanged; `validateBackup` treats a missing plugin section as `0` plugin sections, and older `{ version, schemaVersion, data }` sections are backfilled with identity metadata on load. Plugin schema migrations are recorded (`completedMigrations`) so they are idempotent and only ever run once.
+
+Permanent deletion of plugin data is a distinct, user-confirmed **Delete plugin data** action — disabling or uninstalling a plugin never removes its stored data, backup data, history or restoration settings.
 
 ## Zoomed-out node visibility
 

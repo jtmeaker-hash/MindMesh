@@ -163,23 +163,72 @@ non-destructively; record counts are preserved (covered by regression tests).
 
 ## Backup / restore
 
-The backup format extends additively — existing backups remain importable:
+The backup format extends additively — existing backups remain importable. Every
+plugin section carries its own identity and version metadata:
 
 ```json
 {
   "core": { "...": "existing fields unchanged" },
   "plugins": {
-    "money-management": { "version": "1.2.0", "schemaVersion": 1, "data": {} },
-    "car-maintenance":  { "version": "1.0.3", "schemaVersion": 1, "data": {} }
+    "money-management": {
+      "payloadVersion": 1,
+      "pluginId": "money-management",
+      "name": "Money Management",
+      "version": "1.2.0",
+      "schemaVersion": 1,
+      "enabled": false,
+      "settings": { "notifyUpcomingPayments": true },
+      "lastModified": "2026-01-01T00:00:00.000Z",
+      "data": {}
+    }
   }
 }
 ```
 
+### Non-negotiable data-safety rule
+
+**Plugin state never determines whether user data is included in a backup.**
+Enabled, disabled, unavailable and temporarily uninstalled plugins all keep their
+existing data until the user explicitly deletes it.
+
 - Plugin data is **always** backed up, including for **disabled** plugins.
-- A plugin section that fails to restore is logged and skipped; it never fails
-  the whole restore or destroys the restored core data.
+- A plugin section is **generic**: the Core backup engine has no special cases
+  for Money Management or Car Maintenance, so future plugins participate simply
+  by declaring a `backup` handler.
+- The `enabled` field is configuration only. `enabled: false` never means the
+  `data` may be dropped.
+
+### Retained data for unavailable plugins
+
+Restoring a backup whose plugin is not installed (or has no backup handler) does
+**not** discard that payload. The section is stored verbatim in a separate
+retained-data store (`mindmesh_plugin_retained_v1`), outside the live state
+payload, and marked as belonging to an unavailable plugin (`enabled: false`).
+
+When the plugin later becomes available:
+
+1. the retained payload is detected by its unique plugin id;
+2. it is restored into the plugin's store;
+3. the plugin's supported migrations run;
+4. only after restore + migration both succeed is the retained copy dropped.
+
+A failed apply or a throwing migration therefore **never destroys the original
+retained data**. Retained payloads keep travelling with every subsequent backup
+until the plugin adopts them, so the data is never lost in the meantime.
+
+- A plugin section that fails to restore is logged and retained (not skipped);
+  it never fails the whole restore or destroys the restored core data.
 - Backups created before the plugin architecture (no plugin sections) restore
-  unchanged.
+  unchanged, and older `{ version, schemaVersion, data }` sections are
+  backfilled with identity metadata on load.
+
+### Uninstall protection
+
+Plugin code/binary removal and plugin user data removal are separate concerns.
+Removing a plugin never implicitly deletes its stored data, backup data, history
+or restoration settings. Permanent deletion is a distinct, user-confirmed
+**Delete plugin data** action in the Plugin Manager; it is the only path that may
+clear a retained payload.
 
 ---
 

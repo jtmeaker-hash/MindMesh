@@ -44,6 +44,9 @@ export interface PluginDiagnosticsSummary {
   missingDependency: number;
   migrationRequired: number;
   updateAvailable: number;
+  /** Plugins whose restored data is retained until they are available again. */
+  retained: number;
+  retainedPluginIds: string[];
   lastError?: string;
   plugins: {
     id: string;
@@ -60,6 +63,7 @@ export function describePlugins(): PluginDiagnosticsSummary {
   const views = mgr.getViews();
   const count = (status: PluginStatus) => views.filter((view) => view.status === status).length;
   const lastError = mgr.getSnapshot().lastError;
+  const retainedPluginIds = mgr.getRetainedPluginIds();
   return {
     apiVersion: PLUGIN_API_VERSION,
     coreVersion: MINDMESH_CORE_VERSION,
@@ -72,6 +76,8 @@ export function describePlugins(): PluginDiagnosticsSummary {
     missingDependency: count('missing-dependency'),
     migrationRequired: count('migration-required'),
     updateAvailable: count('update-available'),
+    retained: retainedPluginIds.length,
+    retainedPluginIds,
     lastError: lastError?.message,
     plugins: views.map((view) => ({
       id: view.id,

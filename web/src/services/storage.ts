@@ -26,8 +26,11 @@ import { VehicleState } from '../types/vehicle';
 import { createDefaultVehicleState, normalizeVehicleState } from './vehicleMaintenance';
 import {
   PluginRegistryState,
+  RetainedPluginData,
   createEmptyRegistryState,
+  createEmptyRetainedPluginData,
   normalizePluginRegistryState,
+  normalizeRetainedPluginData,
 } from '../types/plugin';
 
 // v11 adds direct-debit `kind` and general-expense `repeat` / optional `date`.
@@ -46,6 +49,12 @@ const NODE_POSITIONS_KEY = 'mindmesh_positions_v1';
  */
 export const LAST_IMPORTED_POSITIONS_KEY = 'mindmesh_last_imported_positions_v1';
 export const ROUTINE_QUARANTINE_KEY = 'mindmesh_routine_quarantine_v1';
+/**
+ * Plugin data restored while its plugin was unavailable. It lives in its own key
+ * (outside the live state payload) so no core migration, reset or normalization
+ * can ever touch it before the owning plugin adopts it.
+ */
+export const RETAINED_PLUGIN_DATA_KEY = 'mindmesh_plugin_retained_v1';
 
 export function getDefaultState(): MindMeshStorageData {
   return {
@@ -552,6 +561,34 @@ export function loadPluginRegistry(): PluginRegistryState {
 export function savePluginRegistry(plugins: PluginRegistryState): void {
   const current = loadAllData();
   saveAllData({ ...current, plugins: normalizePluginRegistryState(plugins) });
+}
+
+/**
+ * Plugin data retained for plugins that are not currently available. Backups
+ * include these sections, so retained data keeps travelling with every new
+ * backup until its plugin adopts or the user explicitly deletes it.
+ */
+export function loadRetainedPluginData(): RetainedPluginData {
+  try {
+    const raw = localStorage.getItem(RETAINED_PLUGIN_DATA_KEY);
+    if (!raw) return createEmptyRetainedPluginData();
+    return normalizeRetainedPluginData(JSON.parse(raw));
+  } catch (error) {
+    logger.error('Storage', 'Failed to read retained plugin data', error);
+    return createEmptyRetainedPluginData();
+  }
+}
+
+export function saveRetainedPluginData(data: RetainedPluginData): void {
+  try {
+    const normalized = normalizeRetainedPluginData(data);
+    localStorage.setItem(
+      RETAINED_PLUGIN_DATA_KEY,
+      JSON.stringify({ ...normalized, lastUpdated: new Date().toISOString() })
+    );
+  } catch (error) {
+    logger.error('Storage', 'Failed to persist retained plugin data', error);
+  }
 }
 
 export function loadRoutineQuarantine(): import('../types/routine').RoutineQuarantineEntry[] {
