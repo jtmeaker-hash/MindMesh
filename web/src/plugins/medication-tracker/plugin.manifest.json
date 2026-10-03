@@ -1,0 +1,12 @@
+{
+  "id": "medication-tracker",
+  "name": "Medication & Supplement Tracker",
+  "version": "1.0.0",
+  "description": "Track medications, supplements, vitamins and prescribed treatments with flexible reminder schedules, factual taken/skipped/missed history, PRN logging, supply and refill tracking. Records only what you enter and never provides medical advice.",
+  "minimumCoreVersion": "1.8.0",
+  "apiVersion": "1.0.0",
+  "schemaVersion": 1,
+  "author": "MindMesh",
+  "dependencies": [],
+  "permissions": ["storage", "notifications", "scheduler", "reminders", "backup", "settings", "diagnostics"]
+}

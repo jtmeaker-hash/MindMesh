@@ -40,6 +40,45 @@ export interface PluginStorageApi {
 export interface PluginNotificationApi {
   /** Raise an in-app notification for the plugin. Never touches Core alerts. */
   notify(title: string, message: string, details?: Record<string, unknown>): void;
+  /**
+   * Register this plugin's desired-notification provider with the shared
+   * MindMesh notification engine. The engine reconciles the provider's pure
+   * `getDesired(now)` answer against the platform scheduler exactly like
+   * ordinary reminders, so plugin notifications survive the app being closed
+   * and never duplicate. Registering again replaces the previous provider.
+   */
+  register(provider: Omit<PluginNotificationProvider, 'pluginId'>): void;
+  /** Remove this plugin's provider so no further notifications are scheduled. */
+  clear(): void;
+}
+
+/** A notification a plugin wants the shared engine to schedule. */
+export interface PluginNotificationJob {
+  /** Job id, unique within the plugin. Stable across recomputes. */
+  id: string;
+  title: string;
+  body: string;
+  /** Epoch milliseconds the notification targets. */
+  fireAt: number;
+  /** Stable key for one cycle of the notification. */
+  cycleKey: string;
+  /** Opaque reference handed back to the plugin on an action. */
+  ref?: string;
+}
+
+export type PluginNotificationAction = 'complete' | 'snooze' | 'skip' | 'open';
+
+/**
+ * Generic contract between a plugin and the shared notification engine. Core
+ * never knows what a plugin's notifications mean; it only schedules them and
+ * routes user actions back through `onAction`.
+ */
+export interface PluginNotificationProvider {
+  pluginId: string;
+  /** Pure: the same `now` state always produces the same list. */
+  getDesired(now: Date): PluginNotificationJob[];
+  /** Called when the user acts on one of this plugin's notifications. */
+  onAction?(action: PluginNotificationAction, job: PluginNotificationJob): void;
 }
 
 export interface PluginSchedulerJob {

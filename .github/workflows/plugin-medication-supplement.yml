@@ -1,0 +1,108 @@
+# MindMesh Plugin — Medication & Supplement Tracker
+# ---------------------------------------------------------------------------
+# Isolated plugin workflow. Runs for the plugin/medication-supplement-tracker
+# distribution branch and packages ONLY this plugin as a downloaded
+# .mindmesh-plugin.zip artifact. It never builds a full MindMesh APK and never
+# triggers for changes that belong to another plugin.
+#
+# Validation performed here:
+#   1. manifest + package schema            (scripts/package-plugin.mjs --check)
+#   2. Core / Plugin API compatibility      (same)
+#   3. TypeScript compilation               (web type-check)
+#   4. lint                                  (web lint)
+#   5. reminder scheduling, persistence, backup/restore, disabled-retention,
+#      plugin lifecycle regression          (medication_tracker_plugin tests)
+#   6. plugin system regression              (plugin_system tests)
+#   7. UI regression                         (medication_tracker_ui tests)
+#   8. installable package generation        (--out artifacts/plugin)
+# ---------------------------------------------------------------------------
+
+name: MindMesh Plugin — Medication & Supplement Tracker
+
+on:
+  push:
+    branches: [ plugin/medication-supplement-tracker ]
+    paths:
+      - 'web/src/plugins/medication-tracker/**'
+      - 'web/src/plugins/core/**'
+      - 'web/src/plugins/registerBuiltins.ts'
+      - 'web/src/types/plugin.ts'
+      - 'web/src/types/finance.ts'
+      - 'web/src/services/notifications.ts'
+      - 'web/src/App.tsx'
+      - 'web/src/components/navigation/AppNavigation.tsx'
+      - 'scripts/package-plugin.mjs'
+      - '.github/workflows/plugin-medication-supplement.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mindmesh-plugin-medication-tracker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  medication-supplement-tracker:
+    name: Medication & Supplement Tracker plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin branch
+        uses: actions/checkout@v4
+        with:
+          ref: plugin/medication-supplement-tracker
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Lint
+        run: npm --prefix web run lint
+
+      - name: TypeScript type-check
+        run: npm --prefix web run type-check
+
+      - name: Plugin manifest + structure validation
+        id: validate
+        run: >-
+          node scripts/package-plugin.mjs
+          --id medication-tracker
+          --dir web/src/plugins/medication-tracker
+          --check
+
+      - name: Plugin regression tests (scheduling, persistence, backup/restore, lifecycle)
+        run: >-
+          npm --prefix web run test -- --run
+          src/test/medication_tracker_plugin.test.ts
+          src/test/medication_tracker_ui.test.tsx
+          src/test/plugin_system.test.ts
+          src/test/plugin_backup.test.ts
+          src/test/plugin_migration_data.test.ts
+
+      - name: Package plugin, version + integrity metadata
+        id: package
+        run: >-
+          node scripts/package-plugin.mjs
+          --id medication-tracker
+          --dir web/src/plugins/medication-tracker
+          --out artifacts/plugin
+
+      - name: Verify installable artifact
+        run: |
+          test -f "artifacts/plugin/${{ steps.package.outputs.package-file }}"
+          test -f artifacts/plugin/checksums.txt
+          cat artifacts/plugin/checksums.txt
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact-name }}
+          path: artifacts/plugin/
+          if-no-files-found: error

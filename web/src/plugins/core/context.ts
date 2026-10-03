@@ -9,15 +9,23 @@
 import type {
   PluginContext,
   PluginNodeType,
+  PluginNotificationProvider,
+  PluginNotificationJob,
   PluginSchedulerJob,
 } from './types';
 import type { Reminder } from '../../types';
 import { MINDMESH_CORE_VERSION, PLUGIN_API_VERSION } from '../../types/plugin';
 import { logger } from '../../services/logger';
 
-function storageKey(pluginId: string, key: string): string {
+/**
+ * Namespaced localStorage key for one plugin-owned value. Exported so a plugin's
+ * backup handler can read its own storage without a live PluginContext.
+ */
+export function pluginStorageKey(pluginId: string, key: string): string {
   return `mindmesh_plugin_${pluginId}_${key}`;
 }
+
+const storageKey = pluginStorageKey;
 
 function readNamespaced<T>(pluginId: string, key: string, fallback: T): T {
   try {
@@ -47,6 +55,10 @@ export interface PluginContextDeps {
   /** Registered graph node types (mutated by the graph API). */
   registerNodeType: (pluginId: string, nodeType: PluginNodeType) => void;
   getNodeTypes: (pluginId: string) => PluginNodeType[];
+  /** Registers/replaces the plugin's shared-notification provider. */
+  registerNotificationProvider: (provider: PluginNotificationProvider) => void;
+  /** Removes the plugin's shared-notification provider. */
+  clearNotificationProvider: (pluginId: string) => void;
 }
 
 /** Builds the controlled context handed to a plugin on activation. */
@@ -88,6 +100,34 @@ export function createPluginContext(pluginId: string, deps: PluginContextDeps): 
       notify: (title, message, details) => {
         logger.info('Plugins', `[${pluginId}] ${title}`, { message, ...(details ?? {}) });
       },
+      register: (provider) => {
+        const wrapped: PluginNotificationProvider = {
+          pluginId,
+          getDesired: (now: Date): PluginNotificationJob[] => {
+            try {
+              return provider.getDesired(now);
+            } catch (err) {
+              logger.warn('Plugins', `[${pluginId}] notification provider threw; skipping`, {
+                error: err instanceof Error ? err.message : String(err),
+              });
+              return [];
+            }
+          },
+          onAction: provider.onAction
+            ? (action, job) => {
+                try {
+                  provider.onAction!(action, job);
+                } catch (err) {
+                  logger.warn('Plugins', `[${pluginId}] notification action threw`, {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                }
+              }
+            : undefined,
+        };
+        deps.registerNotificationProvider(wrapped);
+      },
+      clear: () => deps.clearNotificationProvider(pluginId),
     },
     scheduler: {
       schedule: (job: PluginSchedulerJob) => {

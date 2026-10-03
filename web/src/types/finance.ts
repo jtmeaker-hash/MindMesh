@@ -336,7 +336,19 @@ export interface MoneyState {
   payCycleOverrides: Record<string, number>; // cycleEndDate -> overridden pay
 }
 
-export type AppNavTab = 'reminders' | 'routines' | 'contacts' | 'money' | 'dashboard' | 'vehicles';
+/**
+ * Primary navigation tab id. Core owns the first set; plugins may contribute
+ * additional tab ids, so the union stays open (`string & {}`) rather than
+ * forcing a Core edit for every new plugin.
+ */
+export type AppNavTab =
+  | 'reminders'
+  | 'routines'
+  | 'contacts'
+  | 'money'
+  | 'dashboard'
+  | 'vehicles'
+  | (string & Record<never, never>);
 export type MoneySubTab = 'overview' | 'bills' | 'income' | 'extra' | 'tips' | 'expenses' | 'settings' | 'categories';
 
 export type DashboardTimeFilter = 'today' | '7days' | '30days' | '3months' | 'all';
