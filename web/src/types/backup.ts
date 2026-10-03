@@ -6,6 +6,8 @@ import { AppNotificationSettings, NotificationHistoryEntry } from './notificatio
 import { DiagnosticPreferences, DiagnosticsHistoryEntry, LogEntry } from './diagnostics';
 import { Routine } from './routine';
 import { SmartEngineSettings } from './smartEngine';
+import { VehicleState } from './vehicle';
+import { PluginBackupSection, PluginRegistryState } from './plugin';
 
 export interface AppPreferences {
   theme?: 'dark' | 'light' | 'system';
@@ -24,6 +26,8 @@ export interface MindMeshBackupData {
   /** Optional for compatibility with backups created before Routine Builder. */
   routines?: Routine[];
   nodePositions: NodePositionMap;
+  /** Optional for compatibility with backups created before Vehicle Maintenance. */
+  vehicles?: VehicleState;
   money: MoneyState;
   contacts: Contact[];
   contactCategories?: string[];
@@ -42,6 +46,16 @@ export interface MindMeshBackupData {
     logs?: LogEntry[];
     history?: DiagnosticsHistoryEntry[];
   };
+  /**
+   * Plugin-owned data, keyed by plugin id. Additive: backups created before
+   * the plugin architecture simply omit it and restore unchanged.
+   */
+  plugins?: Record<string, PluginBackupSection>;
+  /**
+   * Persisted plugin registry (install/enable state). Optional so older
+   * backups remain valid; absent means "default plugin state".
+   */
+  pluginRegistry?: PluginRegistryState;
   statistics?: {
     totalCompletedCount?: number;
     lastResetAt?: string;
@@ -89,6 +103,14 @@ export interface RestoreSummary {
   routineCount?: number;
   activeRoutineCount?: number;
   routineHistoryCount?: number;
+  vehicleCount?: number;
+  serviceRecordCount?: number;
+  maintenanceItemCount?: number;
+  knownIssueCount?: number;
+  odometerRecordCount?: number;
+  /** Number of plugin data sections included in the backup. */
+  pluginSectionCount?: number;
+  pluginSectionIds?: string[];
   warnings: string[];
 }
 

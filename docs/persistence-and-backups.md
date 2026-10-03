@@ -14,6 +14,23 @@ Importing a backup also records its node positions under a dedicated key (`mindm
 
 Connection brightness and connection contrast are stored on the existing appearance slice (`data.appearance.connectionBrightness` and `data.appearance.connectionContrast`), so they are serialized by the current full-backup path with no separate key or format change. Both fields arrived after the first appearance release, so normalization treats a missing value as "use the default" (`connectionBrightness` 1, `connectionContrast` 0.35) and clamps anything outside the supported range. Appearance data saved before the fields existed therefore still validates and restores rather than being reported as malformed.
 
+## Plugin registry and plugin data
+
+The plugin architecture adds two additive, optional parts to the payload without changing the backup format version:
+
+- `data.plugins` — plugin-owned data keyed by plugin id. Each section carries the plugin id, name, plugin version, data/schema version, the `enabled` flag (configuration only), optional settings/history, a last-modified timestamp and the `data` itself.
+- `data.pluginRegistry` — install/enable state for the Plugin Manager.
+
+Inside the app, the plugin data continues to use the existing `money` and `vehicles` slices, normalised non-destructively, while the registry lives in the optional `plugins` slice. Plugin data is serialized for **every** installed plugin, including disabled ones, so disabling a plugin never risks losing its data.
+
+Restoring is isolated per plugin: a section whose plugin is available is applied immediately; a section whose plugin is **not** installed (or that fails to apply) is preserved verbatim in a separate retained-data store (`mindmesh_plugin_retained_v1`) and marked as belonging to an unavailable plugin. The live core state is still restored regardless. The retained payload is adopted automatically once the plugin is installed/re-enabled (restore → migrate → verify), and the retained copy is dropped only after both succeed, so a migration failure can never destroy it. Retained payloads are included in every subsequent backup until adopted.
+
+Backups created before the plugin architecture simply omit these fields and restore unchanged; `validateBackup` treats a missing plugin section as `0` plugin sections, and older `{ version, schemaVersion, data }` sections are backfilled with identity metadata on load. Plugin schema migrations are recorded (`completedMigrations`) so they are idempotent and only ever run once, and `initialize()` runs them for plugins that were auto-enabled on upgrade as well as for plugins enabled later.
+
+The runtime installer records validated plugin packages in a separate key (`mindmesh_plugin_packages_v1`). This is install/provenance metadata, not user data: it is deliberately kept outside the backup payload, and removing a package record never removes the plugin's data.
+
+Permanent deletion of plugin data is a distinct, user-confirmed **Delete plugin data** action — disabling or uninstalling a plugin never removes its stored data, backup data, history or restoration settings. A full **factory reset** is the only other destructive path: it clears the live state, the retained-data store and the installed-package store together, so an explicit "wipe everything" cannot leave hidden plugin data behind.
+
 ## Zoomed-out node visibility
 
 Reminders and steps are hidden purely as a rendering effect when the node view is zoomed sufficiently far out. Their data, saved state and positions are untouched, the transition is driven by camera distance with a hysteresis band to prevent flicker, and primary nodes (root, categories) always remain visible.

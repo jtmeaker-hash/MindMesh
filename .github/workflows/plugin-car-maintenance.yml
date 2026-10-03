@@ -1,0 +1,95 @@
+# MindMesh Plugin — Car Maintenance
+# ---------------------------------------------------------------------------
+# Isolated plugin workflow. Runs for the plugin/car-maintenance distribution
+# branch and packages ONLY this plugin as a downloaded .mindmesh-plugin.zip
+# artifact. It never builds a full MindMesh APK and never triggers for changes
+# that belong to another plugin.
+# ---------------------------------------------------------------------------
+
+name: MindMesh Plugin — Car Maintenance
+
+on:
+  push:
+    branches: [ plugin/car-maintenance ]
+    paths:
+      - 'web/src/plugins/car-maintenance/**'
+      - 'web/src/plugins/core/**'
+      - 'web/src/types/plugin.ts'
+      - 'web/src/types/vehicle.ts'
+      - 'web/src/services/storage.ts'
+      - 'web/src/services/backup.ts'
+      - 'web/src/services/vehicleMaintenance.ts'
+      - 'web/src/services/vehicleNotifications.ts'
+      - 'web/src/services/vehicleDiagnostics.ts'
+      - 'web/src/components/vehicles/**'
+      - 'scripts/package-plugin.mjs'
+      - '.github/workflows/plugin-car-maintenance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mindmesh-plugin-car-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  car-maintenance:
+    name: Car Maintenance plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin branch
+        uses: actions/checkout@v4
+        with:
+          ref: plugin/car-maintenance
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Lint
+        run: npm --prefix web run lint
+
+      - name: TypeScript type-check
+        run: npm --prefix web run type-check
+
+      - name: Plugin + Car Maintenance regression tests
+        run: >-
+          npm --prefix web run test -- --run
+          src/test/plugin_system.test.ts
+          src/test/vehicle_maintenance.test.ts
+          src/test/vehicle_notifications.test.ts
+          src/test/vehicle_ui.test.tsx
+
+      - name: Validate manifest and Core API compatibility
+        id: validate
+        run: >-
+          node scripts/package-plugin.mjs
+          --id car-maintenance
+          --dir web/src/plugins/car-maintenance
+          --check
+
+      - name: Package plugin, version + integrity metadata
+        id: package
+        run: >-
+          node scripts/package-plugin.mjs
+          --id car-maintenance
+          --dir web/src/plugins/car-maintenance
+          --out artifacts/plugin
+
+      - name: Show package checksums
+        run: cat artifacts/plugin/checksums.txt
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact-name }}
+          path: artifacts/plugin/
+          if-no-files-found: error

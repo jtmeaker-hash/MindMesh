@@ -22,10 +22,25 @@ import { normalizeNodePositions } from './nodePositions';
 import { normalizeReminders } from './reminders';
 import { normalizeIncomeConfig } from '../utils/payRates';
 import { normalizeMoneyState } from '../utils/finance';
+import { VehicleState } from '../types/vehicle';
+import { createDefaultVehicleState, normalizeVehicleState } from './vehicleMaintenance';
+import {
+  InstalledPluginPackageState,
+  PluginRegistryState,
+  RetainedPluginData,
+  createEmptyInstalledPackageState,
+  createEmptyRegistryState,
+  createEmptyRetainedPluginData,
+  normalizeInstalledPluginPackageState,
+  normalizePluginRegistryState,
+  normalizeRetainedPluginData,
+} from '../types/plugin';
 
 // v11 adds direct-debit `kind` and general-expense `repeat` / optional `date`.
+// v12 adds the Vehicle Maintenance & Service Tracking module (`vehicles`).
+// v13 adds the plugin registry state (`plugins`), additive and non-destructive.
 // Older payloads are normalized non-destructively on load (see normalizeMoneyState).
-export const CURRENT_STORAGE_VERSION = 11;
+export const CURRENT_STORAGE_VERSION = 13;
 const STORAGE_KEY_V2 = 'mindmesh_state_v2';
 const LEGACY_CATEGORIES_KEY = 'mindmesh_categories_v1';
 const LEGACY_REMINDERS_KEY = 'mindmesh_reminders_v1';
@@ -37,6 +52,17 @@ const NODE_POSITIONS_KEY = 'mindmesh_positions_v1';
  */
 export const LAST_IMPORTED_POSITIONS_KEY = 'mindmesh_last_imported_positions_v1';
 export const ROUTINE_QUARANTINE_KEY = 'mindmesh_routine_quarantine_v1';
+/**
+ * Plugin data restored while its plugin was unavailable. It lives in its own key
+ * (outside the live state payload) so no core migration, reset or normalization
+ * can ever touch it before the owning plugin adopts it.
+ */
+export const RETAINED_PLUGIN_DATA_KEY = 'mindmesh_plugin_retained_v1';
+/**
+ * Validated plugin packages recorded by the runtime installer. Install/provenance
+ * state only — deleting a record never deletes the plugin's stored user data.
+ */
+export const INSTALLED_PLUGIN_PACKAGES_KEY = 'mindmesh_plugin_packages_v1';
 
 export function getDefaultState(): MindMeshStorageData {
   return {
@@ -54,6 +80,8 @@ export function getDefaultState(): MindMeshStorageData {
     notificationHistory: [],
     smartEngineSettings: { ...DEFAULT_SMART_ENGINE_SETTINGS, featureToggles: {} },
     routines: [],
+    vehicles: createDefaultVehicleState(),
+    plugins: createEmptyRegistryState(),
     preferences: {
       theme: 'dark',
       defaultReminderPriority: 'medium',
@@ -144,6 +172,8 @@ function migrateLegacyStorage(): MindMeshStorageData | null {
       notifications: { ...DEFAULT_NOTIFICATION_SETTINGS },
       notificationHistory: [],
       routines: [],
+      vehicles: createDefaultVehicleState(),
+      plugins: createEmptyRegistryState(),
       preferences: {
         theme: 'dark',
       },
@@ -245,6 +275,8 @@ export function loadAllData(): MindMeshStorageData {
 
     const smartEngineSettings: SmartEngineSettings = normalizeSmartEngineSettings(parsed.smartEngineSettings);
 
+    const vehicles: VehicleState = normalizeVehicleState(parsed.vehicles);
+
     const routineResult = normalizeRoutines(parsed.routines);
     // Only write quarantine evidence when malformed data is actually found. Clean
     // hydration must remain read-only so transactional write-failure tests and
@@ -281,6 +313,8 @@ export function loadAllData(): MindMeshStorageData {
       notificationHistory,
       smartEngineSettings,
       routines: routineResult.routines,
+      vehicles,
+      plugins: normalizePluginRegistryState(parsed.plugins),
       preferences,
     };
   } catch (e) {
@@ -510,6 +544,104 @@ export function loadRoutines(): Routine[] {
   return loadAllData().routines || [];
 }
 
+/**
+ * Vehicle Maintenance helper methods. The whole module is stored as one slice so
+ * a single save keeps vehicles, history, intervals and notification state
+ * consistent with each other.
+ */
+export function loadVehicleState(): VehicleState {
+  return normalizeVehicleState(loadAllData().vehicles);
+}
+
+export function saveVehicleState(vehicles: VehicleState): void {
+  const current = loadAllData();
+  saveAllData({ ...current, vehicles: normalizeVehicleState(vehicles) });
+}
+
+/**
+ * Plugin registry helper methods. The registry is a normal state slice, so it
+ * travels with backups and is covered by the same migration pipeline.
+ */
+export function loadPluginRegistry(): PluginRegistryState {
+  return normalizePluginRegistryState(loadAllData().plugins);
+}
+
+export function savePluginRegistry(plugins: PluginRegistryState): void {
+  const current = loadAllData();
+  saveAllData({ ...current, plugins: normalizePluginRegistryState(plugins) });
+}
+
+/**
+ * Plugin data retained for plugins that are not currently available. Backups
+ * include these sections, so retained data keeps travelling with every new
+ * backup until its plugin adopts or the user explicitly deletes it.
+ */
+export function loadRetainedPluginData(): RetainedPluginData {
+  try {
+    const raw = localStorage.getItem(RETAINED_PLUGIN_DATA_KEY);
+    if (!raw) return createEmptyRetainedPluginData();
+    return normalizeRetainedPluginData(JSON.parse(raw));
+  } catch (error) {
+    logger.error('Storage', 'Failed to read retained plugin data', error);
+    return createEmptyRetainedPluginData();
+  }
+}
+
+export function saveRetainedPluginData(data: RetainedPluginData): void {
+  try {
+    const normalized = normalizeRetainedPluginData(data);
+    localStorage.setItem(
+      RETAINED_PLUGIN_DATA_KEY,
+      JSON.stringify({ ...normalized, lastUpdated: new Date().toISOString() })
+    );
+  } catch (error) {
+    logger.error('Storage', 'Failed to persist retained plugin data', error);
+  }
+}
+
+export function clearRetainedPluginData(): void {
+  try {
+    localStorage.removeItem(RETAINED_PLUGIN_DATA_KEY);
+  } catch (error) {
+    logger.error('Storage', 'Failed to clear retained plugin data', error);
+  }
+}
+
+/**
+ * Validated plugin packages installed at runtime. Kept outside the live state
+ * payload so a malformed package record can never affect Core state loading.
+ */
+export function loadInstalledPluginPackages(): InstalledPluginPackageState {
+  try {
+    const raw = localStorage.getItem(INSTALLED_PLUGIN_PACKAGES_KEY);
+    if (!raw) return createEmptyInstalledPackageState();
+    return normalizeInstalledPluginPackageState(JSON.parse(raw));
+  } catch (error) {
+    logger.error('Storage', 'Failed to read installed plugin packages', error);
+    return createEmptyInstalledPackageState();
+  }
+}
+
+export function saveInstalledPluginPackages(data: InstalledPluginPackageState): void {
+  try {
+    const normalized = normalizeInstalledPluginPackageState(data);
+    localStorage.setItem(
+      INSTALLED_PLUGIN_PACKAGES_KEY,
+      JSON.stringify({ ...normalized, lastUpdated: new Date().toISOString() })
+    );
+  } catch (error) {
+    logger.error('Storage', 'Failed to persist installed plugin packages', error);
+  }
+}
+
+export function clearInstalledPluginPackages(): void {
+  try {
+    localStorage.removeItem(INSTALLED_PLUGIN_PACKAGES_KEY);
+  } catch (error) {
+    logger.error('Storage', 'Failed to clear installed plugin packages', error);
+  }
+}
+
 export function loadRoutineQuarantine(): import('../types/routine').RoutineQuarantineEntry[] {
   try {
     const raw = localStorage.getItem(ROUTINE_QUARANTINE_KEY);
@@ -659,6 +791,11 @@ export function resetToSample(): MindMeshStorageData {
 export function resetMindMeshEntirely(): MindMeshStorageData {
   const freshState = getDefaultState();
   saveAllData(freshState);
+  // A factory reset is explicitly destructive: it must also purge the
+  // out-of-band stores, otherwise "wipe everything" would leave hidden plugin
+  // data (retained payloads) and package records behind to resurface later.
+  clearRetainedPluginData();
+  clearInstalledPluginPackages();
   logger.info('Storage', 'MindMesh reset entirely to clean default state');
   return freshState;
 }
@@ -717,6 +854,8 @@ export function importStorageJson(json: string): boolean {
       notificationHistory: normalizeNotificationHistory(parsed.notificationHistory),
       smartEngineSettings: normalizeSmartEngineSettings(parsed.smartEngineSettings),
       routines: normalizeRoutines(parsed.routines).routines,
+      vehicles: normalizeVehicleState(parsed.vehicles),
+      plugins: normalizePluginRegistryState(parsed.plugins),
       preferences: parsed.preferences || {},
     };
     saveAllData(state);

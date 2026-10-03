@@ -125,6 +125,13 @@ export interface MindMeshStorageData {
   smartEngineSettings?: import('./smartEngine').SmartEngineSettings;
   /** Optional so pre-Routine backups and local payloads remain readable. */
   routines?: import('./routine').Routine[];
+  /** Optional so payloads stored before Vehicle Maintenance remain readable. */
+  vehicles?: import('./vehicle').VehicleState;
+  /**
+   * Plugin registry install/enable state. Absent on payloads stored before the
+   * plugin architecture and defaulted by the Plugin Manager on first load.
+   */
+  plugins?: import('./plugin').PluginRegistryState;
 }
 
 export * from './finance';
@@ -134,6 +141,8 @@ export * from './appearance';
 export * from './notifications';
 export * from './diagnostics';
 export * from './smartEngine';
+export * from './vehicle';
+export * from './plugin';
 
 export type ViewMode = 'active' | 'completed';
 

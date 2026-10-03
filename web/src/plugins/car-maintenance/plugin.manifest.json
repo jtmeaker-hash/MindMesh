@@ -1,0 +1,12 @@
+{
+  "id": "car-maintenance",
+  "name": "Car Maintenance",
+  "version": "1.0.3",
+  "description": "Vehicles, odometer tracking, service history, service intervals, next-service planning, serviceable items, known issues, parts estimates and odometer reminders.",
+  "minimumCoreVersion": "1.8.0",
+  "apiVersion": "1.0.0",
+  "schemaVersion": 1,
+  "author": "MindMesh",
+  "dependencies": [],
+  "permissions": ["storage", "notifications", "scheduler", "reminders", "backup", "settings", "diagnostics"]
+}

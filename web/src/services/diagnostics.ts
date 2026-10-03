@@ -28,6 +28,8 @@ import { computeDashboardMetrics } from '../utils/dashboard';
 import { getCurrentPayCycleSummary, getUpcomingMoneyTimeline } from '../utils/finance';
 import { logger } from './logger';
 import { diagnoseRoutines } from './routineSafety';
+import { diagnoseVehicleMaintenance } from './vehicleDiagnostics';
+import { describePlugins } from '../plugins/core/runtime';
 
 export const BUILD_VERSION = `${APP_VERSION} (${import.meta.env.MODE})`;
 
@@ -40,7 +42,9 @@ interface DiagnosticsContext {
   now: number;
 }
 
-type DiagnosticCheck = (ctx: DiagnosticsContext) => DiagnosticResult | Promise<DiagnosticResult>;
+type DiagnosticCheck = (
+  ctx: DiagnosticsContext
+) => DiagnosticResult | DiagnosticResult[] | Promise<DiagnosticResult | DiagnosticResult[]>;
 
 interface ResultInput {
   id: string;
@@ -1486,6 +1490,9 @@ const checkMoneyTimeline: DiagnosticCheck = ({ state }) => {
   }
 };
 
+/** Vehicle Maintenance aggregates several focused checks into one entry point. */
+const checkVehicleMaintenance: DiagnosticCheck = (ctx) => diagnoseVehicleMaintenance(ctx.state, ctx.now);
+
 const checkRoutineSafety: DiagnosticCheck = () => {
   const routineReport = diagnoseRoutines();
   const issues = routineReport.invalidSessions.length + routineReport.missingLinks.length + routineReport.quarantined.length;
@@ -1508,8 +1515,35 @@ const checkRoutineSafety: DiagnosticCheck = () => {
  * Runner
  * ------------------------------------------------------------------ */
 
+/**
+ * Plugin system health. A failed plugin must be diagnosable without crashing
+ * Core, so this reports counts, versions, compatibility and the last error.
+ */
+const checkPluginHealth: DiagnosticCheck = () => {
+  const summary = describePlugins();
+  const problems = summary.errored + summary.incompatible + summary.missingDependency;
+  const status: DiagnosticStatus =
+    problems > 0 ? 'fail' : summary.migrationRequired > 0 || summary.updateAvailable > 0 ? 'warning' : 'pass';
+  return makeResult({
+    id: 'plugins.health',
+    name: 'Plugin system',
+    category: 'plugins',
+    status,
+    explanation:
+      problems > 0
+        ? `${problems} plugin(s) need attention (error, incompatible, or missing dependency).`
+        : summary.total === 0
+          ? 'No plugins are registered in this build.'
+          : `${summary.enabled}/${summary.total} plugin(s) enabled; Plugin API ${summary.apiVersion}, Core ${summary.coreVersion}.`,
+    details: summary as unknown as Record<string, unknown>,
+    suggestedFix:
+      problems > 0 ? 'Open Settings → Plugins to inspect, disable or reinstall the failing plugin.' : undefined,
+  });
+};
+
 const QUICK_CHECKS: DiagnosticCheck[] = [
   checkAppStartup,
+  checkPluginHealth,
   checkAppVersions,
   checkLastStartup,
   checkLastError,
@@ -1541,6 +1575,7 @@ const QUICK_CHECKS: DiagnosticCheck[] = [
   checkPwaInstall,
   checkNetwork,
   checkRoutineSafety,
+  checkVehicleMaintenance,
   checkRoutineGraphLayout,
   checkLayoutOverflow,
 ];
@@ -1563,7 +1598,9 @@ export async function runDiagnostics(mode: DiagnosticMode = 'quick'): Promise<Di
   const results: DiagnosticResult[] = [];
   for (const check of checks) {
     try {
-      results.push(await check(ctx));
+      const output = await check(ctx);
+      if (Array.isArray(output)) results.push(...output);
+      else results.push(output);
     } catch (err) {
       // A failed check must never take the diagnostics page down.
       results.push(

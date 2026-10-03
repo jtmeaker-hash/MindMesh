@@ -27,6 +27,7 @@ import {
   Bell,
   Activity,
   AlertTriangle,
+  Plug,
 } from 'lucide-react';
 
 import {
@@ -85,6 +86,8 @@ import {
   loadAllData,
   loadRoutines,
   loadSmartEngineSettings,
+  loadVehicleState,
+  saveVehicleState,
 } from './utils/storage';
 import { generateCompletedCategoryMesh } from './utils/layout';
 import { generateNestedActiveMesh, generateNestedCompletedOverviewMesh } from './utils/nestedLayout';
@@ -111,12 +114,24 @@ import { SmartAssistantModal } from './components/modals/SmartAssistantModal';
 import { AppBackground } from './components/background/AppBackground';
 
 import { AppNavigation } from './components/navigation/AppNavigation';
-import { MoneyModule } from './components/money/MoneyModule';
 import { reconcileDirectDebits } from './utils/finance';
 import { DashboardModule } from './components/dashboard/DashboardModule';
 import { RoutineModule } from './components/routines/RoutineModule';
 import { ContactsModule } from './components/contacts/ContactsModule';
 import { SpatialGraph } from './components/graph/SpatialGraph';
+import { getPluginManager } from './plugins/core/runtime';
+import { registerBuiltinPlugins } from './plugins/registerBuiltins';
+import { usePluginRuntime } from './plugins/core/usePluginRuntime';
+import { PluginManagerModal } from './plugins/core/components/PluginManagerModal';
+import type { MindMeshHostAPI } from './plugins/core/types';
+
+// The plugin runtime is created and populated once per process. Core only
+// interacts with it through the generic registry/manager interfaces.
+const pluginManager = getPluginManager();
+registerBuiltinPlugins(pluginManager);
+// Resolve plugin registration/enablement synchronously so the first render
+// already shows built-in plugin tabs (Money, Vehicles) exactly as before.
+pluginManager.bootstrapSync();
 
 const nodeTypes = {
   rootNode: RootNode,
@@ -142,6 +157,11 @@ function MindMeshFlow() {
     loadNotificationHistory()
   );
   const [routines, setRoutines] = useState(() => loadRoutines());
+  const [vehicleState, setVehicleState] = useState(() => loadVehicleState());
+
+  // Plugin runtime: Core derives plugin tabs and routes generically from this.
+  const pluginRuntime = usePluginRuntime(pluginManager);
+  const [pluginsModalOpen, setPluginsModalOpen] = useState(false);
 
   // Navigation state
   const [mainNavTab, setMainNavTab] = useState<AppNavTab>('reminders');
@@ -251,6 +271,10 @@ function MindMeshFlow() {
     saveNotificationHistory(notificationHistory);
   }, [notificationHistory]);
 
+  useEffect(() => {
+    saveVehicleState(vehicleState);
+  }, [vehicleState]);
+
   const chrome = useMemo(() => getChromeTheme(appearance), [appearance]);
 
   // ---------------------------------------------------------------------
@@ -332,21 +356,81 @@ function MindMeshFlow() {
     [reminders]
   );
 
+  // Core → plugin host bridge. Plugins receive this through their route props;
+  // they cannot reach into arbitrary application internals.
+  const pluginHostApi: MindMeshHostAPI = useMemo(
+    () => ({
+      moneyState,
+      onUpdateMoneyState: setMoneyState,
+      vehicleState,
+      onUpdateVehicleState: setVehicleState,
+      reminders,
+      categories,
+      onUpdateReminders: setReminders,
+      onUpdateCategories: setCategories,
+      notificationSettings,
+      onOpenReminder: handleOpenReminderById,
+      navigateToTab: setMainNavTab,
+    }),
+    [moneyState, vehicleState, reminders, categories, notificationSettings, handleOpenReminderById]
+  );
+
+  // Keep the manager's host view fresh, then initialise once. Initialisation is
+  // idempotent and auto-enables built-in plugins so the migration is invisible.
+  useEffect(() => {
+    pluginManager.setHost(pluginHostApi);
+  }, [pluginHostApi]);
+
+  useEffect(() => {
+    void pluginManager.initialize();
+  }, []);
+
+  // Enabling/disabling a plugin changes the available tabs. If the user is on a
+  // plugin tab that just became unavailable, return to the core MindMesh tab.
+  const pluginTabSignature = useMemo(
+    () => pluginManager.getEnabledTabs().join(','),
+    [pluginRuntime.revision]
+  );
+  const pluginTabSet = useMemo(() => new Set(pluginTabSignature.split(',').filter(Boolean)), [pluginTabSignature]);
+  // Primary navigation order. Plugin tabs appear only while their plugin is
+  // enabled; core tabs are always present.
+  const visibleNavTabs = useMemo<AppNavTab[]>(() => {
+    const core: AppNavTab[] = ['reminders', 'routines', 'contacts', 'dashboard'];
+    const pluginTabs = pluginTabSignature.split(',').filter(Boolean) as AppNavTab[];
+    const order: AppNavTab[] = ['reminders', 'routines', 'contacts', 'money', 'vehicles', 'dashboard'];
+    return order.filter((tab) => core.includes(tab) || pluginTabs.includes(tab));
+  }, [pluginTabSignature]);
+  useEffect(() => {
+    const pluginOwnedTabs: AppNavTab[] = ['money', 'vehicles'];
+    if (pluginOwnedTabs.includes(mainNavTab) && !pluginTabSet.has(mainNavTab)) {
+      setMainNavTab('reminders');
+    }
+  }, [mainNavTab, pluginTabSet]);
+
+  const vehiclePluginEnabled = pluginManager.isEnabled('car-maintenance');
+
   useEffect(() => {
     configureNotificationEngine({
       reminders,
       settings: notificationSettings,
       history: notificationHistory,
+      // Vehicle reminders are reconciled by this same engine only while the Car
+      // Maintenance plugin is enabled, so disabling it stops its scheduling
+      // without touching unrelated Core notifications.
+      vehicleState: vehiclePluginEnabled ? vehicleState : undefined,
       onHistoryChange: setNotificationHistory,
       onOpenReminder: handleOpenReminderById,
       onCompleteReminder: (remId) => {
         setReminders((prev) => handleReminderCompletion(remId, prev));
       },
+      onOpenVehicle: () => {
+        setMainNavTab('vehicles');
+      },
       onActionError: (message) => {
         logger.warn('Notifications', 'Notification action failed', { message });
       },
     });
-  }, [reminders, notificationSettings, notificationHistory, handleOpenReminderById]);
+  }, [reminders, notificationSettings, notificationHistory, handleOpenReminderById, vehicleState, vehiclePluginEnabled]);
 
   // Compact per-reminder notification status for the mesh node badges.
   const notificationStatusMap = useMemo(() => {
@@ -852,6 +936,7 @@ function MindMeshFlow() {
     // which re-schedules everything against the restored reminders.
     setNotificationSettings(full.notifications || loadNotificationSettings());
     setNotificationHistory(full.notificationHistory || loadNotificationHistory());
+    setVehicleState(full.vehicles || loadVehicleState());
 
     setFocusedCategoryId(null);
     setSelectedCompletedCategory(null);
@@ -1039,8 +1124,10 @@ function MindMeshFlow() {
               }
             }}
             activeRemindersCount={activeCount}
-            upcomingBillsCount={moneyState.directDebits.filter((b) => b.active).length}
+            upcomingBillsCount={pluginManager.isEnabled('money-management') ? moneyState.directDebits.filter((b) => b.active).length : 0}
             contactsCount={contacts.length}
+            vehiclesCount={pluginManager.isEnabled('car-maintenance') ? vehicleState.vehicles.length : 0}
+            visibleTabs={visibleNavTabs}
           />
         </div>
 
@@ -1234,6 +1321,33 @@ function MindMeshFlow() {
                 >
                   <Sparkles size={15} color="#818cf8" />
                   <span>Auto-Arrange Mesh</span>
+                </button>
+                <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
+                  EXTENSIONS
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setPluginsModalOpen(true);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(99, 102, 241, 0.3)',
+                    color: '#a5b4fc',
+                    fontSize: 13,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Plug size={15} color="#818cf8" />
+                  <span>Plugins</span>
                 </button>
                 <div style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: '#64748b' }}>
                   DATA & BACKUP
@@ -1669,26 +1783,21 @@ function MindMeshFlow() {
         </div>
       )}
 
-      {/* MONEY SECTION */}
-      {mainNavTab === 'money' && (
-        <div className="mm-module" style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, paddingTop: 0, width: '100%', display: 'flex' }}>
-          <MoneyModule
-            moneyState={moneyState}
-            onUpdateMoneyState={setMoneyState}
-            reminders={reminders}
-            categories={categories}
-            onUpdateReminders={setReminders}
-            onUpdateCategories={setCategories}
-            onOpenReminderModal={(remId) => {
-              const r = reminders.find((rem) => rem.id === remId);
-              if (r) {
-                setActiveReminder(r);
-                setReminderModalOpen(true);
-              }
-            }}
-          />
-        </div>
-      )}
+      {/* PLUGIN MODULES — rendered generically from enabled plugin routes. Core
+          never imports a specific plugin's UI. Disabled plugins render nothing. */}
+      {pluginManager
+        .getEnabledRoutes()
+        .filter((route) => route.tab === mainNavTab)
+        .map((route) => {
+          const RouteComponent = route.component;
+          return (
+            <RouteComponent
+              key={route.id}
+              context={pluginManager.getContext(route.pluginId)}
+              host={pluginHostApi}
+            />
+          );
+        })}
 
       {/* DASHBOARD SECTION */}
       {mainNavTab === 'dashboard' && (
@@ -1826,6 +1935,8 @@ function MindMeshFlow() {
           setBackupModalOpen(true);
         }}
       />
+
+      <PluginManagerModal isOpen={pluginsModalOpen} onClose={() => setPluginsModalOpen(false)} />
     </div>
   );
 }

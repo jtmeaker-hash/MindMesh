@@ -1,0 +1,12 @@
+{
+  "id": "money-management",
+  "name": "Money Management",
+  "version": "1.2.0",
+  "description": "Income, pay cycles, casual pay rates, bills, direct debits, expenses, repeating expenses, budgets, tips and upcoming-payment reminders.",
+  "minimumCoreVersion": "1.8.0",
+  "apiVersion": "1.0.0",
+  "schemaVersion": 1,
+  "author": "MindMesh",
+  "dependencies": [],
+  "permissions": ["storage", "notifications", "scheduler", "reminders", "backup", "settings", "diagnostics"]
+}
