@@ -140,6 +140,10 @@ const nodeTypes = {
   subtaskNode: SubtaskNode,
 };
 
+// Core navigation tabs are always present; plugin tabs appear only while their
+// plugin is enabled. Kept generic so a new plugin never needs a Core edit.
+const CORE_NAV_TABS: AppNavTab[] = ['reminders', 'routines', 'contacts', 'dashboard'];
+
 function MindMeshFlow() {
   // Persistence state
   const [categories, setCategories] = useState<Category[]>(() => loadCategories());
@@ -395,19 +399,38 @@ function MindMeshFlow() {
   // Primary navigation order. Plugin tabs appear only while their plugin is
   // enabled; core tabs are always present.
   const visibleNavTabs = useMemo<AppNavTab[]>(() => {
-    const core: AppNavTab[] = ['reminders', 'routines', 'contacts', 'dashboard'];
     const pluginTabs = pluginTabSignature.split(',').filter(Boolean) as AppNavTab[];
-    const order: AppNavTab[] = ['reminders', 'routines', 'contacts', 'money', 'vehicles', 'dashboard'];
-    return order.filter((tab) => core.includes(tab) || pluginTabs.includes(tab));
+    const ordered: AppNavTab[] = ['reminders', 'routines', 'contacts', 'money', 'vehicles'];
+    for (const tab of pluginTabs) {
+      if (!ordered.includes(tab)) ordered.push(tab);
+    }
+    ordered.push('dashboard');
+    return ordered.filter((tab) => CORE_NAV_TABS.includes(tab) || pluginTabs.includes(tab));
   }, [pluginTabSignature]);
   useEffect(() => {
-    const pluginOwnedTabs: AppNavTab[] = ['money', 'vehicles'];
-    if (pluginOwnedTabs.includes(mainNavTab) && !pluginTabSet.has(mainNavTab)) {
+    if (!CORE_NAV_TABS.includes(mainNavTab) && !pluginTabSet.has(mainNavTab)) {
       setMainNavTab('reminders');
     }
   }, [mainNavTab, pluginTabSet]);
 
+  // Plugin tabs not already hardcoded in AppNavigation, rendered generically.
+  const genericPluginTabs = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const route of pluginManager.getEnabledRoutes()) {
+      if (!map.has(route.tab)) map.set(route.tab, route.label);
+    }
+    return [...map.entries()]
+      .filter(([id]) => id !== 'money' && id !== 'vehicles')
+      .map(([id, label]) => ({ id, label }));
+  }, [pluginRuntime.revision]);
+
   const vehiclePluginEnabled = pluginManager.isEnabled('car-maintenance');
+  // Generic plugin notification providers, refreshed whenever plugin
+  // enablement changes (revision bumps on every registry change).
+  const pluginNotificationProviders = useMemo(
+    () => pluginManager.getNotificationProviders(),
+    [pluginRuntime.revision]
+  );
 
   useEffect(() => {
     configureNotificationEngine({
@@ -418,6 +441,9 @@ function MindMeshFlow() {
       // Maintenance plugin is enabled, so disabling it stops its scheduling
       // without touching unrelated Core notifications.
       vehicleState: vehiclePluginEnabled ? vehicleState : undefined,
+      // Plugin-contributed notifications are reconciled by the same engine, so
+      // disabling a plugin stops its scheduling without any Core knowledge of it.
+      pluginNotificationProviders,
       onHistoryChange: setNotificationHistory,
       onOpenReminder: handleOpenReminderById,
       onCompleteReminder: (remId) => {
@@ -426,11 +452,15 @@ function MindMeshFlow() {
       onOpenVehicle: () => {
         setMainNavTab('vehicles');
       },
+      onOpenPluginTab: (pluginId) => {
+        const route = pluginManager.getEnabledRoutes().find((candidate) => candidate.pluginId === pluginId);
+        if (route) setMainNavTab(route.tab);
+      },
       onActionError: (message) => {
         logger.warn('Notifications', 'Notification action failed', { message });
       },
     });
-  }, [reminders, notificationSettings, notificationHistory, handleOpenReminderById, vehicleState, vehiclePluginEnabled]);
+  }, [reminders, notificationSettings, notificationHistory, handleOpenReminderById, vehicleState, vehiclePluginEnabled, pluginNotificationProviders]);
 
   // Compact per-reminder notification status for the mesh node badges.
   const notificationStatusMap = useMemo(() => {
@@ -1127,6 +1157,7 @@ function MindMeshFlow() {
             upcomingBillsCount={pluginManager.isEnabled('money-management') ? moneyState.directDebits.filter((b) => b.active).length : 0}
             contactsCount={contacts.length}
             vehiclesCount={pluginManager.isEnabled('car-maintenance') ? vehicleState.vehicles.length : 0}
+            pluginTabs={genericPluginTabs}
             visibleTabs={visibleNavTabs}
           />
         </div>

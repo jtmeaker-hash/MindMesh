@@ -18,6 +18,7 @@ import type {
   PluginErrorPhase,
   PluginErrorRecord,
   PluginNodeType,
+  PluginNotificationProvider,
   PluginRoute,
   PluginView,
 } from './types';
@@ -91,6 +92,7 @@ export class PluginManager implements PluginBackupProvider {
   private host: MindMeshHostAPI | null = null;
   private initialized = false;
   private nodeTypes = new Map<string, PluginNodeType[]>();
+  private notificationProviders = new Map<string, PluginNotificationProvider>();
   private listeners = new Set<() => void>();
   private revision = 0;
   private snapshot: PluginRuntimeSnapshot = { revision: 0, views: [], enabledIds: [] };
@@ -226,6 +228,8 @@ export class PluginManager implements PluginBackupProvider {
       // Disabling never removes data or migrations; only enablement changes.
     }
     this.nodeTypes.delete(pluginId);
+    // A disabled plugin stops contributing notifications immediately.
+    this.notificationProviders.delete(pluginId);
     this.registry.clearLoadError(pluginId);
     this.persist();
     this.rebuildSnapshot();
@@ -253,6 +257,7 @@ export class PluginManager implements PluginBackupProvider {
       }
       // Explicit deletion is the only path that may drop a retained payload.
       this.clearRetainedSection(pluginId);
+      this.notificationProviders.delete(pluginId);
       this.persist();
       this.rebuildSnapshot();
       return { ok: true };
@@ -415,7 +420,21 @@ export class PluginManager implements PluginBackupProvider {
         this.nodeTypes.set(id, [...existing.filter((n) => n.id !== nodeType.id), nodeType]);
       },
       getNodeTypes: (id) => this.nodeTypes.get(id) ?? [],
+      registerNotificationProvider: (provider) => {
+        this.notificationProviders.set(provider.pluginId, provider);
+      },
+      clearNotificationProvider: (id) => {
+        this.notificationProviders.delete(id);
+      },
     });
+  }
+
+  /**
+   * Generic notification providers contributed by active plugins. Core passes
+   * these to the shared notification engine; it never inspects their meaning.
+   */
+  getNotificationProviders(): PluginNotificationProvider[] {
+    return [...this.notificationProviders.values()];
   }
 
   // -------------------------------------------------------------------------

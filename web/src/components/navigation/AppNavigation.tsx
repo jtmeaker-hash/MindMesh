@@ -1,6 +1,6 @@
 import React from 'react';
 import { AppNavTab } from '../../types/finance';
-import { Network, Users, Wallet, LayoutDashboard, ListChecks, Car } from 'lucide-react';
+import { Network, Users, Wallet, LayoutDashboard, ListChecks, Car, Activity } from 'lucide-react';
 
 interface AppNavigationProps {
   currentTab: AppNavTab;
@@ -9,6 +9,12 @@ interface AppNavigationProps {
   upcomingBillsCount?: number;
   contactsCount?: number;
   vehiclesCount?: number;
+  /**
+   * Generic tabs contributed by enabled plugins that are not one of the
+   * hardcoded core plugin tabs. Rendered from metadata so a new plugin needs no
+   * navigation edit in Core.
+   */
+  pluginTabs?: { id: string; label: string }[];
   /**
    * Tabs that should be rendered. Undefined renders every built-in tab. Plugin
    * tabs (Money, Vehicles) are omitted here while their plugin is disabled, so
@@ -24,6 +30,7 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
   upcomingBillsCount = 0,
   contactsCount = 0,
   vehiclesCount = 0,
+  pluginTabs,
   visibleTabs,
 }) => {
   const shows = (tab: AppNavTab) => !visibleTabs || visibleTabs.includes(tab);
@@ -218,6 +225,28 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
       </button>
 
       )}
+
+      {/* Generic plugin tabs (rendered from enabled plugin route metadata) */}
+      {(pluginTabs ?? []).map((pluginTab) => {
+        const active = currentTab === pluginTab.id;
+        return (
+          <button
+            key={pluginTab.id}
+            type="button"
+            onClick={() => onSelectTab(pluginTab.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 999,
+              border: 'none', background: active ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'transparent',
+              color: active ? '#ffffff' : '#94a3b8', fontWeight: active ? 600 : 500,
+              fontSize: 13, cursor: 'pointer', transition: 'all 0.18s ease', minHeight: 34,
+              boxShadow: active ? '0 2px 10px rgba(16,185,129,.4)' : 'none',
+            }}
+          >
+            <Activity size={15} />
+            <span>{pluginTab.label}</span>
+          </button>
+        );
+      })}
 
       {/* Dashboard */}
       <button

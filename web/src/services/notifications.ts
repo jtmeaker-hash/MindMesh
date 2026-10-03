@@ -14,6 +14,28 @@ import {
 import { logger } from './logger';
 import type { VehicleState } from '../types/vehicle';
 import { buildDesiredVehicleNotifications, type DesiredVehicleNotification } from './vehicleNotifications';
+import type {
+  PluginNotificationAction,
+  PluginNotificationJob,
+  PluginNotificationProvider,
+} from '../plugins/core/types';
+
+/** Namespace prefix for a plugin-contributed notification id. */
+export const PLUGIN_NOTIFICATION_PREFIX = 'plugin::';
+
+/** Fully-qualified engine id for a plugin job. */
+export function pluginNotificationId(pluginId: string, jobId: string): string {
+  return `${PLUGIN_NOTIFICATION_PREFIX}${pluginId}::${jobId}`;
+}
+
+/** Splits a plugin notification id back into its plugin + job parts, or null. */
+export function parsePluginNotificationId(id: string): { pluginId: string; jobId: string } | null {
+  if (!id.startsWith(PLUGIN_NOTIFICATION_PREFIX)) return null;
+  const rest = id.slice(PLUGIN_NOTIFICATION_PREFIX.length);
+  const separator = rest.indexOf('::');
+  if (separator < 0) return null;
+  return { pluginId: rest.slice(0, separator), jobId: rest.slice(separator + 2) };
+}
 
 /**
  * Reminder notification engine.
@@ -121,6 +143,8 @@ export interface ReconcileContext {
   permission: NotificationPermissionState;
   /** Vehicle reminders share this engine's schedule/cancel/deliver pipeline. */
   vehicleNotifications?: DesiredVehicleNotification[];
+  /** Notifications contributed by plugins share the same pipeline. */
+  pluginNotifications?: DesiredPluginNotification[];
   now?: number;
 }
 
@@ -145,10 +169,14 @@ interface EngineCallbacks {
   history: NotificationHistoryEntry[];
   /** When provided, vehicle reminders are reconciled through this same engine. */
   vehicleState?: VehicleState;
+  /** Generic providers contributed by active plugins. Core never inspects them. */
+  pluginNotificationProviders?: PluginNotificationProvider[];
   onHistoryChange: (history: NotificationHistoryEntry[]) => void;
   onOpenReminder?: (reminderId: string) => void;
   onCompleteReminder?: (reminderId: string) => void;
   onOpenVehicle?: (vehicleId: string) => void;
+  /** Opens a plugin's primary tab when one of its notifications is tapped. */
+  onOpenPluginTab?: (pluginId: string) => void;
   onActionError?: (message: string) => void;
 }
 
@@ -382,7 +410,7 @@ interface DesiredEntry {
   offsetMinutes: number;
   fireAt: number;
   dueKey: string;
-  kind: 'reminder' | 'vehicle';
+  kind: 'reminder' | 'vehicle' | 'plugin';
 }
 
 /** Builds the complete set of notifications that *should* exist right now. */
@@ -438,6 +466,56 @@ function buildDesiredVehicleEntries(
   }));
 }
 
+/** A plugin notification already resolved into the engine's namespace. */
+export interface DesiredPluginNotification {
+  id: string;
+  pluginId: string;
+  jobId: string;
+  title: string;
+  body: string;
+  fireAt: number;
+  cycleKey: string;
+}
+
+/** Collects every active plugin's desired notifications. Never throws. */
+function buildPluginNotifications(
+  providers: PluginNotificationProvider[],
+  now: Date
+): DesiredPluginNotification[] {
+  const entries: DesiredPluginNotification[] = [];
+  for (const provider of providers) {
+    for (const job of provider.getDesired(now)) {
+      entries.push({
+        id: pluginNotificationId(provider.pluginId, job.id),
+        pluginId: provider.pluginId,
+        jobId: job.id,
+        title: job.title,
+        body: job.body,
+        fireAt: job.fireAt,
+        cycleKey: job.cycleKey,
+      });
+    }
+  }
+  return entries;
+}
+
+/** Adapts plugin notifications into the engine's desired-entry shape. */
+function buildDesiredPluginEntries(
+  pluginNotifications: DesiredPluginNotification[]
+): DesiredEntry[] {
+  return pluginNotifications.map((job) => ({
+    id: job.id,
+    reminderId: job.id,
+    reminderTitle: job.title,
+    title: job.title,
+    body: job.body,
+    offsetMinutes: 0,
+    fireAt: job.fireAt,
+    dueKey: job.cycleKey,
+    kind: 'plugin' as const,
+  }));
+}
+
 function signatureOf(history: NotificationHistoryEntry[]): string {
   return history
     .map((entry) => `${entry.id}|${entry.status}|${entry.firedAt ?? ''}|${entry.snoozedUntil ?? ''}|${entry.error ?? ''}`)
@@ -459,6 +537,7 @@ export function reconcileNotifications(
   const desired: DesiredEntry[] = [
     ...buildDesiredNotifications(context.reminders, context.settings),
     ...buildDesiredVehicleEntries(context.vehicleNotifications ?? []),
+    ...buildDesiredPluginEntries(context.pluginNotifications ?? []),
   ];
   const desiredIds = new Set(desired.map((item) => item.id));
 
@@ -633,9 +712,32 @@ function buildNativeOptions(): string {
 }
 
 /** Routes a notification id to its owning surface (vehicle or reminder). */
+/** Routes a plugin notification action back to the owning provider. */
+function dispatchPluginNotificationAction(action: PluginNotificationAction, notificationId: string): boolean {
+  const parsed = parsePluginNotificationId(notificationId);
+  if (!parsed) return false;
+  const provider = callbacks?.pluginNotificationProviders?.find((p) => p.pluginId === parsed.pluginId);
+  const entry = callbacks?.history.find((item) => item.id === notificationId);
+  const job: PluginNotificationJob = {
+    id: parsed.jobId,
+    title: entry?.reminderTitle ?? '',
+    body: '',
+    fireAt: entry ? Date.parse(entry.scheduledFor) : Date.now(),
+    cycleKey: '',
+  };
+  provider?.onAction?.(action, job);
+  return Boolean(provider);
+}
+
 function openNotificationTarget(reminderId: string): void {
   if (reminderId.startsWith('vehicle:')) {
     callbacks?.onOpenVehicle?.(reminderId.slice('vehicle:'.length));
+    return;
+  }
+  const pluginTarget = parsePluginNotificationId(reminderId);
+  if (pluginTarget) {
+    callbacks?.onOpenPluginTab?.(pluginTarget.pluginId);
+    dispatchPluginNotificationAction('open', reminderId);
     return;
   }
   callbacks?.onOpenReminder?.(reminderId);
@@ -832,12 +934,16 @@ export function syncNotificationSchedules(force = false): ReconcileResult | null
     const vehicleNotifications = callbacks.vehicleState
       ? buildDesiredVehicleNotifications(callbacks.vehicleState, callbacks.settings.enabled)
       : [];
+    const pluginNotifications = callbacks.settings.enabled
+      ? buildPluginNotifications(callbacks.pluginNotificationProviders ?? [], new Date())
+      : [];
 
     const result = reconcileNotifications(callbacks.history, {
       reminders: callbacks.reminders,
       settings: callbacks.settings,
       permission: environment.permission,
       vehicleNotifications,
+      pluginNotifications,
     });
 
     const signature = signatureOf(result.history);
@@ -997,6 +1103,19 @@ export function handleNotificationAction(entryId: string, action: 'complete' | '
     } else {
       logger.info('Notifications', 'Vehicle notification action: open', { entryId, action });
       openNotificationTarget(reminderId);
+    }
+    return;
+  }
+
+  // Plugin notifications: "snooze" defers generically through the engine; every
+  // other action is routed to the owning plugin's onAction handler.
+  if (parsePluginNotificationId(reminderId)) {
+    if (action === 'snooze') {
+      logger.info('Notifications', 'Plugin notification action: snooze', { entryId });
+      snoozeNotification(entryId);
+    } else {
+      logger.info('Notifications', 'Plugin notification action', { entryId, action });
+      dispatchPluginNotificationAction(action as PluginNotificationAction, reminderId);
     }
     return;
   }
