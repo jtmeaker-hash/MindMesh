@@ -723,6 +723,33 @@ This section is maintained automatically. When a pull request is merged into `ma
 
 <!-- mindmesh-release-notes:start -->
 
+<!-- mindmesh-pr-7 -->
+### PR #7 — Universal PR — Car Maintenance Tracker & Plugin system
+
+#### Summary of Changes
+
+- Car Maintenance & Service Tracking: vehicle profiles, append-only service history, a seeded maintenance catalogue, automatic next-service calculation, a next-service plan, known-issue tracking, part estimates and cost summaries.
+- Vehicle reminders now run on MindMesh's shared notification engine instead of a React-only sweep, so they are scheduled, de-duplicated and cancelled through the same platform/native adapter as normal reminders.
+- Lint/type-check/test repairs for the Car Maintenance changes so the PR validation pipeline passes.
+
+#### Applied Fixes
+
+- Fixed the `no-useless-assignment` lint error in the vehicle service-status calculation and removed the unused diagnostics import that failed web lint.
+- Fixed `applyServiceCompletion` so historical service work can no longer complete a newly-created next-service plan item, and an unrelated service can no longer resolve a promoted known issue. Completion is now scoped to the service record being saved/edited.
+- Fixed vehicle notifications: recurring odometer reminders, service/maintenance/issue reminders now respect the global and per-vehicle notification switches, use deterministic ids, cancel obsolete schedules when state changes, reconcile after a restore/import, and never duplicate.
+- Removed the pre-merge README edits; README documentation is updated after merge by the release workflow.
+
+#### Build / Test Failures
+
+- No build, test, regression, lint, signing or packaging failures were recorded.
+
+#### README Description
+
+Adds Car Maintenance & Service Tracking to MindMesh: odometer- and history-based service tracking per vehicle, automatic next-service and per-component replacement calculations, a next-service plan with cost estimates, known-issue tracking, and reminders that share the app's native notification engine.
+
+_Merged 2026-10-03 · [PR #7](https://github.com/jtmeaker-hash/MindMesh/pull/7) · @app/freebuff-web_
+
+
 <!-- mindmesh-pr-5 -->
 ### PR #5 — (Tweak) direct debit mechanics & reoccurring expenses
 
