@@ -18,8 +18,9 @@ import {
   computeTipStats,
   getCurrentPayCycleSummary,
   getUpcomingMoneyTimeline,
+  getShiftsByPayCycle,
 } from '../utils/finance';
-import { DirectDebit, IncomeConfig, MoneyState } from '../types/finance';
+import { DirectDebit, IncomeConfig, MoneyState, Shift } from '../types/finance';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
 
 describe('Finance Utilities', () => {
@@ -278,5 +279,137 @@ describe('Finance Utilities', () => {
     expect(timeline.length).toBe(2);
     expect(timeline[0].type).toBe('income'); // 2026-09-21 shift
     expect(timeline[1].type).toBe('expense'); // 2026-09-22 electricity
+  });
+});
+
+describe('Shift log pay-cycle grouping', () => {
+  const makeShift = (overrides: Partial<Shift> = {}): Shift => ({
+    id: overrides.id || `shift-${Math.random().toString(36).slice(2, 8)}`,
+    date: '2026-10-01',
+    startTime: '09:00',
+    endTime: '17:00',
+    breakMinutes: 30,
+    rateType: 'base',
+    hourlyRate: 30,
+    paidHours: 7.5,
+    estimatedPay: 225,
+    createdAt: '2026-09-30',
+    ...overrides,
+  });
+
+  const fortnightly: IncomeConfig = {
+    id: 'inc-1',
+    title: 'Work',
+    employmentType: 'casual_hourly',
+    frequency: 'fortnightly',
+    averagePay: 2000,
+    nextPayDate: '2026-10-09',
+    createdAt: '2026-01-01',
+    updatedAt: '2026-01-01',
+  };
+
+  it('keeps only the active cycle in currentCycleStats and groups earlier shifts', () => {
+    const shifts = [
+      makeShift({ id: 'current', date: '2026-10-01', paidHours: 7.5, estimatedPay: 225 }),
+      makeShift({ id: 'prev-cycle', date: '2026-09-20', paidHours: 4, estimatedPay: 120 }),
+      makeShift({ id: 'older', date: '2026-09-05', paidHours: 6, estimatedPay: 180 }),
+    ];
+
+    const result = getShiftsByPayCycle(shifts, fortnightly, '2026-10-05');
+
+    expect(result.hasPayCycle).toBe(true);
+    expect(result.cycleStartDate).toBe('2026-09-25');
+    expect(result.cycleEndDate).toBe('2026-10-09');
+    expect(result.currentCycleShifts.map((s) => s.id)).toEqual(['current']);
+    expect(result.currentCycleStats).toEqual({ totalHours: 7.5, totalEarnings: 225 });
+
+    expect(result.pastCycleGroups).toHaveLength(2);
+    // Most recent completed cycle first.
+    expect(result.pastCycleGroups[0].cycleStartDate).toBe('2026-09-11');
+    expect(result.pastCycleGroups[0].cycleEndDate).toBe('2026-09-25');
+    expect(result.pastCycleGroups[0].shifts.map((s) => s.id)).toEqual(['prev-cycle']);
+    expect(result.pastCycleGroups[0].totalHours).toBe(4);
+    expect(result.pastCycleGroups[0].totalEarnings).toBe(120);
+
+    expect(result.pastCycleGroups[1].cycleStartDate).toBe('2026-08-28');
+    expect(result.pastCycleGroups[1].cycleEndDate).toBe('2026-09-11');
+    expect(result.pastCycleGroups[1].shifts.map((s) => s.id)).toEqual(['older']);
+  });
+
+  it('resets stats to zero in a fresh cycle while past shifts stay grouped', () => {
+    const shifts = [
+      makeShift({ id: 'ended', date: '2026-09-20', paidHours: 8, estimatedPay: 240 }),
+      makeShift({ id: 'ended-2', date: '2026-09-18', paidHours: 6, estimatedPay: 180 }),
+    ];
+
+    const result = getShiftsByPayCycle(shifts, fortnightly, '2026-10-05');
+
+    expect(result.currentCycleShifts).toEqual([]);
+    expect(result.currentCycleStats).toEqual({ totalHours: 0, totalEarnings: 0 });
+    expect(result.pastCycleGroups).toHaveLength(1);
+    expect(result.pastCycleGroups[0].shifts).toHaveLength(2);
+    expect(result.pastCycleGroups[0].totalHours).toBe(14);
+    expect(result.pastCycleGroups[0].totalEarnings).toBe(420);
+  });
+
+  it('assigns a shift dated on the pay date to the cycle starting that day', () => {
+    const shifts = [
+      makeShift({ id: 'on-start', date: '2026-09-25' }),
+      makeShift({ id: 'day-before', date: '2026-09-24' }),
+    ];
+
+    const result = getShiftsByPayCycle(shifts, fortnightly, '2026-10-05');
+
+    expect(result.currentCycleShifts.map((s) => s.id)).toEqual(['on-start']);
+    expect(result.pastCycleGroups[0].shifts.map((s) => s.id)).toEqual(['day-before']);
+  });
+
+  it('treats shifts beyond the active cycle as upcoming and keeps them individual', () => {
+    const shifts = [
+      makeShift({ id: 'current', date: '2026-10-01' }),
+      makeShift({ id: 'future', date: '2026-10-20' }),
+    ];
+
+    const result = getShiftsByPayCycle(shifts, fortnightly, '2026-10-05');
+
+    expect(result.currentCycleShifts.map((s) => s.id)).toEqual(['current']);
+    expect(result.futureShifts.map((s) => s.id)).toEqual(['future']);
+    expect(result.pastCycleGroups).toEqual([]);
+  });
+
+  it('groups completed monthly cycles on calendar-month boundaries', () => {
+    const monthly: IncomeConfig = { ...fortnightly, frequency: 'monthly', nextPayDate: '2026-10-15' };
+    const shifts = [
+      makeShift({ id: 'current', date: '2026-10-02' }),
+      makeShift({ id: 'sept', date: '2026-09-10' }),
+      makeShift({ id: 'aug', date: '2026-08-01' }),
+    ];
+
+    const result = getShiftsByPayCycle(shifts, monthly, '2026-10-05');
+
+    expect(result.cycleStartDate).toBe('2026-09-15');
+    expect(result.currentCycleShifts.map((s) => s.id)).toEqual(['current']);
+    expect(result.pastCycleGroups).toHaveLength(2);
+    expect(result.pastCycleGroups[0].cycleStartDate).toBe('2026-08-15');
+    expect(result.pastCycleGroups[0].cycleEndDate).toBe('2026-09-15');
+    expect(result.pastCycleGroups[0].shifts.map((s) => s.id)).toEqual(['sept']);
+    expect(result.pastCycleGroups[1].cycleStartDate).toBe('2026-07-15');
+    expect(result.pastCycleGroups[1].cycleEndDate).toBe('2026-08-15');
+    expect(result.pastCycleGroups[1].shifts.map((s) => s.id)).toEqual(['aug']);
+  });
+
+  it('falls back to a single ungrouped list when no income config exists', () => {
+    const shifts = [
+      makeShift({ id: 'a', date: '2026-10-01' }),
+      makeShift({ id: 'b', date: '2026-08-01' }),
+    ];
+
+    const result = getShiftsByPayCycle(shifts, null, '2026-10-05');
+
+    expect(result.hasPayCycle).toBe(false);
+    expect(result.currentCycleShifts.map((s) => s.id)).toEqual(['a', 'b']);
+    expect(result.currentCycleStats.totalHours).toBe(15);
+    expect(result.pastCycleGroups).toEqual([]);
+    expect(result.futureShifts).toEqual([]);
   });
 });

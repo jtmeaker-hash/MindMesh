@@ -18,7 +18,7 @@ import {
   toDateString,
   getCurrentPayCycleSummary,
   getDirectDebitsOverview,
-  computeShiftStats,
+  getShiftsByPayCycle,
   calculateTipSummaries,
   getUpcomingMoneyTimeline,
   calculateExpenseSummary,
@@ -48,6 +48,7 @@ import {
   CheckCircle2,
   Settings,
   ChevronRight,
+  ChevronDown,
   Briefcase,
   Edit2,
   PauseCircle,
@@ -96,6 +97,7 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
   const [editingDebit, setEditingDebit] = useState<DirectDebit | null | 'new'>(null);
   const [isIncomeConfigOpen, setIsIncomeConfigOpen] = useState(false);
   const [editingShift, setEditingShift] = useState<Shift | null | 'new'>(null);
+  const [expandedShiftCycles, setExpandedShiftCycles] = useState<Set<string>>(new Set());
   const [editingExtra, setEditingExtra] = useState<ExtraIncome | null | 'new'>(null);
   const [editingTip, setEditingTip] = useState<TipEntry | null | 'new'>(null);
   const [editingExpense, setEditingExpense] = useState<Expense | null | 'new'>(null);
@@ -118,7 +120,8 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
   // Computed data
   const payCycleSummary = getCurrentPayCycleSummary(moneyState);
   const debitsOverview = getDirectDebitsOverview(moneyState.directDebits);
-  const shiftStats = computeShiftStats(moneyState.shifts);
+  const shiftCycle = getShiftsByPayCycle(moneyState.shifts, moneyState.incomeConfig);
+  const shiftStats = shiftCycle.currentCycleStats;
   const tipSummaries = calculateTipSummaries(moneyState.tipEntries);
   const timelineItems = getUpcomingMoneyTimeline(moneyState);
   const expenses = moneyState.expenses || [];
@@ -327,6 +330,79 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
     }));
     setNewExtraCatName('');
   };
+
+  const shiftCycleLabelStyle: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    color: '#64748b',
+  };
+
+  const toggleShiftCycle = (key: string) => {
+    setExpandedShiftCycles((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const renderShiftRow = (shift: Shift) => (
+    <div
+      key={shift.id}
+      onClick={() => setEditingShift(shift)}
+      style={{
+        padding: '14px 18px',
+        borderRadius: 14,
+        background: 'rgba(15, 23, 42, 0.6)',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        cursor: 'pointer',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 10,
+            background: 'rgba(59, 130, 246, 0.12)',
+            color: '#60a5fa',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontWeight: 700,
+            fontSize: 13,
+          }}
+        >
+          {shift.paidHours}h
+        </div>
+        <div>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#f8fafc', display: 'block' }}>
+            {formatDateAU(shift.date)} ({shift.rateType})
+          </span>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>
+            {shift.startTime} — {shift.endTime} • {shift.breakMinutes}m break • @{formatCurrency(shift.hourlyRate)}/hr
+          </span>
+        </div>
+      </div>
+
+      <div style={{ textAlign: 'right' }}>
+        <span style={{ fontSize: 16, fontWeight: 800, color: '#60a5fa', display: 'block' }}>
+          {formatCurrency(shift.estimatedPay)}
+        </span>
+        {shift.notes && (
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>{shift.notes}</span>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div
@@ -1466,11 +1542,11 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
               {/* Shift stats strip */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
                 <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                  <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Total Logged Hours</span>
+                  <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Logged Hours (This Cycle)</span>
                   <span style={{ fontSize: 20, fontWeight: 800, color: '#60a5fa' }}>{shiftStats.totalHours} hrs</span>
                 </div>
                 <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                  <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Total Estimated Shift Pay</span>
+                  <span style={{ fontSize: 11, color: '#94a3b8', display: 'block' }}>Estimated Shift Pay (This Cycle)</span>
                   <span style={{ fontSize: 20, fontWeight: 800, color: '#10b981' }}>{formatCurrency(shiftStats.totalEarnings)}</span>
                 </div>
                 <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
@@ -1490,59 +1566,66 @@ export const MoneyModule: React.FC<MoneyModuleProps> = ({
                   onAction={() => setEditingShift('new')}
                 />
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {moneyState.shifts.map((shift) => (
-                    <div
-                      key={shift.id}
-                      onClick={() => setEditingShift(shift)}
-                      style={{
-                        padding: '14px 18px',
-                        borderRadius: 14,
-                        background: 'rgba(15, 23, 42, 0.6)',
-                        border: '1px solid rgba(255, 255, 255, 0.08)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {shiftCycle.currentCycleShifts.length > 0 &&
+                    (shiftCycle.pastCycleGroups.length > 0 || shiftCycle.futureShifts.length > 0) && (
+                      <div style={shiftCycleLabelStyle}>This pay cycle</div>
+                    )}
+                  {shiftCycle.currentCycleShifts.map(renderShiftRow)}
+
+                  {shiftCycle.futureShifts.length > 0 && (
+                    <div style={shiftCycleLabelStyle}>Upcoming cycles</div>
+                  )}
+                  {shiftCycle.futureShifts.map(renderShiftRow)}
+
+                  {shiftCycle.pastCycleGroups.map((group) => {
+                    const key = `${group.cycleStartDate}_${group.cycleEndDate}`;
+                    const expanded = expandedShiftCycles.has(key);
+                    return (
+                      <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => toggleShiftCycle(key)}
                           style={{
-                            width: 40,
-                            height: 40,
-                            borderRadius: 10,
-                            background: 'rgba(59, 130, 246, 0.12)',
-                            color: '#60a5fa',
+                            padding: '12px 18px',
+                            borderRadius: 14,
+                            background: 'rgba(148, 163, 184, 0.06)',
+                            border: '1px solid rgba(148, 163, 184, 0.18)',
                             display: 'flex',
                             alignItems: 'center',
-                            justifyContent: 'center',
-                            fontWeight: 700,
-                            fontSize: 13,
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            cursor: 'pointer',
                           }}
                         >
-                          {shift.paidHours}h
-                        </div>
-                        <div>
-                          <span style={{ fontSize: 14, fontWeight: 700, color: '#f8fafc', display: 'block' }}>
-                            {formatDateAU(shift.date)} ({shift.rateType})
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                            {expanded ? (
+                              <ChevronDown size={16} color="#94a3b8" />
+                            ) : (
+                              <ChevronRight size={16} color="#94a3b8" />
+                            )}
+                            <div style={{ minWidth: 0 }}>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', display: 'block' }}>
+                                {formatDateAU(group.cycleStartDate)} — {formatDateAU(group.cycleEndDate)}
+                              </span>
+                              <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                                {group.shifts.length} shift{group.shifts.length === 1 ? '' : 's'} • {group.totalHours} hrs • Pay cycle ended
+                              </span>
+                            </div>
+                          </div>
+                          <span style={{ fontSize: 15, fontWeight: 800, color: '#10b981', whiteSpace: 'nowrap' }}>
+                            {formatCurrency(group.totalEarnings)}
                           </span>
-                          <span style={{ fontSize: 12, color: '#94a3b8' }}>
-                            {shift.startTime} — {shift.endTime} • {shift.breakMinutes}m break • @{formatCurrency(shift.hourlyRate)}/hr
-                          </span>
                         </div>
-                      </div>
-
-                      <div style={{ textAlign: 'right' }}>
-                        <span style={{ fontSize: 16, fontWeight: 800, color: '#60a5fa', display: 'block' }}>
-                          {formatCurrency(shift.estimatedPay)}
-                        </span>
-                        {shift.notes && (
-                          <span style={{ fontSize: 11, color: '#94a3b8' }}>{shift.notes}</span>
+                        {expanded && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingLeft: 12 }}>
+                            {group.shifts.map(renderShiftRow)}
+                          </div>
                         )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

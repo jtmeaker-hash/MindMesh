@@ -878,6 +878,137 @@ export function computeShiftStats(shifts: Shift[]) {
 }
 
 /**
+ * A past pay cycle together with every casual shift logged inside it. Used to
+ * collapse completed cycles into a single summarised row in the Shift Log so a
+ * new cycle always starts from a clean slate.
+ */
+export interface ShiftCycleGroup {
+  cycleStartDate: string;
+  cycleEndDate: string;
+  shifts: Shift[];
+  totalHours: number;
+  totalEarnings: number;
+}
+
+export interface ShiftsByPayCycle {
+  /** False when no income config exists, so everything falls back to the current list. */
+  hasPayCycle: boolean;
+  cycleStartDate: string;
+  cycleEndDate: string;
+  /** Shifts inside the active pay cycle, shown individually. */
+  currentCycleShifts: Shift[];
+  /** Hours/earnings for the active cycle only. */
+  currentCycleStats: { totalHours: number; totalEarnings: number };
+  /** One entry per completed cycle, most recent first. */
+  pastCycleGroups: ShiftCycleGroup[];
+  /** Shifts dated beyond the active cycle (e.g. pre-logged upcoming shifts). */
+  futureShifts: Shift[];
+}
+
+/**
+ * Steps a pay date forward/backward using the same frequency rules as
+ * `calculatePayCycleBounds` so generated cycle boundaries line up with the
+ * active cycle.
+ */
+function offsetPayDate(dateStr: string, incomeConfig: IncomeConfig, steps: number): string {
+  const date = parseLocalDate(dateStr);
+  const cycleDays =
+    incomeConfig.frequency === 'weekly'
+      ? 7
+      : incomeConfig.frequency === 'fortnightly'
+      ? 14
+      : incomeConfig.frequency === 'monthly'
+      ? 30
+      : Math.max(1, incomeConfig.customFrequencyDays || 14);
+
+  if (incomeConfig.frequency === 'monthly') {
+    date.setMonth(date.getMonth() + steps);
+  } else {
+    date.setDate(date.getDate() + steps * cycleDays);
+  }
+  return toDateString(date);
+}
+
+/**
+ * Splits logged shifts into the active pay cycle (shown individually) and
+ * completed cycles (grouped, most recent first). The active cycle starts on
+ * the previous pay date, so the moment a new cycle begins its totals reset to
+ * zero while earlier shifts stay available inside their grouped cycle.
+ */
+export function getShiftsByPayCycle(
+  shifts: Shift[],
+  incomeConfig: IncomeConfig | null,
+  referenceDateStr: string = toDateString(new Date())
+): ShiftsByPayCycle {
+  const allShifts = shifts || [];
+
+  if (!incomeConfig) {
+    return {
+      hasPayCycle: false,
+      cycleStartDate: '',
+      cycleEndDate: '',
+      currentCycleShifts: allShifts,
+      currentCycleStats: computeShiftStats(allShifts),
+      pastCycleGroups: [],
+      futureShifts: [],
+    };
+  }
+
+  const { previousPayDate, nextPayDate } = calculatePayCycleBounds(incomeConfig, referenceDateStr);
+
+  const currentCycleShifts = allShifts.filter(
+    (s) => s.date >= previousPayDate && s.date <= nextPayDate
+  );
+  const futureShifts = allShifts.filter((s) => s.date > nextPayDate);
+  const pastShifts = allShifts.filter((s) => s.date < previousPayDate);
+
+  const pastCycleGroups: ShiftCycleGroup[] = [];
+  if (pastShifts.length > 0) {
+    const earliest = pastShifts.reduce(
+      (min, s) => (s.date < min ? s.date : min),
+      pastShifts[0].date
+    );
+
+    // Walk pay dates backwards from the start of the active cycle, bucketing
+    // shifts into [cycleStart, cycleEnd) windows. A shift dated exactly on a
+    // pay date belongs to the cycle that begins that day, matching the active
+    // cycle's inclusive start.
+    let cycleEnd = previousPayDate;
+    let guard = 0;
+    while (cycleEnd > earliest && guard < 1000) {
+      const cycleStart = offsetPayDate(cycleEnd, incomeConfig, -1);
+      const cycleShifts = pastShifts
+        .filter((s) => s.date >= cycleStart && s.date < cycleEnd)
+        .sort((a, b) => b.date.localeCompare(a.date));
+
+      if (cycleShifts.length > 0) {
+        const stats = computeShiftStats(cycleShifts);
+        pastCycleGroups.push({
+          cycleStartDate: cycleStart,
+          cycleEndDate: cycleEnd,
+          shifts: cycleShifts,
+          totalHours: stats.totalHours,
+          totalEarnings: stats.totalEarnings,
+        });
+      }
+
+      cycleEnd = cycleStart;
+      guard++;
+    }
+  }
+
+  return {
+    hasPayCycle: true,
+    cycleStartDate: previousPayDate,
+    cycleEndDate: nextPayDate,
+    currentCycleShifts,
+    currentCycleStats: computeShiftStats(currentCycleShifts),
+    pastCycleGroups,
+    futureShifts,
+  };
+}
+
+/**
  * Computes tip statistics.
  */
 export function computeTipStats(tips: TipEntry[]) {

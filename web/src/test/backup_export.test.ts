@@ -12,6 +12,7 @@ import {
 } from '../services/backup';
 import { hasLastImportedNodePositions, loadAllData, saveAllData } from '../services/storage';
 import { getDefaultMoneyState } from '../utils/sampleFinanceData';
+import { getShiftsByPayCycle } from '../utils/finance';
 import { getDefaultAppearance } from '../services/appearance';
 import { runDiagnostics } from '../services/diagnostics';
 
@@ -108,6 +109,45 @@ function seedFullState(): void {
       tipEntries: [
         { id: 'tip-1', amount: 40, date: '2026-03-03', createdAt: '2026-03-03T00:00:00.000Z' } as never,
       ],
+      incomeConfig: {
+        id: 'inc-export-1',
+        title: 'Casual work',
+        employmentType: 'casual_hourly',
+        frequency: 'fortnightly',
+        averagePay: 1800,
+        nextPayDate: '2026-04-10',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      shifts: [
+        {
+          id: 'shift-export-current',
+          date: '2026-04-01',
+          startTime: '09:00',
+          endTime: '17:00',
+          breakMinutes: 30,
+          rateType: 'base',
+          hourlyRate: 32,
+          paidHours: 7.5,
+          estimatedPay: 240,
+          actualPay: 245,
+          notes: 'Weekend cover',
+          createdAt: '2026-03-30T00:00:00.000Z',
+        },
+        {
+          id: 'shift-export-past',
+          date: '2026-03-20',
+          startTime: '17:00',
+          endTime: '22:00',
+          breakMinutes: 0,
+          rateType: 'evening',
+          hourlyRate: 40,
+          paidHours: 5,
+          estimatedPay: 200,
+          createdAt: '2026-03-19T00:00:00.000Z',
+        },
+      ],
+      payCycleOverrides: { '2026-04-10': 1750 },
     },
     appearance: { ...getDefaultAppearance(), themeId: 'matrix' },
   });
@@ -410,8 +450,45 @@ describe('Backup round trip: export then restore', () => {
     expect(contacts[0].photo).toBe('data:image/jpeg;base64,AAAA');
     expect(money.directDebits.map((d) => d.id)).toEqual(['dd-export-1']);
     expect(money.tipEntries).toHaveLength(1);
+    expect(money.shifts.map((s) => s.id).sort()).toEqual(['shift-export-current', 'shift-export-past']);
+    expect(money.shifts.find((s) => s.id === 'shift-export-current')).toMatchObject({
+      date: '2026-04-01',
+      paidHours: 7.5,
+      estimatedPay: 240,
+      actualPay: 245,
+      notes: 'Weekend cover',
+      rateType: 'base',
+    });
+    expect(money.incomeConfig?.nextPayDate).toBe('2026-04-10');
+    expect(money.payCycleOverrides['2026-04-10']).toBe(1750);
     expect(state.appearance?.themeId).toBe('matrix');
     expect(state.contactCategories).toContain('Clinic');
+  });
+
+  it('keeps logged shifts and pay cycle settings intact and still groups prior cycles after restore', () => {
+    seedFullState();
+
+    const json = serializeBackup(createBackup());
+    localStorage.clear();
+
+    const validation = validateBackup(json);
+    expect(validation.valid).toBe(true);
+    expect(validation.summary?.shiftsCount).toBe(2);
+
+    const restored = restoreBackup(validation.backupFile!);
+    expect(restored.success).toBe(true);
+
+    const money = loadAllData().money ?? getDefaultMoneyState();
+    expect(money.shifts.map((s) => s.id).sort()).toEqual(['shift-export-current', 'shift-export-past']);
+    expect(money.incomeConfig?.nextPayDate).toBe('2026-04-10');
+    expect(money.payCycleOverrides['2026-04-10']).toBe(1750);
+
+    // The restored shifts still drive the new cycle grouping: the active cycle
+    // shift shows individually, the earlier one stays grouped in its cycle.
+    const grouped = getShiftsByPayCycle(money.shifts, money.incomeConfig, '2026-04-05');
+    expect(grouped.currentCycleShifts.map((s) => s.id)).toEqual(['shift-export-current']);
+    expect(grouped.currentCycleStats).toEqual({ totalHours: 7.5, totalEarnings: 245 });
+    expect(grouped.pastCycleGroups.flatMap((g) => g.shifts.map((s) => s.id))).toEqual(['shift-export-past']);
   });
 
   it('round trips every custom node position and keeps them recoverable after import', () => {
