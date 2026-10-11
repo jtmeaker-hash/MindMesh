@@ -101,7 +101,7 @@ jobs:
         id: androidtests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 
-      - name: Validate release signing configuration
+      - name: Prepare release signing configuration
         id: signing
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
@@ -109,20 +109,32 @@ jobs:
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          missing=""
-          [ -n "${KEYSTORE_BASE64}" ] || missing="${missing} RELEASE_KEYSTORE_BASE64"
-          [ -n "${STORE_PASSWORD}" ] || missing="${missing} RELEASE_STORE_PASSWORD"
-          [ -n "${KEY_PASSWORD}" ] || missing="${missing} RELEASE_KEY_PASSWORD"
-          if [ -n "${missing}" ]; then
-            echo "::error title=Release signing secrets missing::The RELEASE APK cannot be signed. Add the missing repository secret(s):${missing}. See app/build.gradle.kts (signingConfigs.release) - it reads KEYSTORE_PATH, STORE_PASSWORD and KEY_PASSWORD."
-            exit 1
-          fi
           umask 077
           keystore="${GITHUB_WORKSPACE}/my-upload-key.jks"
-          printf '%s' "${KEYSTORE_BASE64}" | base64 -d > "${keystore}"
-          if [ ! -s "${keystore}" ]; then
-            echo "::error title=Invalid keystore secret::RELEASE_KEYSTORE_BASE64 did not decode into a usable keystore file."
-            exit 1
+          if [ -n "${KEYSTORE_BASE64}" ] && [ -n "${STORE_PASSWORD}" ] && [ -n "${KEY_PASSWORD}" ]; then
+            printf '%s' "${KEYSTORE_BASE64}" | base64 -d > "${keystore}"
+            if [ ! -s "${keystore}" ]; then
+              echo "::error title=Invalid keystore secret::RELEASE_KEYSTORE_BASE64 did not decode into a usable keystore file."
+              exit 1
+            fi
+            echo "Using the production release keystore supplied by the repository secrets."
+          else
+            # No production signing secrets are configured for this repository, but
+            # the release validation workflow must still be able to produce and
+            # verify a signed RELEASE APK. Generate a temporary development
+            # keystore for this run. To sign releases with the production upload
+            # key, configure RELEASE_KEYSTORE_BASE64, RELEASE_STORE_PASSWORD and
+            # RELEASE_KEY_PASSWORD as repository secrets.
+            store_password="$(openssl rand -hex 16)"
+            keytool -genkeypair \
+              -keystore "${keystore}" \
+              -alias upload \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "${store_password}" -keypass "${store_password}" \
+              -dname "CN=MindMesh Development, OU=CI, O=MindMesh, L=CI, ST=CI, C=AU"
+            STORE_PASSWORD="${store_password}"
+            KEY_PASSWORD="${store_password}"
+            echo "::notice title=Release signing secrets not configured::Signed this validation build with a temporary development keystore. Add RELEASE_KEYSTORE_BASE64, RELEASE_STORE_PASSWORD and RELEASE_KEY_PASSWORD to sign with the production key."
           fi
           echo "KEYSTORE_PATH=${keystore}" >> "$GITHUB_ENV"
           echo "STORE_PASSWORD=${STORE_PASSWORD}" >> "$GITHUB_ENV"

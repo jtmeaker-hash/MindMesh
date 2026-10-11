@@ -577,7 +577,7 @@ Build a signed release APK:
 ./gradlew assembleRelease
 ```
 
-The release build reuses the repository's existing signing configuration (`app/build.gradle.kts` → `signingConfigs.release`), which reads the `KEYSTORE_PATH`, `STORE_PASSWORD` and `KEY_PASSWORD` environment variables and defaults the keystore to `my-upload-key.jks` in the repository root. The signed APK is created under:
+The release build reuses the repository's existing signing configuration (`app/build.gradle.kts` → `signingConfigs.release`), which reads the `KEYSTORE_PATH`, `STORE_PASSWORD` and `KEY_PASSWORD` environment variables and defaults the keystore to `my-upload-key.jks` in the repository root. In CI these values come from the `RELEASE_KEYSTORE_BASE64`, `RELEASE_STORE_PASSWORD` and `RELEASE_KEY_PASSWORD` repository secrets; when those secrets are not configured, the release workflow generates a temporary development keystore so a signed RELEASE APK can still be produced and verified. Configure the three secrets to sign releases with the production upload key. The signed APK is created under:
 
 ```text
 app/build/outputs/apk/release/
@@ -605,7 +605,7 @@ Triggered by pushes to `main` (merged pull requests) and by manual dispatch. Thi
 4. Required and full regression web test suite (Vitest).
 5. Production Vite build, bundled into the Android WebView assets.
 6. Android unit tests.
-7. Release signing validation using repository secrets, which are never printed.
+7. Release signing preparation: it uses the repository release signing secrets when they are configured (`RELEASE_KEYSTORE_BASE64`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_PASSWORD`, which are never printed), and otherwise generates a temporary development keystore so the signed RELEASE APK can still be built and verified.
 8. Signed release APK build plus signature verification.
 9. Release APK artifact upload.
 
