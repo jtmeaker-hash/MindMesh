@@ -74,6 +74,10 @@ dependencies {
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
+  // Pinned above play-services's transitive androidx.fragment:1.1.0 so the
+  // registerForActivityResult APIs used here satisfy lint
+  // (InvalidFragmentVersionForActivityResult requires fragment >= 1.3.0).
+  implementation(libs.androidx.fragment)
   // implementation(libs.androidx.camera.camera2)
   // implementation(libs.androidx.camera.core)
   // implementation(libs.androidx.camera.lifecycle)
