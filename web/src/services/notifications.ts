@@ -67,12 +67,27 @@ export interface NativeNotificationEvents {
   onOpened?: (id: string) => void;
 }
 
+export const SELF_CARE_NOTIFICATION_PREFIX = 'selfcare::';
+export const SELF_CARE_ACTION_EVENT = 'mindmesh-selfcare-action';
+
 declare global {
   interface Window {
     MindMeshNotifications?: NativeNotificationBridge;
     MindMeshNativeNotificationEvents?: NativeNotificationEvents;
     MindMeshRoutineActionQueue?: Array<{ id: string; action: string }>;
+    MindMeshSelfCareActionQueue?: Array<{ id: string; action: string }>;
   }
+}
+
+/**
+ * Self Care notification actions are owned by the Self Care plugin. Core only
+ * routes them (like routine actions): the event carries the full notification
+ * id plus the tapped action, and the plugin applies Done/Snooze/Skip/Open.
+ * Unknown ids are never touched here, so Core reminders are unaffected.
+ */
+function dispatchSelfCareAction(id: string, action: string): void {
+  window.MindMeshSelfCareActionQueue = [...(window.MindMeshSelfCareActionQueue || []), { id, action }];
+  window.dispatchEvent(new CustomEvent(SELF_CARE_ACTION_EVENT, { detail: { id, action } }));
 }
 
 export interface NotificationEnvironment {
@@ -1051,12 +1066,20 @@ export function attachNativeBridgeHandlers(): void {
         dispatchRoutineAction(id, action);
         return;
       }
+      if (id.startsWith(SELF_CARE_NOTIFICATION_PREFIX)) {
+        dispatchSelfCareAction(id, action);
+        return;
+      }
       handleNotificationAction(id, action);
     },
 
     onOpened: (id: string) => {
       if (id.startsWith('routine:')) {
         dispatchRoutineAction(id, 'open');
+        return;
+      }
+      if (id.startsWith(SELF_CARE_NOTIFICATION_PREFIX)) {
+        dispatchSelfCareAction(id, 'open');
         return;
       }
       const entry = callbacks?.history.find((item) => item.id === id);

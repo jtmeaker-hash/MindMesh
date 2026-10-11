@@ -1,0 +1,12 @@
+{
+  "id": "self-care",
+  "name": "Self Care",
+  "version": "1.0.0",
+  "description": "Gentle opt-in check-ins for eating, water, rest, stretching, time outdoors, winding down or any personal-care reminder, delivered as real Android notifications.",
+  "minimumCoreVersion": "1.8.0",
+  "apiVersion": "1.0.0",
+  "schemaVersion": 1,
+  "author": "MindMesh",
+  "dependencies": [],
+  "permissions": ["storage", "notifications", "scheduler", "backup", "settings", "diagnostics", "native"]
+}

@@ -114,6 +114,7 @@ import { SmartAssistantModal } from './components/modals/SmartAssistantModal';
 import { AppBackground } from './components/background/AppBackground';
 
 import { AppNavigation } from './components/navigation/AppNavigation';
+import { loadSelfCareState } from './services/selfCare';
 import { reconcileDirectDebits } from './utils/finance';
 import { DashboardModule } from './components/dashboard/DashboardModule';
 import { RoutineModule } from './components/routines/RoutineModule';
@@ -397,17 +398,41 @@ function MindMeshFlow() {
   const visibleNavTabs = useMemo<AppNavTab[]>(() => {
     const core: AppNavTab[] = ['reminders', 'routines', 'contacts', 'dashboard'];
     const pluginTabs = pluginTabSignature.split(',').filter(Boolean) as AppNavTab[];
-    const order: AppNavTab[] = ['reminders', 'routines', 'contacts', 'money', 'vehicles', 'dashboard'];
+    const order: AppNavTab[] = ['reminders', 'routines', 'contacts', 'money', 'vehicles', 'self-care', 'dashboard'];
     return order.filter((tab) => core.includes(tab) || pluginTabs.includes(tab));
   }, [pluginTabSignature]);
   useEffect(() => {
-    const pluginOwnedTabs: AppNavTab[] = ['money', 'vehicles'];
+    const pluginOwnedTabs: AppNavTab[] = ['money', 'vehicles', 'self-care'];
     if (pluginOwnedTabs.includes(mainNavTab) && !pluginTabSet.has(mainNavTab)) {
       setMainNavTab('reminders');
     }
   }, [mainNavTab, pluginTabSet]);
 
   const vehiclePluginEnabled = pluginManager.isEnabled('car-maintenance');
+
+  // Self Care owns its state inside the plugin; the tab badge reads the active
+  // check-in count and refreshes whenever the plugin reports a change.
+  const [selfCareTick, setSelfCareTick] = useState(0);
+  useEffect(() => {
+    const onSelfCareChanged = () => setSelfCareTick((tick) => tick + 1);
+    const onNavigateSelfCare = () => {
+      if (pluginManager.isEnabled('self-care')) setMainNavTab('self-care');
+    };
+    window.addEventListener('mindmesh-selfcare-changed', onSelfCareChanged);
+    window.addEventListener('mindmesh-navigate-selfcare', onNavigateSelfCare);
+    return () => {
+      window.removeEventListener('mindmesh-selfcare-changed', onSelfCareChanged);
+      window.removeEventListener('mindmesh-navigate-selfcare', onNavigateSelfCare);
+    };
+  }, []);
+  const selfCareActiveCount = useMemo(() => {
+    if (!pluginManager.isEnabled('self-care')) return 0;
+    try {
+      return loadSelfCareState().checkIns.filter((c) => c.enabled && !c.paused).length;
+    } catch {
+      return 0;
+    }
+  }, [selfCareTick, pluginRuntime.revision]);
 
   useEffect(() => {
     configureNotificationEngine({
@@ -1127,6 +1152,7 @@ function MindMeshFlow() {
             upcomingBillsCount={pluginManager.isEnabled('money-management') ? moneyState.directDebits.filter((b) => b.active).length : 0}
             contactsCount={contacts.length}
             vehiclesCount={pluginManager.isEnabled('car-maintenance') ? vehicleState.vehicles.length : 0}
+            selfCareCount={selfCareActiveCount}
             visibleTabs={visibleNavTabs}
           />
         </div>

@@ -54,9 +54,12 @@ web/src/plugins/
 ├── money-management/
 │   ├── plugin.manifest.json
 │   ├── manifest.ts / index.ts / migrations.ts / MoneyManagementRoute.tsx
-└── car-maintenance/
+├── car-maintenance/
+│   ├── plugin.manifest.json
+│   ├── manifest.ts / index.ts / migrations.ts / CarMaintenanceRoute.tsx
+└── self-care/
     ├── plugin.manifest.json
-    ├── manifest.ts / index.ts / migrations.ts / CarMaintenanceRoute.tsx
+    ├── manifest.ts / index.ts / migrations.ts / SelfCareRoute.tsx
 ```
 
 ---
@@ -286,7 +289,16 @@ Each plugin has its own version, independent of Core:
 MindMesh Core:    1.8.0
 Money Management: 1.2.0
 Car Maintenance:  1.0.3
+Self Care:        1.0.0
 ```
+
+Self Care is opt-in (`defaultEnabled: false`): enabling the plugin schedules
+nothing until the user creates a check-in. Its alarms are delivered through
+the existing native bridge (`window.MindMeshNotifications`, kind
+`"self-care"`, dedicated Android channel `mindmesh-self-care`) and its device
+actions arrive as a `mindmesh-selfcare-action` event, mirroring the routine
+action pattern. Like every plugin, disabling Self Care cancels its alarms but
+retains all check-ins, messages and history.
 
 Manifests state `minimumCoreVersion` and `apiVersion`, so a plugin can be updated
 without forcing an unrelated plugin or Core release.
@@ -300,6 +312,7 @@ main
 ├── <temporary active PR branch>   # one at a time; delete after merge
 ├── plugin/money-management        # persistent plugin distribution branch
 ├── plugin/car-maintenance         # persistent plugin distribution branch
+├── plugin/self-care               # persistent plugin distribution branch
 └── plugin/<future-plugin>
 ```
 
@@ -323,11 +336,14 @@ New, isolated plugin workflows:
 
 - `.github/workflows/plugin-money-management.yml`
 - `.github/workflows/plugin-car-maintenance.yml`
+- `.github/workflows/plugin-self-care.yml`
 
 Each runs only for its own plugin branch and its own paths, and uploads a
 clearly named artifact (`MindMesh-Money-Management-Plugin-vX.Y.Z`,
-`MindMesh-Car-Maintenance-Plugin-vX.Y.Z`). A Money change never builds Car
-Maintenance, and vice versa.
+`MindMesh-Car-Maintenance-Plugin-vX.Y.Z`,
+`MindMesh-Self-Care-Plugin-vX.Y.Z`). A Money change never builds Car
+Maintenance or Self Care, and vice versa. No plugin workflow assembles an
+APK/AAB; each one fails if such an artifact appears.
 
 ---
 

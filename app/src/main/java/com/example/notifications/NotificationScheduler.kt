@@ -21,20 +21,43 @@ import androidx.core.content.ContextCompat
 object NotificationChannels {
     const val REMINDERS = "mindmesh-reminders"
 
+    /**
+     * Dedicated Self Care channel so gentle check-ins can be silenced or
+     * styled independently of Core reminders. Created additively: the
+     * reminders channel behaviour is unchanged.
+     */
+    const val SELF_CARE = "mindmesh-self-care"
+
     fun ensure(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        if (manager.getNotificationChannel(REMINDERS) != null) return
-        val channel = NotificationChannel(
-            REMINDERS,
-            "Reminder notifications",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Scheduled MindMesh reminder alerts"
-            enableVibration(true)
+        if (manager.getNotificationChannel(REMINDERS) == null) {
+            val channel = NotificationChannel(
+                REMINDERS,
+                "Reminder notifications",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Scheduled MindMesh reminder alerts"
+                enableVibration(true)
+            }
+            manager.createNotificationChannel(channel)
         }
-        manager.createNotificationChannel(channel)
+        if (manager.getNotificationChannel(SELF_CARE) == null) {
+            val selfCare = NotificationChannel(
+                SELF_CARE,
+                "Self Care check-ins",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Gentle Self Care check-in notifications"
+                enableVibration(true)
+            }
+            manager.createNotificationChannel(selfCare)
+        }
     }
+
+    /** Self Care check-ins post to their own channel; everything else is unchanged. */
+    fun channelFor(kind: String): String =
+        if (kind == "self-care") SELF_CARE else REMINDERS
 }
 
 /**
@@ -187,7 +210,7 @@ class NotificationReceiver : BroadcastReceiver() {
 
         val openIntent = MainActivityIntent.build(context, id, MainActivityIntent.ACTION_OPEN)
 
-        val builder = NotificationCompat.Builder(context, NotificationChannels.REMINDERS)
+        val builder = NotificationCompat.Builder(context, NotificationChannels.channelFor(kind))
             .setSmallIcon(android.R.drawable.ic_popup_reminder)
             .setContentTitle(title)
             .setContentText(body)

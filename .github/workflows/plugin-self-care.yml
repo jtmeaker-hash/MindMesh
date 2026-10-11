@@ -1,0 +1,129 @@
+# MindMesh Plugin — Self Care
+# ---------------------------------------------------------------------------
+# Isolated plugin workflow. Runs for the plugin/self-care distribution branch
+# and packages ONLY this plugin as a downloaded .mindmesh-plugin.zip artifact.
+# It never builds a full MindMesh APK/AAB (no Gradle assembly anywhere) and
+# never triggers for changes that belong to another plugin.
+#
+# A Self Care change does not build Money Management or Car Maintenance, and
+# vice versa. Plugin distribution branches are never merged to main and must
+# never open pull requests targeting main (that path builds APKs by design).
+# ---------------------------------------------------------------------------
+
+name: MindMesh Plugin — Self Care
+
+on:
+  push:
+    branches: [ plugin/self-care ]
+    paths:
+      - 'web/src/plugins/self-care/**'
+      - 'web/src/plugins/core/**'
+      - 'web/src/types/plugin.ts'
+      - 'web/src/types/selfCare.ts'
+      - 'web/src/services/selfCare.ts'
+      - 'web/src/services/notifications.ts'
+      - 'web/src/services/storage.ts'
+      - 'web/src/services/backup.ts'
+      - 'web/src/plugins/registerBuiltins.ts'
+      - 'web/src/components/navigation/AppNavigation.tsx'
+      - 'app/src/main/java/com/example/notifications/**'
+      - 'scripts/package-plugin.mjs'
+      - '.github/workflows/plugin-self-care.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mindmesh-plugin-selfcare-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  self-care:
+    name: Self Care plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin branch
+        uses: actions/checkout@v4
+        with:
+          ref: plugin/self-care
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Lint
+        run: npm --prefix web run lint
+
+      - name: TypeScript type-check
+        run: npm --prefix web run type-check
+
+      - name: Plugin + Self Care regression tests
+        run: >-
+          npm --prefix web run test -- --run
+          src/test/plugin_system.test.ts
+          src/test/plugin_installer.test.ts
+          src/test/plugin_backup.test.ts
+          src/test/self_care_schedule.test.ts
+          src/test/self_care_plugin.test.ts
+          src/test/self_care_notifications.test.ts
+          src/test/notifications.test.ts
+          src/test/finance.test.ts
+          src/test/vehicle_maintenance.test.ts
+
+      - name: Validate manifest and Core API compatibility
+        id: validate
+        run: >-
+          node scripts/package-plugin.mjs
+          --id self-care
+          --dir web/src/plugins/self-care
+          --check
+
+      - name: Package plugin, version + integrity metadata
+        id: package
+        run: >-
+          node scripts/package-plugin.mjs
+          --id self-care
+          --dir web/src/plugins/self-care
+          --out artifacts/plugin
+
+      - name: Verify ZIP contents and integrity
+        run: |
+          set -euo pipefail
+          ls -lh artifacts/plugin/
+          cat artifacts/plugin/checksums.txt
+          package="$(ls artifacts/plugin/*.mindmesh-plugin.zip)"
+          echo "Package: ${package}"
+          unzip -l "${package}"
+          # The importer requires both the manifest and the integrity descriptor.
+          unzip -p "${package}" manifest.json | python3 -c "import json,sys; m=json.load(sys.stdin); assert m['id']=='self-care', m; print('manifest id:', m['id'], '| version:', m['version'])"
+          unzip -p "${package}" mindmesh-package.json | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['manifest']['id']=='self-care', d; print('descriptor integrity:', d['integrity'])"
+          grep -q "$(unzip -p "${package}" mindmesh-package.json | python3 -c "import json,sys; print(json.load(sys.stdin)['integrity'])")" artifacts/plugin/integrity.json
+          echo "ZIP contents and integrity verified."
+
+      - name: Confirm no APK/AAB was produced
+        run: |
+          set -euo pipefail
+          if find . -name '*.apk' -o -name '*.aab' | grep -q .; then
+            echo "::error title=Unexpected APK/AAB::The Self Care plugin workflow must never assemble an APK or AAB."
+            find . -name '*.apk' -o -name '*.aab'
+            exit 1
+          fi
+          echo "Confirmed: no APK/AAB anywhere in the Self Care plugin workflow."
+
+      - name: Show package checksums
+        run: cat artifacts/plugin/checksums.txt
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact-name }}
+          path: artifacts/plugin/
+          if-no-files-found: error

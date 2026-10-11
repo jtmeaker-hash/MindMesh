@@ -1,6 +1,6 @@
 import React from 'react';
 import { AppNavTab } from '../../types/finance';
-import { Network, Users, Wallet, LayoutDashboard, ListChecks, Car } from 'lucide-react';
+import { Network, Users, Wallet, LayoutDashboard, ListChecks, Car, Heart } from 'lucide-react';
 
 interface AppNavigationProps {
   currentTab: AppNavTab;
@@ -9,6 +9,7 @@ interface AppNavigationProps {
   upcomingBillsCount?: number;
   contactsCount?: number;
   vehiclesCount?: number;
+  selfCareCount?: number;
   /**
    * Tabs that should be rendered. Undefined renders every built-in tab. Plugin
    * tabs (Money, Vehicles) are omitted here while their plugin is disabled, so
@@ -24,6 +25,7 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
   upcomingBillsCount = 0,
   contactsCount = 0,
   vehiclesCount = 0,
+  selfCareCount = 0,
   visibleTabs,
 }) => {
   const shows = (tab: AppNavTab) => !visibleTabs || visibleTabs.includes(tab);
@@ -213,6 +215,37 @@ export const AppNavigation: React.FC<AppNavigationProps> = ({
             }}
           >
             {vehiclesCount}
+          </span>
+        )}
+      </button>
+
+      )}
+
+      {/* Self Care (plugin tab: rendered only while the Self Care plugin is enabled) */}
+      {shows('self-care') && (
+      <button
+        type="button"
+        onClick={() => onSelectTab('self-care')}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 999,
+          border: 'none', background: currentTab === 'self-care' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
+          color: currentTab === 'self-care' ? '#ffffff' : '#94a3b8', fontWeight: currentTab === 'self-care' ? 600 : 500,
+          fontSize: 13, cursor: 'pointer', transition: 'all 0.18s ease', minHeight: 34,
+          boxShadow: currentTab === 'self-care' ? '0 2px 10px rgba(236,72,153,.4)' : 'none',
+        }}
+      >
+        <Heart size={15} />
+        <span>Self Care</span>
+        {selfCareCount > 0 && (
+          <span
+            style={{
+              fontSize: 10, fontWeight: 700,
+              background: currentTab === 'self-care' ? 'rgba(255,255,255,0.25)' : 'rgba(236, 72, 153, 0.3)',
+              color: currentTab === 'self-care' ? '#ffffff' : '#f9a8d4',
+              padding: '1px 6px', borderRadius: 999, marginLeft: 1,
+            }}
+          >
+            {selfCareCount}
           </span>
         )}
       </button>

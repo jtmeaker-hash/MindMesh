@@ -8,9 +8,10 @@
 import type { PluginManager } from './core/manager';
 import { createMoneyManagementPlugin } from './money-management';
 import { createCarMaintenancePlugin } from './car-maintenance';
+import { createSelfCarePlugin } from './self-care';
 
 export function registerBuiltinPlugins(manager: PluginManager): string[] {
-  const builtins = [createMoneyManagementPlugin(), createCarMaintenancePlugin()];
+  const builtins = [createMoneyManagementPlugin(), createCarMaintenancePlugin(), createSelfCarePlugin()];
   for (const plugin of builtins) {
     if (!manager.registry.has(plugin.manifest.id)) {
       manager.register(plugin);
