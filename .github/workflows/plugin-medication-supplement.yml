@@ -1,6 +1,6 @@
 # MindMesh Plugin — Medication & Supplement Tracker
 # ---------------------------------------------------------------------------
-# Isolated plugin workflow. Runs for the plugin/medication-supplement-tracker
+# Isolated plugin workflow. Runs for the plugin/medication-tracker
 # distribution branch and packages ONLY this plugin as a downloaded
 # .mindmesh-plugin.zip artifact. It never builds a full MindMesh APK and never
 # triggers for changes that belong to another plugin.
@@ -21,7 +21,7 @@ name: MindMesh Plugin — Medication & Supplement Tracker
 
 on:
   push:
-    branches: [ plugin/medication-supplement-tracker ]
+    branches: [ plugin/medication-tracker ]
     paths:
       - 'web/src/plugins/medication-tracker/**'
       - 'web/src/plugins/core/**'
@@ -50,7 +50,7 @@ jobs:
       - name: Checkout plugin branch
         uses: actions/checkout@v4
         with:
-          ref: plugin/medication-supplement-tracker
+          ref: plugin/medication-tracker
           fetch-depth: 0
 
       - name: Setup Node.js
